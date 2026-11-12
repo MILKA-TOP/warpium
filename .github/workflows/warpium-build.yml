@@ -38,7 +38,9 @@ env:
 jobs:
   macos-arm64:
     name: Build macOS (arm64)
-    runs-on: macos-26
+    # macos-15 (arm64) rather than macos-26: hosted macos-26 arm64 capacity
+    # was unavailable for this repository and jobs were never acquired.
+    runs-on: macos-15
     timeout-minutes: 330
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
@@ -49,6 +51,10 @@ jobs:
           # the binary; without them the app would embed LFS pointer files.
           lfs: true
 
+      # macos-15 defaults to Xcode 16.4 but also ships Xcode 26.x; select the
+      # newest 26.x to match upstream CI. script/macos/install_build_deps runs
+      # `xcodebuild -downloadComponent MetalToolchain` (an Xcode 26 option, as
+      # Xcode 26 no longer bundles the Metal compiler that warpui's build.rs uses).
       - uses: maxim-lobanov/setup-xcode@v1.7.0
         with:
           xcode-version: '26'
@@ -105,9 +111,7 @@ jobs:
 
       - name: Report disk usage
         if: always()
-        run: |
-          df -h "$GITHUB_WORKSPACE"
-          du -sh target 2>/dev/null || true
+        run: df -h "$GITHUB_WORKSPACE"
 
       - name: Upload .dmg artifact
         uses: actions/upload-artifact@v7.0.1
