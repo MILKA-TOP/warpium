@@ -1,6 +1,8 @@
 use remote_server::HostId;
 use remote_server::proto::{RipgrepSearchMatch, RipgrepSearchSubmatch, RipgrepSearchSuccess};
+use warp_ripgrep::filter::{PathFilter, SearchFilters};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::standardized_path::StandardizedPath;
 
 use super::GlobalSearch;
 
@@ -40,7 +42,7 @@ fn remote_matches_become_remote_locations_on_the_host() {
         capped: false,
     };
 
-    let results = GlobalSearch::remote_matches_to_global(&host(), success);
+    let results = GlobalSearch::remote_matches_to_global(&host(), success, None);
 
     assert_eq!(results.len(), 1);
     match &results[0].location {
@@ -67,7 +69,7 @@ fn remote_matches_expand_one_row_per_submatch() {
         capped: false,
     };
 
-    let results = GlobalSearch::remote_matches_to_global(&host(), success);
+    let results = GlobalSearch::remote_matches_to_global(&host(), success, None);
 
     assert_eq!(results.len(), 2);
     assert!(results.iter().all(|m| m.submatches.len() == 1));
@@ -83,7 +85,7 @@ fn remote_matches_with_invalid_paths_are_dropped() {
         capped: false,
     };
 
-    let results = GlobalSearch::remote_matches_to_global(&host(), success);
+    let results = GlobalSearch::remote_matches_to_global(&host(), success, None);
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].location.display_path(), "/repo/ok.rs");
@@ -98,7 +100,7 @@ fn remote_match_leading_whitespace_is_trimmed_per_submatch() {
         capped: false,
     };
 
-    let results = GlobalSearch::remote_matches_to_global(&host(), success);
+    let results = GlobalSearch::remote_matches_to_global(&host(), success, None);
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].line_text, "foo");
@@ -114,8 +116,34 @@ fn remote_match_column_counts_characters_not_bytes() {
         capped: false,
     };
 
-    let results = GlobalSearch::remote_matches_to_global(&host(), success);
+    let results = GlobalSearch::remote_matches_to_global(&host(), success, None);
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].column_num, Some(2));
+}
+
+#[test]
+fn remote_matches_are_filtered_by_globs_relative_to_their_root() {
+    let success = RipgrepSearchSuccess {
+        matches: vec![
+            proto_match("/repo/src/App.kt", 1, "x", vec![(0, 1)]),
+            proto_match("/repo/build/gen/App.kt", 1, "x", vec![(0, 1)]),
+            proto_match("/repo/src/App.java", 1, "x", vec![(0, 1)]),
+            proto_match("/other/src/App.kt", 1, "x", vec![(0, 1)]),
+        ],
+        capped: false,
+    };
+    let path_filter = PathFilter::new(&SearchFilters {
+        use_ignore_files: true,
+        include_globs: vec!["src/**/*.kt".to_string()],
+        exclude_globs: vec!["*build*".to_string()],
+    })
+    .unwrap();
+    let roots = vec![StandardizedPath::try_new("/repo").unwrap()];
+
+    let results =
+        GlobalSearch::remote_matches_to_global(&host(), success, Some(&(path_filter, roots)));
+
+    let paths: Vec<_> = results.iter().map(|m| m.location.display_path()).collect();
+    assert_eq!(paths, vec!["/repo/src/App.kt", "/other/src/App.kt"]);
 }

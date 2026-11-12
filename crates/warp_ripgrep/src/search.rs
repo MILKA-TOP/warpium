@@ -1,12 +1,15 @@
 use std::ops::Not;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use grep::printer::JSONBuilder;
 use grep::regex::RegexMatcherBuilder;
 use grep::searcher::{BinaryDetection, SearcherBuilder};
-use ignore::{WalkBuilder, WalkState};
+use ignore::{DirEntry, WalkBuilder, WalkState};
 use string_offset::ByteOffset;
+
+use crate::filter::{PathFilter, SearchFilters};
 
 /// Maximum line length (in bytes) the ripgrep searcher will tolerate.
 /// Files containing lines longer than this are skipped, preventing
@@ -43,6 +46,7 @@ pub fn run_search_subprocess(
     paths: Vec<PathBuf>,
     ignore_case: bool,
     multiline: bool,
+    filters: &SearchFilters,
     #[cfg_attr(not(unix), allow(unused_variables))] parent_pid: Option<u32>,
 ) -> anyhow::Result<()> {
     #[cfg(unix)]
@@ -64,11 +68,7 @@ pub fn run_search_subprocess(
 
     let stdout = std::sync::Mutex::new(std::io::stdout());
 
-    let mut walker_builder = WalkBuilder::new(&paths[0]);
-    for path in paths.iter().skip(1) {
-        walker_builder.add(path);
-    }
-    let walker = walker_builder.build_parallel();
+    let walker = build_walker(&paths, filters)?.build_parallel();
 
     walker.run(|| {
         let matcher = matcher.clone();
@@ -134,6 +134,70 @@ pub fn run_search_subprocess(
     Ok(())
 }
 
+/// Configures a directory walker over `paths` that applies `filters`.
+///
+/// Fails if any include or exclude glob is invalid.
+pub(crate) fn build_walker(
+    paths: &[PathBuf],
+    filters: &SearchFilters,
+) -> anyhow::Result<WalkBuilder> {
+    let Some(first) = paths.first() else {
+        return Err(anyhow!("No paths specified"));
+    };
+    let mut builder = WalkBuilder::new(first);
+    for path in &paths[1..] {
+        builder.add(path);
+    }
+    builder.standard_filters(filters.use_ignore_files);
+
+    let path_filter = PathFilter::new(filters)?;
+    let skip_git_dirs = !filters.use_ignore_files;
+    if skip_git_dirs || !path_filter.is_empty() {
+        let roots: Arc<[PathBuf]> = paths.into();
+        let path_filter = Arc::new(path_filter);
+        builder.filter_entry(move |entry| {
+            should_visit_entry(entry, &roots, &path_filter, skip_git_dirs)
+        });
+    }
+    Ok(builder)
+}
+
+fn should_visit_entry(
+    entry: &DirEntry,
+    roots: &[PathBuf],
+    path_filter: &PathFilter,
+    skip_git_dirs: bool,
+) -> bool {
+    if entry.depth() == 0 {
+        return true;
+    }
+    // Git internals (a `.git` directory, or the `.git` file of a worktree or submodule) are never
+    // useful search results, even when ignore files are disabled.
+    if skip_git_dirs && entry.file_name() == ".git" {
+        return false;
+    }
+    let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+    if path_filter.is_empty() {
+        return true;
+    }
+    let Some(relative_path) = relative_to_root(entry.path(), roots) else {
+        return true;
+    };
+    if is_dir {
+        !path_filter.should_skip_dir(relative_path)
+    } else {
+        path_filter.is_walked_file_allowed(relative_path)
+    }
+}
+
+/// Returns `path` relative to the deepest root that contains it.
+fn relative_to_root<'a>(path: &'a Path, roots: &[PathBuf]) -> Option<&'a Path> {
+    roots
+        .iter()
+        .filter_map(|root| path.strip_prefix(root).ok())
+        .min_by_key(|relative| relative.components().count())
+}
+
 #[cfg(not(target_family = "wasm"))]
 mod process_impl {
     use std::path::PathBuf;
@@ -144,6 +208,7 @@ mod process_impl {
     use futures::stream::Stream;
 
     use super::{Match, Submatch};
+    use crate::filter::{PathFilter, SearchFilters};
     use crate::types::RipgrepMessage;
 
     /// Searches `paths` for lines matching `patterns` and returns all results.
@@ -173,7 +238,27 @@ mod process_impl {
         ignore_case: bool,
         multiline: bool,
     ) -> anyhow::Result<impl Stream<Item = Match>> {
-        let child = spawn_search_process(patterns, paths, ignore_case, multiline)?;
+        search_streaming_with_filters(
+            patterns,
+            paths,
+            ignore_case,
+            multiline,
+            &SearchFilters::default(),
+        )
+    }
+
+    /// Like [`search_streaming`], but only visits files allowed by `filters`.
+    ///
+    /// Fails without spawning a search if any include or exclude glob is invalid.
+    pub fn search_streaming_with_filters(
+        patterns: &[String],
+        paths: &[PathBuf],
+        ignore_case: bool,
+        multiline: bool,
+        filters: &SearchFilters,
+    ) -> anyhow::Result<impl Stream<Item = Match> + use<>> {
+        PathFilter::new(filters)?;
+        let child = spawn_search_process(patterns, paths, ignore_case, multiline, filters)?;
         Ok(match_stream_from_child(child))
     }
 
@@ -183,6 +268,7 @@ mod process_impl {
         paths: &[PathBuf],
         ignore_case: bool,
         multiline: bool,
+        filters: &SearchFilters,
     ) -> Result<async_process::Child, std::io::Error> {
         let current_exe = std::env::current_exe()?;
         let mut cmd = command::r#async::Command::new(current_exe);
@@ -196,6 +282,19 @@ mod process_impl {
 
         if multiline {
             cmd.arg("--multiline");
+        }
+
+        if !filters.use_ignore_files {
+            cmd.arg("--no-ignore");
+        }
+
+        // The `=` form keeps globs starting with `-` from being parsed as flags.
+        for glob in &filters.include_globs {
+            cmd.arg(format!("--include-glob={glob}"));
+        }
+
+        for glob in &filters.exclude_globs {
+            cmd.arg(format!("--exclude-glob={glob}"));
         }
 
         for pattern in patterns {
@@ -262,4 +361,8 @@ mod process_impl {
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub use process_impl::{search, search_streaming};
+pub use process_impl::{search, search_streaming, search_streaming_with_filters};
+
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod tests;

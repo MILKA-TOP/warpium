@@ -1,5 +1,6 @@
 //! Thin wrapper around ripgrep for searching files.
 
+pub mod filter;
 pub mod search;
 #[cfg(not(target_family = "wasm"))]
 mod types;

@@ -1,9 +1,11 @@
+use warp_ripgrep::filter::SearchFilters;
 use warp_ripgrep::search::Submatch;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 pub struct SearchConfig {
     pub use_regex: bool,
     pub use_case_sensitivity: bool,
+    pub filters: SearchFilters,
 }
 
 /// A single global search match: one line in one file, which may live on

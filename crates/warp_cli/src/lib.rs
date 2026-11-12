@@ -545,6 +545,15 @@ pub enum WorkerCommand {
         ignore_case: bool,
         #[clap(long = "multiline")]
         multiline: bool,
+        /// Don't respect ignore files, and search hidden files.
+        #[clap(long = "no-ignore")]
+        no_ignore: bool,
+        /// Glob a file must match to be searched. May be repeated.
+        #[clap(long = "include-glob")]
+        include_globs: Vec<String>,
+        /// Glob for files and directories to skip. May be repeated.
+        #[clap(long = "exclude-glob")]
+        exclude_globs: Vec<String>,
         /// Search pattern.
         pattern: String,
         /// Paths to search.

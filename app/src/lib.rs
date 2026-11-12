@@ -929,6 +929,9 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
             parent,
             ignore_case,
             multiline,
+            no_ignore,
+            include_globs,
+            exclude_globs,
             pattern,
             paths,
         } => {
@@ -937,6 +940,11 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
                 paths.clone(),
                 *ignore_case,
                 *multiline,
+                &warp_ripgrep::filter::SearchFilters {
+                    use_ignore_files: !*no_ignore,
+                    include_globs: include_globs.clone(),
+                    exclude_globs: exclude_globs.clone(),
+                },
                 parent.pid,
             )
             .map_err(|err| anyhow!(err.to_string()))?;

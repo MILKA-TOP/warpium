@@ -100,4 +100,16 @@ define_settings_group!(CodeSettings, settings: [
         toml_path: "code.editor.auto_save",
         description: "Whether the Warp text editor automatically saves changes as you type and when the editor loses focus.",
     },
+    // Glob patterns global search always skips while it respects ignore files, in addition to
+    // the patterns typed into its "files to exclude" field.
+    global_search_exclude: GlobalSearchExclude {
+        type: Vec<String>,
+        default: vec!["**/node_modules".to_owned(), "**/bower_components".to_owned()],
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "code.editor.global_search_exclude",
+        description: "Glob patterns excluded from global search while it uses ignore files, like VS Code's search.exclude. Patterns without a slash match at any depth.",
+    },
 ]);
