@@ -14,7 +14,7 @@ import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from .config import REPO_SLUG, REPO_URL, Config, scrubbed_env
+from .config import REPO_SLUG, REPO_URL, Config, gh_env, scrubbed_env
 from .jobs import Job, JobManager
 from .pathjail import PathJail
 from .validation import (
@@ -51,23 +51,47 @@ CANONICAL_GIT_CONFIG = f"""[core]
 """
 
 
+def git_env(base: dict[str, str]) -> dict[str, str]:
+    """No global/system git config either (a build can't write those, but
+    they could carry filters/insteadOf that change what a sync runs)."""
+    env = dict(base)
+    env.update(
+        {"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    )
+    return env
+
+
 def git_argv(clone: Path, *args: str) -> list[str]:
     return ["git", *GIT_SAFE_OPTS, "-C", str(clone), *args]
 
 
 def _git(clone: Path, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
-    return subprocess.run(git_argv(clone, *args), capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(
+        git_argv(clone, *args),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=git_env(scrubbed_env()),
+    )
 
 
 def reset_git_config(clone: Path) -> None:
     """Replaces .git/config with a known-good one (drops filters, aliases,
     insteadOf rewrites, credential helpers, includes, ... that a build may
     have planted)."""
-    cfg = clone / ".git" / "config"
-    if cfg.is_symlink() or not cfg.parent.is_dir() or cfg.parent.is_symlink():
-        raise WorkspaceError(f"{cfg.parent} looks tampered with (symlink); delete the clone")
-    tmp = cfg.with_name("config.mcp-tmp")
-    tmp.write_text(CANONICAL_GIT_CONFIG)
+    gitdir = clone / ".git"
+    cfg = gitdir / "config"
+    if gitdir.is_symlink() or not gitdir.is_dir() or cfg.is_symlink():
+        raise WorkspaceError(f"{gitdir} looks tampered with (symlink/gitfile); delete the clone")
+    # A commondir file makes git read config/info from another directory.
+    if (gitdir / "commondir").exists() or (gitdir / "commondir").is_symlink():
+        raise WorkspaceError(f"{gitdir}/commondir exists (tampered?); delete the clone")
+    tmp = gitdir / "config.mcp-tmp"
+    if tmp.exists() or tmp.is_symlink():
+        tmp.unlink()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(CANONICAL_GIT_CONFIG)
     os.replace(tmp, cfg)
 
 
@@ -182,32 +206,48 @@ class Workspace:
         branch = validate_branch(branch)
         clone = self.clone
         steps: list = []
-        if not (clone / ".git").exists():
+        if not (clone / ".git").exists() and not (clone / ".git").is_symlink():
             if clone.exists() and any(clone.iterdir()):
                 raise WorkspaceError(f"{clone} exists, is not empty and is not a git clone")
             steps.append(["git", *GIT_SAFE_OPTS, "clone", "--no-checkout", REPO_URL, str(clone)])
         else:
             check_origin(clone)
-            reset_git_config(clone)
-            dirty = dirty_paths(clone)
-            if dirty and not discard_local_changes:
-                raise WorkspaceError(
-                    "workspace clone has local changes; pass discard_local_changes=true to "
-                    f"reset them. Changes: {dirty[:20]}"
-                )
-            if dirty:
-                # Tracked changes and untracked (non-ignored) files only; the
-                # ignored target/ dir is kept so incremental builds stay fast.
-                steps.append(git_argv(clone, "reset", "--hard", "--quiet"))
-                steps.append(git_argv(clone, "clean", "-fd", "--quiet"))
+
+            # Runs inside the (exclusive) job, so it can't race a running build.
+            def prepare_clone(log: Callable[[str], None]) -> None:
+                reset_git_config(clone)
+                dirty = dirty_paths(clone)
+                if dirty and not discard_local_changes:
+                    raise WorkspaceError(
+                        "workspace clone has local changes; pass discard_local_changes=true "
+                        f"to reset them. Changes: {dirty[:20]}"
+                    )
+                if dirty:
+                    # Tracked changes and untracked (non-ignored) files only; the
+                    # ignored target/ dir is kept so incremental builds stay fast.
+                    for argv in (
+                        git_argv(clone, "reset", "--hard", "--quiet"),
+                        git_argv(clone, "clean", "-fd", "--quiet"),
+                    ):
+                        r = subprocess.run(
+                            argv,
+                            capture_output=True,
+                            text=True,
+                            timeout=600,
+                            env=git_env(scrubbed_env()),
+                        )
+                        log(r.stdout + r.stderr)
+                        if r.returncode != 0:
+                            raise WorkspaceError(f"{argv[-3]} failed")
+
+            steps.append(prepare_clone)
         refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
         steps.append(git_argv(clone, "fetch", "--prune", "origin", refspec))
         steps.append(
             git_argv(clone, "checkout", "--force", "-B", branch, f"refs/remotes/origin/{branch}")
         )
         steps.append(git_argv(clone, "log", "-1", "--format=%H %s"))
-        env = self._base_env()
-        env["GIT_TERMINAL_PROMPT"] = "0"
+        env = git_env(self._base_env())
         return self.jobs.start(
             "repo_sync",
             f"sync {REPO_SLUG}@{branch}",
@@ -263,11 +303,7 @@ class Workspace:
         dl_dir = self.jail.resolve(self.cfg.downloads_dir / run_id)
         mnt = self.jail.resolve(self.cfg.downloads_dir / f"{run_id}-mnt")
         apps_dir = self.jail.resolve(self.cfg.apps_dir)
-        if dl_dir.exists():
-            shutil.rmtree(dl_dir)
-        dl_dir.mkdir(parents=True)
         jail = self.jail
-        base_env = self._base_env
         chosen: dict[str, str] = {}
 
         def gh_api(path: str) -> dict:
@@ -276,13 +312,18 @@ class Workspace:
                 capture_output=True,
                 text=True,
                 timeout=60,
-                env=base_env(),
+                env=gh_env(),
             )
             if r.returncode != 0:
                 raise WorkspaceError(f"gh api failed: {r.stderr.strip()}")
             return json.loads(r.stdout)
 
         def verify_run(log: Callable[[str], None]) -> dict:
+            # Inside the exclusive job, so a second call can't delete files
+            # out from under a running install.
+            if dl_dir.exists():
+                shutil.rmtree(dl_dir)
+            dl_dir.mkdir(parents=True)
             info = check_run_info(gh_api(""))
             # Artifact names embed the commit sha (the merge commit on
             # pull_request runs), so list the run's artifacts instead of
@@ -297,7 +338,7 @@ class Workspace:
             argv = ["gh", "run", "download", run_id, "--repo", REPO_SLUG]
             argv += ["--name", chosen["name"], "--dir", str(dl_dir)]
             log("$ " + " ".join(argv))
-            r = subprocess.run(argv, capture_output=True, text=True, timeout=3000, env=base_env())
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=3000, env=gh_env())
             log(r.stdout + r.stderr)
             if r.returncode != 0:
                 raise WorkspaceError(f"gh run download failed ({r.returncode})")

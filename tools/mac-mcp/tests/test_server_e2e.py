@@ -90,6 +90,20 @@ async def _session_calls(url):
             return tools, bad, cat, sync, wins
 
 
+def test_file_open_cannot_reach_log(server):
+    from warpium_mac_mcp.pathjail import PathEscapeError
+    from warpium_mac_mcp.server import run_warpctrl
+
+    _, cfg = server
+    services = build_services(cfg, platform=None)
+    log = cfg.log_files[0]
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("x")
+    assert services.jail.contains(log)  # app_logs may read it (with ownership checks)
+    with pytest.raises(PathEscapeError):
+        run_warpctrl(services, "file.open", {"path": str(log)}, None)
+
+
 def test_tools_over_mcp(server):
     url, cfg = server
     tools, bad, cat, sync, wins = asyncio.run(_session_calls(url))

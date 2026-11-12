@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -20,6 +21,8 @@ from .validation import ValidationError, validate_app_args, validate_env
 from .workspace import Workspace, WorkspaceError
 
 SOURCES = ("build", "artifact")
+# The app creates (rotates) warp-oss.log during startup.
+LOG_CREATE_WINDOW_S = 120
 
 
 @dataclass
@@ -33,16 +36,37 @@ class Launched:
     args: list[str]
 
 
+def executable_path(pid: int) -> str | None:
+    """The kernel's record of a process's executable (not argv[0], which any
+    process can set to anything, e.g. with `exec -a`)."""
+    if sys.platform == "darwin":
+        import ctypes
+        import ctypes.util
+
+        global _LIBPROC
+        if _LIBPROC is None:
+            _LIBPROC = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib")
+        buf = ctypes.create_string_buffer(4096)  # PROC_PIDPATHINFO_MAXSIZE
+        n = _LIBPROC.proc_pidpath(ctypes.c_int(pid), buf, ctypes.c_uint32(len(buf)))
+        return buf.value.decode("utf-8", "replace") if n > 0 else None
+    try:
+        return os.readlink(f"/proc/{pid}/exe")
+    except OSError:
+        return None
+
+
+_LIBPROC = None
+
+
 def list_processes() -> list[tuple[int, str]]:
-    """(pid, executable path) for all processes of the current user."""
-    r = subprocess.run(
-        ["ps", "-x", "-ww", "-o", "pid=,comm="], capture_output=True, text=True, timeout=10
-    )
+    """(pid, real executable path) for all processes of the current user."""
+    r = subprocess.run(["ps", "-x", "-o", "pid="], capture_output=True, text=True, timeout=10)
     out = []
-    for line in r.stdout.splitlines():
-        m = re.match(r"\s*(\d+)\s+(.*)$", line)
-        if m:
-            out.append((int(m.group(1)), m.group(2).strip()))
+    for line in r.stdout.split():
+        if line.isdigit():
+            exe = executable_path(int(line))
+            if exe:
+                out.append((int(line), exe))
     return out
 
 
@@ -231,16 +255,22 @@ class AppManager:
                 f"another Warpium process is running (pids {sorted(other)}) and shares "
                 "warp-oss.log; quit it first, or use app_logs(source='stdout')"
             )
-        if self._launched:
-            birth = getattr(path.stat(), "st_birthtime", None)
-            if birth is not None and birth < self._launched.started_at - 5:
-                raise PermissionError(
-                    "warp-oss.log predates the app launched by this server "
-                    "(it belongs to an earlier, possibly non-test, run)"
-                )
-        elif not self.target_pids():
+        launched = self._launched
+        if launched is None or launched.proc.poll() is not None:
             raise PermissionError(
-                "no Warpium under test is running; warp-oss.log may belong to another app"
+                "warp-oss.log is only readable while the app launched by this server is "
+                "running (otherwise it may belong to another Warpium); use source='stdout'"
+            )
+        # Each oss-channel app rotates the log at startup, so the current file
+        # must have been created right when our app started: not before (an
+        # older run) and not long after (another app started and quit since).
+        birth = getattr(path.stat(), "st_birthtime", None)
+        if birth is None:
+            birth = path.stat().st_ctime
+        if not (launched.started_at - 5 <= birth <= launched.started_at + LOG_CREATE_WINDOW_S):
+            raise PermissionError(
+                "warp-oss.log was not created by the app launched by this server "
+                "(another Warpium ran in between); use source='stdout' or relaunch"
             )
 
     def log_file(self) -> Path:

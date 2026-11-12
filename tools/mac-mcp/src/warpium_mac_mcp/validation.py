@@ -297,6 +297,10 @@ def system_shortcut_reason(mods: frozenset[str], key: str) -> str | None:
         return "system screenshot (full screen)"
     if key in _FKEYS and mods & {"ctrl", "cmd", "alt"}:
         return "keyboard navigation / system function keys"
+    if key in {"f11", "f12"}:
+        return "Show Desktop / Notification Center"
+    if key.isdigit() and "ctrl" in mods:
+        return "switch to Desktop N"
     if key in _ARROWS and "ctrl" in mods:
         return "Mission Control / switching Spaces"
     if key == "d" and {"cmd", "alt"} <= mods:

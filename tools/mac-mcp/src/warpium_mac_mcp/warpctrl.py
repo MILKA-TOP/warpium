@@ -372,6 +372,7 @@ class LocalControlClient:
     def __init__(self, directory: Path, timeout_s: float = 10.0):
         self._dir = directory
         self._timeout = timeout_s
+        self._verified: set[tuple[str, int, int | None]] = set()
 
     def request_credential(self, inst: Instance, action: str) -> str:
         if inst.broker_socket is None:
@@ -421,6 +422,9 @@ class LocalControlClient:
         )
 
     def verify_identity(self, inst: Instance) -> None:
+        key = (inst.instance_id, inst.pid, inst.port)
+        if key in self._verified:
+            return
         data = self.send(inst, "instance.inspect", {}, {})
         if (
             not isinstance(data, dict)
@@ -431,6 +435,7 @@ class LocalControlClient:
                 "local-control endpoint answered with a different instance identity",
                 "transport_unavailable",
             )
+        self._verified.add(key)
 
     def send(self, inst: Instance, action: str, params: dict, target: dict) -> Any:
         token = self.request_credential(inst, action)

@@ -171,8 +171,9 @@ def test_repo_sync_refuses_dirty_clone(ws):
     _git("init", "-q", cwd=clone)
     _git("remote", "add", "origin", REPO_URL, cwd=clone)
     (clone / "f").write_text("x")
-    with pytest.raises(WorkspaceError, match="local changes"):
-        w.repo_sync("master")
+    job = wait(w.repo_sync("master"))
+    assert job.state == "failed" and "local changes" in job.error
+    assert (clone / "f").exists()  # nothing discarded
 
 
 def test_repo_sync_refuses_foreign_origin(ws):
@@ -328,8 +329,34 @@ def test_repo_sync_steps_use_safe_git_options(ws):
 
     w.jobs.start = fake_start
     w.repo_sync("master")
-    for step in captured["steps"]:
+    argv_steps = [st for st in captured["steps"] if not callable(st)]
+    assert argv_steps
+    for step in argv_steps:
         assert list(step[1:5]) == list(GIT_SAFE_OPTS)
+
+
+def test_git_env_ignores_global_config():
+    from warpium_mac_mcp.workspace import git_env
+
+    env = git_env({"PATH": "/bin"})
+    assert env["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+
+
+def test_reset_git_config_refuses_commondir_and_tmp_symlink(ws, tmp_path):
+    w, cfg = ws
+    clone = cfg.clone_dir
+    clone.mkdir()
+    _git("init", "-q", cwd=clone)
+    victim = tmp_path / "victim"
+    victim.write_text("owner data")
+    os.symlink(victim, clone / ".git" / "config.mcp-tmp")
+    reset_git_config(clone)
+    assert victim.read_text() == "owner data"  # symlink not followed
+    assert not (clone / ".git" / "config").is_symlink()
+    (clone / ".git" / "commondir").write_text("/tmp/evil")
+    with pytest.raises(WorkspaceError, match="commondir"):
+        reset_git_config(clone)
 
 
 def _run(**over):
@@ -366,23 +393,44 @@ def test_install_artifact_disabled_with_no_build(tmp_path):
         w.install_artifact("123")
 
 
-def test_app_logs_refused_while_other_warpium_runs(ws):
+def test_app_logs_ownership(ws):
     w, cfg = ws
     cfg.logs_dir.mkdir(parents=True, exist_ok=True)
-    (cfg.logs_dir / "warp-oss.log").write_text("2026-01-01T00:00:00Z [INFO] daily app line\n")
+    log = cfg.logs_dir / "warp-oss.log"
     built = cfg.clone_dir / "target" / "debug" / "warp-oss"
     built.parent.mkdir(parents=True)
-    built.write_text("")
-    procs = [(10, str(built)), (12, "/Applications/Warpium.app/Contents/MacOS/warp-oss")]
+    built.write_text("#!/bin/sh\nexec sleep 60\n")
+    built.chmod(0o755)
+    procs = [(12, "/Applications/Warpium.app/Contents/MacOS/warp-oss")]
     jail = PathJail([cfg.workspace_dir], files=cfg.log_files)
     am = AppManager(cfg, w, jail, processes=lambda: procs)
-    with pytest.raises(PermissionError, match="another Warpium"):
+    log.write_text("2026-01-01T00:00:00Z [INFO] some line\n")
+    with pytest.raises(PermissionError):  # nothing launched by us
         am.logs(source="app")
-    procs.pop()
-    assert "daily app line" in am.logs(source="app")["lines"]
-    procs.clear()  # nothing under test running: the log may be someone else's
-    with pytest.raises(PermissionError):
+    am.launch()
+    try:
+        with pytest.raises(PermissionError, match="another Warpium"):
+            am.logs(source="app")
+        procs.clear()
+        log.unlink()
+        log.write_text("2026-01-01T00:00:00Z [INFO] test app line\n")  # created after launch
+        assert "test app line" in am.logs(source="app")["lines"]
+        # Log (re)created long after our launch: another app started and quit since.
+        am._launched.started_at -= 1000
+        with pytest.raises(PermissionError, match="not created by"):
+            am.logs(source="app")
+    finally:
+        am.quit()
+    with pytest.raises(PermissionError):  # our app is gone
         am.logs(source="app")
+
+
+def test_real_executable_path_not_argv0():
+    from warpium_mac_mcp.app import executable_path, list_processes
+
+    me = os.getpid()
+    assert executable_path(me) == os.path.realpath(sys.executable)
+    assert (me, os.path.realpath(sys.executable)) in list_processes()
 
 
 def test_pick_artifact():

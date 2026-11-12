@@ -163,6 +163,7 @@ def test_key_combos():
     assert parse_key_combo("cmd+q") == (frozenset({"cmd"}), "q")  # quits Warpium only
     assert parse_key_combo("alt+left") == (frozenset({"alt"}), "left")
     assert parse_key_combo("f5") == (frozenset(), "f5")
+    assert parse_key_combo("cmd+2") == (frozenset({"cmd"}), "2")  # Warp tab 2
     for system in [
         "cmd+space",
         "alt+space",
@@ -185,6 +186,9 @@ def test_key_combos():
         "fn+n",
         "cmd+alt+d",
         "cmd+alt+`",
+        "f11",
+        "f12",
+        "ctrl+2",
     ]:
         with pytest.raises(ValidationError):
             parse_key_combo(system)

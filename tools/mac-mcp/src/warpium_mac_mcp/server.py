@@ -59,6 +59,9 @@ class Services:
     ui: UiController
     lc: LocalControlClient
     platform: Platform | None
+    # Workspace only, without the log-file exceptions: used for paths handed
+    # to the app (file.open), which must not open the shared warp-oss.log.
+    workspace_jail: PathJail | None = None
 
 
 def build_services(cfg: Config, platform: Platform | None) -> Services:
@@ -91,7 +94,18 @@ def build_services(cfg: Config, platform: Platform | None) -> Services:
         screenshots_dir=cfg.screenshots_dir,
     )
     lc = LocalControlClient(discovery_dir())
-    return Services(cfg, audit, jobs, jail, ws, app, ui, lc, platform)
+    return Services(
+        cfg,
+        audit,
+        jobs,
+        jail,
+        ws,
+        app,
+        ui,
+        lc,
+        platform,
+        workspace_jail=PathJail([cfg.workspace_dir]),
+    )
 
 
 async def _thread(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -119,7 +133,9 @@ def _select_instance(s: Services) -> Any:
 
 
 def run_warpctrl(s: Services, action: str, params: dict | None, target: dict | None) -> Any:
-    clean_params = validate_action(action, params, allow_input=s.cfg.allow_input, file_jail=s.jail)
+    clean_params = validate_action(
+        action, params, allow_input=s.cfg.allow_input, file_jail=s.workspace_jail
+    )
     clean_target = validate_target(target)
     if action == "instance.list":
         pids = s.app.target_pids()

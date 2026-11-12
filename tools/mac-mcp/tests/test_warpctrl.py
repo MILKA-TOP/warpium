@@ -289,8 +289,11 @@ def test_verify_identity(tmp_path):
         inst = parse_record(_record(endpoint={"host": "127.0.0.1", "port": fake.port}), tmp_path)
         client = LocalControlClient(tmp_path)
         client.verify_identity(inst)  # pid 4242 matches the record
+        n = len(fake.requests)
+        client.verify_identity(inst)  # cached: no second probe
+        assert len(fake.requests) == n
         fake.reported_pid = 9999  # endpoint actually belongs to another process
         with pytest.raises(WarpctrlError, match="different instance"):
-            client.verify_identity(inst)
+            LocalControlClient(tmp_path).verify_identity(inst)
     finally:
         fake.close()

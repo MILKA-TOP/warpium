@@ -54,7 +54,16 @@ _ENV_PASSTHROUGH = frozenset(
         "http_proxy",
         "https_proxy",
         "no_proxy",
+        "ALL_PROXY",
+        "all_proxy",
         "__CF_USER_TEXT_ENCODING",
+        # TLS trust for corporate/intercepting proxies.
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "CURL_CA_BUNDLE",
+        "CARGO_HTTP_CAINFO",
+        "XDG_CONFIG_HOME",
+        "GH_CONFIG_DIR",
     }
 )
 
@@ -62,6 +71,17 @@ _ENV_PASSTHROUGH = frozenset(
 def scrubbed_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
     env = os.environ if environ is None else environ
     return {k: v for k, v in env.items() if k in _ENV_PASSTHROUGH or k.startswith("LC_")}
+
+
+# Credentials passed only to `gh` (install_artifact), never to builds or the app.
+_GH_ENV = frozenset({"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "GH_ENTERPRISE_TOKEN"})
+
+
+def gh_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    env = os.environ if environ is None else environ
+    out = scrubbed_env(env)
+    out.update({k: v for k, v in env.items() if k in _GH_ENV})
+    return out
 
 
 def default_config_dir() -> Path:

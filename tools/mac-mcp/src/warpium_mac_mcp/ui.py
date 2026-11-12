@@ -161,7 +161,9 @@ class UiController:
             if w.pid in pids:
                 return
             raise FocusError(
-                f"refusing input: point ({sx:.0f},{sy:.0f}) is covered by another app's window"
+                f"refusing input: point ({sx:.0f},{sy:.0f}) is covered by a window of "
+                f"{w.owner or 'another app'!r} (pid {w.pid}, layer {w.layer}, alpha {w.alpha}). "
+                "Invisible overlays count too, since they can still take clicks."
             )
         raise FocusError(f"refusing input: no window under point ({sx:.0f},{sy:.0f})")
 
