@@ -1044,7 +1044,7 @@ acp_harness = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"
-copyright = "Warpium © 2026 MILKA-TOP. Based on Warp © 2025 Denver Technologies, Inc"
+copyright = "Warpium © 2026 MILKA-TOP. Based on Warp © Denver Technologies, Inc"
 identifier = "dev.milka.Warpium"
 name = "Warpium"
 resources = ["assets/onboarding"]

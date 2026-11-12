@@ -29,7 +29,9 @@ Warpium builds are ad-hoc signed and **not notarized** by Apple, so macOS will r
 xattr -dr com.apple.quarantine /Applications/Warpium.app
 ```
 
-Warpium uses its own bundle identifier (`dev.milka.Warpium`), so it can be installed next to Warp. Its preferences, Application Support data, and keychain entries are separate from Warp's. Shared config under `~/.warp-oss` (for example `settings.toml`, themes, and skills) is still the same directory Warp's OSS build uses.
+Warpium uses its own bundle identifier (`dev.milka.Warpium`), so it can be installed next to the official Warp app. On macOS its preferences, `~/Library/Application Support/dev.milka.Warpium` data, and keychain entries are separate from Warp's, while `~/.warp-oss` (for example `settings.toml`, themes, and skills) is still shared with upstream's OSS build. Warpium also keeps the OSS build's `warposs://` URL scheme and `warp-oss` CLI name, so avoid installing it next to an upstream `WarpOss.app`: sign-in redirects may open the wrong app.
+
+Only macOS builds are produced and tested. Linux and Windows packaging scripts are inherited from upstream and are not maintained for Warpium.
 
 ## Building locally
 

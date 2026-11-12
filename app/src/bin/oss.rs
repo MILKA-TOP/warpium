@@ -61,7 +61,7 @@ embed_plist::embed_info_plist_bytes!(r#"
     <key>CFBundleURLTypes</key>
     <array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>warposs</string></array></dict></array>
     <key>NSHumanReadableCopyright</key>
-    <string>Warpium © 2026 MILKA-TOP. Based on Warp © 2026 Denver Technologies, Inc</string>
+    <string>Warpium © 2026 MILKA-TOP. Based on Warp © Denver Technologies, Inc</string>
     </dict>
     </plist>
 "#.as_bytes());
