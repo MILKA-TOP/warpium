@@ -23,6 +23,8 @@ Builds are produced by the [Warpium Build](.github/workflows/warpium-build.yml) 
 - **Latest development build:** open the [Actions tab](https://github.com/MILKA-TOP/warpium/actions/workflows/warpium-build.yml), pick a successful run on `master`, and download the `Warpium-<commit>-macos-arm64` artifact (a zipped `.dmg`).
 - **Tagged releases:** pushing a `v*` tag publishes a [GitHub Release](https://github.com/MILKA-TOP/warpium/releases) with the `.dmg` attached.
 
+CI builds are currently cross-compiled for arm64 on Intel runners, which can't run the arm64 binary to generate `settings_schema.json`. As a result, the bundled `modify-settings` agent skill is not available in CI builds; local builds on Apple silicon include it.
+
 Warpium builds are ad-hoc signed and **not notarized** by Apple, so macOS will refuse to open them at first. After copying `Warpium.app` to `/Applications`, clear the quarantine flag:
 
 ```bash
@@ -51,7 +53,7 @@ brew install create-dmg
 ./script/bundle --channel oss --arch aarch64 --selfsign --dmg-name-suffix arm64
 ```
 
-The bundle is written to `target/aarch64-apple-darwin/release-lto/bundle/osx/`.
+The `.dmg` and `Warpium.app` are written to `target/release-lto/bundle/osx/`.
 
 See [AGENTS.md](AGENTS.md) for the upstream engineering guide (code style, testing, and platform notes).
 

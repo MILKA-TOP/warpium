@@ -24,13 +24,14 @@ permissions:
 
 concurrency:
   group: warpium-build-${{ github.ref }}
-  cancel-in-progress: true
+  # Only cancel superseded PR runs; master runs must finish to save the cache.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
   # Line-tables debuginfo is only useful for Sentry symbolication, which this
   # fork doesn't ship. Dropping it lowers peak rustc memory during ThinLTO on
-  # the 7 GB standard runner and keeps the Rust cache well under 10 GB.
+  # standard hosted runners and keeps the Rust cache well under 10 GB.
   CARGO_PROFILE_RELEASE_DEBUG: '0'
   HOMEBREW_NO_AUTO_UPDATE: '1'
   HOMEBREW_NO_INSTALL_CLEANUP: '1'
@@ -51,9 +52,10 @@ jobs:
   macos-arm64:
     name: Build macOS (arm64)
     needs: preflight
-    # macos-15 (arm64) rather than macos-26: hosted macos-26 arm64 capacity
-    # was unavailable for this repository and jobs were never acquired.
-    runs-on: macos-15
+    # Hosted macOS arm64 runners (macos-26, macos-15) were never acquired for
+    # this repository while ubuntu runners were, so cross-compile the arm64
+    # app on an Intel runner instead.
+    runs-on: macos-15-intel
     timeout-minutes: 330
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
@@ -64,7 +66,7 @@ jobs:
           # the binary; without them the app would embed LFS pointer files.
           lfs: true
 
-      # macos-15 defaults to Xcode 16.4 but also ships Xcode 26.x; select the
+      # macos-15-intel defaults to Xcode 16.4 but also ships Xcode 26.x; select the
       # newest 26.x to match upstream CI. script/macos/install_build_deps runs
       # `xcodebuild -downloadComponent MetalToolchain` (an Xcode 26 option, as
       # Xcode 26 no longer bundles the Metal compiler that warpui's build.rs uses).
@@ -115,6 +117,9 @@ jobs:
         id: bundle
         env:
           RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          # The Intel host can't run the arm64 binary to dump the settings
+          # schema, so the bundle ships without settings_schema.json.
+          SKIP_SETTINGS_SCHEMA: '1'
         run: |
           args=(--channel oss --arch aarch64 --selfsign --dmg-name-suffix arm64)
           if [[ -n "$RELEASE_TAG" ]]; then
@@ -156,7 +161,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" dist/*.dmg \
-            --verify-tag \
-            --title "Warpium $TAG" \
-            --generate-notes
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.dmg --clobber
+          else
+            gh release create "$TAG" dist/*.dmg \
+              --verify-tag \
+              --title "Warpium $TAG" \
+              --generate-notes
+          fi
