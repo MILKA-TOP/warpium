@@ -36,8 +36,21 @@ env:
   HOMEBREW_NO_INSTALL_CLEANUP: '1'
 
 jobs:
+  # Cheap canary: if hosted runners can't be acquired at all, fail here instead
+  # of after a long macOS queue.
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report runner
+        run: |
+          echo "Runner: $RUNNER_OS $RUNNER_ARCH ($RUNNER_NAME)"
+          df -h
+
   macos-arm64:
     name: Build macOS (arm64)
+    needs: preflight
     # macos-15 (arm64) rather than macos-26: hosted macos-26 arm64 capacity
     # was unavailable for this repository and jobs were never acquired.
     runs-on: macos-15
