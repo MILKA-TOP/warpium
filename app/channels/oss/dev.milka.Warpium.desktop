@@ -4,15 +4,15 @@ Version=1.0
 
 Type=Application
 
-Name=WarpOss
+Name=Warpium
 GenericName=TerminalEmulator
 
 Exec=warp-terminal-oss %U
-StartupWMClass=dev.warp.WarpOss
+StartupWMClass=dev.milka.Warpium
 
 Keywords=shell;prompt;command;commandline;cmd;
 
-Icon=dev.warp.WarpOss
+Icon=dev.milka.Warpium
 
 Categories=System;TerminalEmulator;
 
