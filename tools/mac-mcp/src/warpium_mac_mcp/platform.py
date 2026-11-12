@@ -188,7 +188,13 @@ class MacPlatform:
     def post_scroll(self, x: float, y: float, dx: int, dy: int) -> None:
         import Quartz
 
-        ev = Quartz.CGEventCreateScrollWheelEvent(None, Quartz.kCGScrollEventUnitLine, 2, dy, dx)
+        create2 = getattr(Quartz, "CGEventCreateScrollWheelEvent2", None)
+        if create2 is not None:  # non-variadic variant (macOS 10.13+), safest from pyobjc
+            ev = create2(None, Quartz.kCGScrollEventUnitLine, 2, dy, dx, 0)
+        else:
+            ev = Quartz.CGEventCreateScrollWheelEvent(
+                None, Quartz.kCGScrollEventUnitLine, 2, dy, dx
+            )
         Quartz.CGEventSetLocation(ev, (x, y))
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 

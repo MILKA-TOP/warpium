@@ -38,7 +38,8 @@ On first run this creates `~/.config/warpium-mac-mcp/token` (mode 0600) and the 
 `~/warpium-mac-test/`. Every tool call is logged to `~/.config/warpium-mac-mcp/audit.log`.
 
 Useful flags: `--port N`, `--workspace DIR`, `--no-input` (observe only), `--no-build`
-(only CI artifacts can be run), `--key-delivery hid` (see SECURITY.md).
+(no building, tests or artifact downloads; only an app you place in
+`~/warpium-mac-test/apps/` can be launched), `--key-delivery hid` (weaker, see SECURITY.md).
 
 ### 4. Grant macOS permissions to the terminal app that runs the server
 
@@ -111,7 +112,8 @@ curl -s --noproxy host.docker.internal -o /dev/null -w '%{http_code}\n' -X POST 
 8. In the test app, open Settings > Scripting and set **warpctrl CLI** to **Enabled** (once per
    data profile). Then `list_targets()` returns windows/tabs/panes/sessions, and
    `warpctrl("tab.create", {"tab_type": "terminal"})` opens a tab.
-9. `app_logs(tail=50)` shows `~/Library/Logs/warp-oss.log`.
+9. `app_logs(tail=50)` shows `~/Library/Logs/warp-oss.log`. It is refused while another
+   Warpium is running, because they share that file.
 10. `app_quit()`.
 11. Check `~/.config/warpium-mac-mcp/audit.log` for those calls.
 
@@ -123,9 +125,9 @@ curl -s --noproxy host.docker.internal -o /dev/null -w '%{http_code}\n' -X POST 
 | `repo_sync(branch, discard_local_changes=false)` | Fetches the fork and checks out `branch` at `origin/branch` in the workspace clone (job). Refuses a dirty clone unless told to discard local changes. |
 | `build(profile, bin, features)` | `cargo build -p warp --bin warp-oss` (job). Default features are `gui,warp_control_cli`. |
 | `job_status(job_id?)`, `job_logs(job_id, tail, grep)`, `job_cancel(job_id)` | Inspect and cancel background jobs. |
-| `install_artifact(run_id, artifact_name?)` | `gh run download` of the Warpium .dmg from a fork Actions run. Mounts it read-only and copies the .app into `~/warpium-mac-test/apps/` (job). |
+| `install_artifact(run_id, artifact_name?)` | `gh run download` of the Warpium .dmg from a successful fork `warpium-build.yml` run, e.g. run `43262238821` gives `Warpium-a70e8571-macos-arm64`. The artifact is picked from the run's listing. Mounts the .dmg read-only and copies the .app into `~/warpium-mac-test/apps/` (job). |
 | `run_integration_test(name, real_display)` | `cargo run -p integration --bin integration -- <name>` (job). |
-| `app_launch(source, env, args, profile, isolate_data)` | Runs the dev binary (`build`) or the installed artifact (`artifact`). |
+| `app_launch(source, env, args, profile)` | Runs the dev binary (`build`) or the installed artifact (`artifact`). env accepts `RUST_LOG`/`RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` only. Always sets `WARP_DATA_PROFILE=mcp-test`. |
 | `app_quit`, `app_status` | Stops the app under test, or reports its pid, windows, frontmost state and warpctrl instance. |
 | `app_logs(tail, grep, since, source)` | `~/Library/Logs/warp-oss.log`, or the launched app's stdout/stderr. |
 | `list_windows` | Warpium windows with ids and bounds. |

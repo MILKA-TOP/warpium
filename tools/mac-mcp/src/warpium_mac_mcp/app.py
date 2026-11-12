@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .config import Config
+from .config import Config, scrubbed_env
 from .pathjail import PathJail
 from .validation import ValidationError, validate_app_args, validate_env
 from .workspace import Workspace, WorkspaceError
@@ -60,7 +60,7 @@ class AppManager:
         self.ws = workspace
         self.jail = jail
         self._processes = processes
-        self._base_env = base_env or (lambda: dict(os.environ))
+        self._base_env = base_env or scrubbed_env
         self._launched: Launched | None = None
         self._lock = threading.Lock()
 
@@ -111,7 +111,6 @@ class AppManager:
         env: Mapping[str, str] | None = None,
         args: list[str] | None = None,
         profile: str = "debug",
-        isolate_data: bool = True,
     ) -> dict:
         if source == "build" and not self.cfg.allow_build:
             raise WorkspaceError("running locally built code is disabled (--no-build)")
@@ -124,15 +123,11 @@ class AppManager:
                     f"Warpium is already running (pid {self._launched.proc.pid}); app_quit first"
                 )
             full_env = self._base_env()
-            # Never inherit the server's own token-bearing or proxy-ish vars.
-            for k in list(full_env):
-                if k.startswith("WARPIUM_MAC_MCP"):
-                    full_env.pop(k)
-            if isolate_data and source == "build" and profile == "debug":
-                # Honored only by debug builds; isolates UserDefaults, Application
-                # Support, keychain items and ~/.warp-oss-<profile>.
-                full_env.setdefault("WARP_DATA_PROFILE", self.cfg.data_profile)
-            full_env.update(env_over)
+            full_env.update(env_over)  # only RUST_* logging vars (validate_env)
+            # Always set (not client-controllable): honored by debug builds,
+            # isolates UserDefaults, Application Support, keychain items and
+            # ~/.warp-oss-<profile> from the owner's normal Warpium data.
+            full_env["WARP_DATA_PROFILE"] = self.cfg.data_profile
             stamp = time.strftime("%Y%m%d-%H%M%S")
             out_log = self.cfg.artifacts_dir / f"app-{stamp}.log"
             logf = open(out_log, "ab")  # noqa: SIM115 - handed to the child
@@ -161,7 +156,8 @@ class AppManager:
             "binary": str(binary),
             "source": source,
             "stdout_log": str(out_log),
-            "data_profile": full_env.get("WARP_DATA_PROFILE") if profile == "debug" else None,
+            "data_profile": self.cfg.data_profile if _is_debug(source, profile) else None,
+            "data_isolated": _is_debug(source, profile),
         }
 
     def quit(self, timeout_s: float = 10.0) -> dict:
@@ -212,6 +208,41 @@ class AppManager:
         return {"launched": launched, "target_pids": sorted(self.target_pids())}
 
     # --- logs --------------------------------------------------------------
+    def other_warpium_pids(self) -> set[int]:
+        """Warpium/WarpOss processes that are NOT under test (e.g. the owner's
+        daily app). They write the same ~/Library/Logs/warp-oss.log."""
+        targets = self.target_pids()
+        out = set()
+        for pid, exe in self._processes():
+            name = os.path.basename(exe)
+            if pid in targets:
+                continue
+            if name == "warp-oss" or "/WarpOss.app/" in exe or "/Warpium.app/" in exe:
+                out.add(pid)
+        return out
+
+    def _check_log_belongs_to_test_app(self, path: Path) -> None:
+        # warp-oss.log is shared by every oss-channel app (WARP_DATA_PROFILE
+        # doesn't change the name); each app rotates it at startup. Only hand it
+        # out when it was written by the app under test.
+        other = self.other_warpium_pids()
+        if other:
+            raise PermissionError(
+                f"another Warpium process is running (pids {sorted(other)}) and shares "
+                "warp-oss.log; quit it first, or use app_logs(source='stdout')"
+            )
+        if self._launched:
+            birth = getattr(path.stat(), "st_birthtime", None)
+            if birth is not None and birth < self._launched.started_at - 5:
+                raise PermissionError(
+                    "warp-oss.log predates the app launched by this server "
+                    "(it belongs to an earlier, possibly non-test, run)"
+                )
+        elif not self.target_pids():
+            raise PermissionError(
+                "no Warpium under test is running; warp-oss.log may belong to another app"
+            )
+
     def log_file(self) -> Path:
         files = [p for p in self.cfg.log_files if p.exists()]
         if not files:
@@ -235,6 +266,7 @@ class AppManager:
         since_ts = parse_since(since, time.time())
         if source == "app":
             path = self.log_file()
+            self._check_log_belongs_to_test_app(path)
         elif source == "stdout":
             if not self._launched:
                 raise FileNotFoundError("no app launched by this server yet")
@@ -283,6 +315,10 @@ def filter_log_lines(
             if needle is None or needle in line.lower():
                 out.append(line)
     return "\n".join(out)
+
+
+def _is_debug(source: str, profile: str) -> bool:
+    return source == "build" and profile == "debug"
 
 
 def _alive(pid: int) -> bool:

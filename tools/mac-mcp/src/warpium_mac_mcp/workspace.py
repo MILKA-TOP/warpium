@@ -5,6 +5,7 @@ All of these run as background jobs in the dedicated workspace directory.
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import re
@@ -13,7 +14,7 @@ import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from .config import REPO_SLUG, REPO_URL, Config
+from .config import REPO_SLUG, REPO_URL, Config, scrubbed_env
 from .jobs import Job, JobManager
 from .pathjail import PathJail
 from .validation import (
@@ -32,10 +33,42 @@ class WorkspaceError(RuntimeError):
     pass
 
 
+# Code built from the clone (build.rs) can write to .git/. These overrides keep
+# a planted hook or fsmonitor command from running on later git calls; the
+# repo config itself is rewritten to a canonical one before each sync.
+GIT_SAFE_OPTS = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+
+CANONICAL_GIT_CONFIG = f"""[core]
+\trepositoryformatversion = 0
+\tfilemode = true
+\tbare = false
+\tlogallrefupdates = true
+\tignorecase = true
+\tprecomposeunicode = true
+[remote "origin"]
+\turl = {REPO_URL}
+\tfetch = +refs/heads/*:refs/remotes/origin/*
+"""
+
+
+def git_argv(clone: Path, *args: str) -> list[str]:
+    return ["git", *GIT_SAFE_OPTS, "-C", str(clone), *args]
+
+
 def _git(clone: Path, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(clone), *args], capture_output=True, text=True, timeout=timeout
-    )
+    return subprocess.run(git_argv(clone, *args), capture_output=True, text=True, timeout=timeout)
+
+
+def reset_git_config(clone: Path) -> None:
+    """Replaces .git/config with a known-good one (drops filters, aliases,
+    insteadOf rewrites, credential helpers, includes, ... that a build may
+    have planted)."""
+    cfg = clone / ".git" / "config"
+    if cfg.is_symlink() or not cfg.parent.is_dir() or cfg.parent.is_symlink():
+        raise WorkspaceError(f"{cfg.parent} looks tampered with (symlink); delete the clone")
+    tmp = cfg.with_name("config.mcp-tmp")
+    tmp.write_text(CANONICAL_GIT_CONFIG)
+    os.replace(tmp, cfg)
 
 
 def normalize_remote(url: str) -> str:
@@ -73,6 +106,46 @@ def known_app_features(clone: Path) -> set[str] | None:
     return set((data.get("features") or {}).keys())
 
 
+WARPIUM_WORKFLOW = ".github/workflows/warpium-build.yml"
+
+
+def check_run_info(run: dict) -> dict:
+    """Only accept artifacts built by the fork's own Warpium workflow from a
+    branch of the fork itself (not a pull request from someone else's fork,
+    whose artifacts are also stored in the base repo)."""
+    head_repo = (run.get("head_repository") or {}).get("full_name")
+    repo = (run.get("repository") or {}).get("full_name")
+    if repo != REPO_SLUG or head_repo != REPO_SLUG:
+        raise WorkspaceError(f"run was built from {head_repo!r}, not {REPO_SLUG}; refusing")
+    if run.get("path", "").split("@")[0] != WARPIUM_WORKFLOW:
+        raise WorkspaceError(f"run is from workflow {run.get('path')!r}, not {WARPIUM_WORKFLOW}")
+    if run.get("conclusion") != "success":
+        raise WorkspaceError(f"run conclusion is {run.get('conclusion')!r}, not success")
+    return {
+        "head_branch": run.get("head_branch"),
+        "head_sha": run.get("head_sha"),
+        "event": run.get("event"),
+    }
+
+
+def pick_artifact(artifacts: list[dict], wanted: str | None) -> str:
+    """Chooses the Warpium .dmg artifact from a run's artifact listing."""
+    live = [a for a in artifacts if not a.get("expired") and isinstance(a.get("name"), str)]
+    if wanted is not None:
+        if any(a["name"] == wanted for a in live):
+            return wanted
+        raise WorkspaceError(f"artifact {wanted!r} not found; run has {[a['name'] for a in live]}")
+    cands = [a["name"] for a in live if a["name"].startswith("Warpium-")]
+    if len(cands) != 1:
+        raise WorkspaceError(
+            f"expected exactly one non-expired 'Warpium-*' artifact, found {cands}; "
+            "pass artifact_name"
+        )
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", cands[0]):
+        raise WorkspaceError(f"unexpected artifact name {cands[0]!r}")
+    return cands[0]
+
+
 def registered_integration_tests(clone: Path) -> set[str] | None:
     try:
         src = (clone / "crates" / "integration" / "src" / "bin" / "integration.rs").read_text()
@@ -92,7 +165,7 @@ class Workspace:
         self.cfg = cfg
         self.jobs = jobs
         self.jail = jail
-        self._base_env = base_env or (lambda: dict(os.environ))
+        self._base_env = base_env or scrubbed_env
 
     @property
     def clone(self) -> Path:
@@ -112,9 +185,10 @@ class Workspace:
         if not (clone / ".git").exists():
             if clone.exists() and any(clone.iterdir()):
                 raise WorkspaceError(f"{clone} exists, is not empty and is not a git clone")
-            steps.append(["git", "clone", "--no-checkout", REPO_URL, str(clone)])
+            steps.append(["git", *GIT_SAFE_OPTS, "clone", "--no-checkout", REPO_URL, str(clone)])
         else:
             check_origin(clone)
+            reset_git_config(clone)
             dirty = dirty_paths(clone)
             if dirty and not discard_local_changes:
                 raise WorkspaceError(
@@ -124,23 +198,14 @@ class Workspace:
             if dirty:
                 # Tracked changes and untracked (non-ignored) files only; the
                 # ignored target/ dir is kept so incremental builds stay fast.
-                steps.append(["git", "-C", str(clone), "reset", "--hard", "--quiet"])
-                steps.append(["git", "-C", str(clone), "clean", "-fd", "--quiet"])
+                steps.append(git_argv(clone, "reset", "--hard", "--quiet"))
+                steps.append(git_argv(clone, "clean", "-fd", "--quiet"))
         refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
-        steps.append(["git", "-C", str(clone), "fetch", "--prune", "origin", refspec])
+        steps.append(git_argv(clone, "fetch", "--prune", "origin", refspec))
         steps.append(
-            [
-                "git",
-                "-C",
-                str(clone),
-                "checkout",
-                "--force",
-                "-B",
-                branch,
-                f"refs/remotes/origin/{branch}",
-            ]
+            git_argv(clone, "checkout", "--force", "-B", branch, f"refs/remotes/origin/{branch}")
         )
-        steps.append(["git", "-C", str(clone), "log", "-1", "--format=%H %s"])
+        steps.append(git_argv(clone, "log", "-1", "--format=%H %s"))
         env = self._base_env()
         env["GIT_TERMINAL_PROMPT"] = "0"
         return self.jobs.start(
@@ -189,6 +254,9 @@ class Workspace:
 
     # --- install_artifact --------------------------------------------------
     def install_artifact(self, run_id: str | int, artifact_name: str | None = None) -> Job:
+        # A CI artifact is a binary built from fork code too, so --no-build
+        # blocks downloading one. The owner can still place an app in apps/.
+        self._require_build_allowed()
         run_id = validate_run_id(run_id)
         if artifact_name is not None and not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", artifact_name):
             raise ValidationError("artifact_name may only contain letters, digits, . _ -")
@@ -198,11 +266,43 @@ class Workspace:
         if dl_dir.exists():
             shutil.rmtree(dl_dir)
         dl_dir.mkdir(parents=True)
-        cmd = ["gh", "run", "download", run_id, "--repo", REPO_SLUG, "--dir", str(dl_dir)]
-        cmd += ["--name", artifact_name] if artifact_name else ["--pattern", "Warpium-*"]
         jail = self.jail
+        base_env = self._base_env
+        chosen: dict[str, str] = {}
 
-        def mount_and_copy(log: Callable[[str], None]) -> None:
+        def gh_api(path: str) -> dict:
+            r = subprocess.run(
+                ["gh", "api", f"repos/{REPO_SLUG}/actions/runs/{run_id}{path}"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=base_env(),
+            )
+            if r.returncode != 0:
+                raise WorkspaceError(f"gh api failed: {r.stderr.strip()}")
+            return json.loads(r.stdout)
+
+        def verify_run(log: Callable[[str], None]) -> dict:
+            info = check_run_info(gh_api(""))
+            # Artifact names embed the commit sha (the merge commit on
+            # pull_request runs), so list the run's artifacts instead of
+            # guessing the name.
+            listing = gh_api("/artifacts?per_page=100")
+            name = pick_artifact(listing.get("artifacts") or [], artifact_name)
+            chosen["name"] = name
+            log(f"run {run_id}: {info}; artifact {name}")
+            return {"run": info, "artifact": name}
+
+        def download(log: Callable[[str], None]) -> None:
+            argv = ["gh", "run", "download", run_id, "--repo", REPO_SLUG]
+            argv += ["--name", chosen["name"], "--dir", str(dl_dir)]
+            log("$ " + " ".join(argv))
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=3000, env=base_env())
+            log(r.stdout + r.stderr)
+            if r.returncode != 0:
+                raise WorkspaceError(f"gh run download failed ({r.returncode})")
+
+        def mount_and_copy(log: Callable[[str], None]) -> dict:
             dmgs = sorted(p for p in dl_dir.rglob("*.dmg") if not p.is_symlink())
             if len(dmgs) != 1:
                 raise WorkspaceError(f"expected exactly one .dmg in the artifact, found {dmgs}")
@@ -252,20 +352,17 @@ class Workspace:
                 timeout=120,
             )
             log(f"installed {dest}")
-            job_ref["job"].result["app"] = str(dest)
+            return {"app": str(dest)}
 
         mount_and_copy.__name__ = "mount_dmg_and_copy_app"
-        job_ref: dict = {}
-        job = self.jobs.start(
+        return self.jobs.start(
             "install_artifact",
             f"install artifact from run {run_id}",
-            [cmd, mount_and_copy],
+            [verify_run, download, mount_and_copy],
             cwd=self.cfg.workspace_dir,
             env=self._base_env(),
             timeout_s=3600,
         )
-        job_ref["job"] = job
-        return job
 
     def installed_app(self) -> Path | None:
         apps = sorted(p for p in self.cfg.apps_dir.glob("*.app") if not p.is_symlink())

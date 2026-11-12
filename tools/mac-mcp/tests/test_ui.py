@@ -158,10 +158,23 @@ def test_click_refused_under_overlay_layer(ui, fp):
         ui.click(10, 20)
 
 
-def test_transparent_window_ignored(ui, fp):
+def test_transparent_window_still_blocks(ui, fp):
+    # alpha-0 windows can still receive mouse events, so they count as covering.
     fp.wins.insert(0, WindowInfo(5, OTHER, "Ghost", "", 0, 0, 3000, 3000, 0, alpha=0.0))
-    ui.click(10, 20)
-    assert len(fp.events) == 2
+    with pytest.raises(FocusError):
+        ui.click(10, 20)
+    assert fp.events == []
+
+
+def test_overlay_appearing_mid_click_stops_events(ui, fp):
+    def banner(p):
+        if len(p.events) == 1:
+            p.wins.insert(0, WindowInfo(6, OTHER, "Banner", "", 100, 100, 400, 100, 0))
+
+    fp.after_event = banner
+    with pytest.raises(FocusError):
+        ui.click(10, 20, count=3)
+    assert len(fp.events) == 1  # mouse-up never reached the banner
 
 
 def test_click_outside_window_rejected(ui, fp):

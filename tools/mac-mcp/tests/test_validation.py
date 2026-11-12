@@ -85,9 +85,9 @@ def test_test_name_and_run_id():
 
 
 def test_env():
-    assert validate_env({"RUST_LOG": "warp=debug", "WARP_FOO": "1"}) == {
+    assert validate_env({"RUST_LOG": "warp=debug", "RUST_BACKTRACE": "1"}) == {
         "RUST_LOG": "warp=debug",
-        "WARP_FOO": "1",
+        "RUST_BACKTRACE": "1",
     }
     for bad in [
         {"DYLD_INSERT_LIBRARIES": "x"},
@@ -96,6 +96,13 @@ def test_env():
         {"LD_PRELOAD": "x"},
         {"warp_x": "1"},
         {"WARP_LOCAL_CONTROL_DISCOVERY_DIR": "/x"},
+        {"WARP_SHELL_PATH": "/tmp/evil"},
+        {"WARP_RECORDING_PROCESS_PATH": "/tmp/evil"},
+        {"WARP_TEST_CHECKOUT_ROOT": "/"},
+        {"WARP_MOCK_RECORDER": "1"},
+        {"WARP_DATA_PROFILE": ""},
+        {"WARP_API_KEY": "secret"},
+        {"WARP_FOO": "1"},
         {"RUST_LOG": "a\nb"},
         {"RUST_LOG": "x" * 2000},
     ]:
@@ -152,7 +159,33 @@ def test_key_combos():
     for bad in ["", "cmd+", "+t", "hyper+t", "cmd+unknownkey", "cmd++", "x" * 100]:
         with pytest.raises(ValidationError):
             parse_key_combo(bad)
-    for system in ["cmd+space", "cmd+tab", "ctrl+cmd+q", "cmd+alt+esc"]:
+    assert parse_key_combo("ctrl+c") == (frozenset({"ctrl"}), "c")
+    assert parse_key_combo("cmd+q") == (frozenset({"cmd"}), "q")  # quits Warpium only
+    assert parse_key_combo("alt+left") == (frozenset({"alt"}), "left")
+    assert parse_key_combo("f5") == (frozenset(), "f5")
+    for system in [
+        "cmd+space",
+        "alt+space",
+        "ctrl+space",
+        "cmd+alt+space",
+        "cmd+tab",
+        "cmd+shift+tab",
+        "ctrl+cmd+q",
+        "cmd+shift+q",
+        "cmd+alt+shift+q",
+        "cmd+alt+esc",
+        "cmd+alt+shift+escape",
+        "cmd+shift+3",
+        "cmd+shift+ctrl+4",
+        "ctrl+f2",
+        "ctrl+f3",
+        "ctrl+left",
+        "ctrl+up",
+        "fn+a",
+        "fn+n",
+        "cmd+alt+d",
+        "cmd+alt+`",
+    ]:
         with pytest.raises(ValidationError):
             parse_key_combo(system)
 
@@ -172,3 +205,20 @@ def test_wildcard_bind_refused():
         check_bind_host("example.com")
     check_bind_host("127.0.0.1")
     check_bind_host("192.168.65.1")
+
+
+def test_scrubbed_env_drops_secrets():
+    from warpium_mac_mcp.config import scrubbed_env
+
+    env = scrubbed_env(
+        {
+            "PATH": "/bin",
+            "HOME": "/h",
+            "LC_ALL": "C",
+            "AWS_SECRET_ACCESS_KEY": "s",
+            "GH_TOKEN": "t",
+            "ANTHROPIC_API_KEY": "k",
+            "DYLD_LIBRARY_PATH": "/x",
+        }
+    )
+    assert env == {"PATH": "/bin", "HOME": "/h", "LC_ALL": "C"}

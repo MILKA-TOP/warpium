@@ -87,29 +87,24 @@ def validate_run_id(run_id: str | int) -> str:
     return s
 
 
-_ENV_NAME_RE = re.compile(
-    r"^(RUST_LOG|RUST_BACKTRACE|RUST_LIB_BACKTRACE|(WARP|WARPUI)_[A-Z0-9_]{1,64})$"
-)
-# Variables that would let the client redirect where the app reads/writes
-# outside our control, or that are reserved for the server.
-_ENV_DENY = frozenset(
-    {
-        "WARP_LOCAL_CONTROL_DISCOVERY_DIR",
-    }
-)
+# Explicit allowlist. A WARP_* prefix rule is not safe: the app reads
+# variables that name an executable to spawn (WARP_SHELL_PATH,
+# WARP_RECORDING_PROCESS_PATH), redirect data (WARP_DATA_PROFILE), carry
+# secrets (WARP_API_KEY, ...) or enable test hooks (WARP_TEST_*, WARP_MOCK_*).
+# Logging/backtrace controls are what bug repros actually need.
+ALLOWED_ENV = frozenset({"RUST_LOG", "RUST_BACKTRACE", "RUST_LIB_BACKTRACE"})
 
 
 def validate_env(env: Mapping[str, str] | None) -> dict[str, str]:
     if not env:
         return {}
-    if len(env) > 32:
+    if len(env) > len(ALLOWED_ENV):
         raise ValidationError("too many environment variables")
     out: dict[str, str] = {}
     for k, v in env.items():
-        if not isinstance(k, str) or not _ENV_NAME_RE.match(k) or k in _ENV_DENY:
+        if not isinstance(k, str) or k not in ALLOWED_ENV:
             raise ValidationError(
-                f"environment variable {k!r} is not allowed "
-                "(allowed: RUST_LOG, RUST_BACKTRACE, RUST_LIB_BACKTRACE, WARP_*, WARPUI_*)"
+                f"environment variable {k!r} is not allowed (allowed: {sorted(ALLOWED_ENV)})"
             )
         if not isinstance(v, str) or len(v) > 1024 or "\x00" in v or "\n" in v:
             raise ValidationError(f"invalid value for {k}")
@@ -275,16 +270,38 @@ MODIFIERS = {
     "option": "alt",
     "opt": "alt",
     "shift": "shift",
-    "fn": "fn",
 }
 
-# Combos refused regardless of target: they act on the system, not on the app.
-_DENIED_COMBOS = {
-    frozenset({"cmd"}) | {"space"},  # Spotlight
-    frozenset({"cmd"}) | {"tab"},  # app switcher - would move focus away mid-sequence
-    frozenset({"cmd", "ctrl"}) | {"q"},  # lock screen
-    frozenset({"cmd", "alt"}) | {"escape"},  # force quit dialog
-}
+_ARROWS = frozenset({"left", "right", "up", "down"})
+_FKEYS = frozenset(f"f{i}" for i in range(1, 13))
+
+
+def system_shortcut_reason(mods: frozenset[str], key: str) -> str | None:
+    """Rule-based refusal of shortcuts that act on the system rather than the
+    app (open launchers, switch apps/spaces, log out, take screenshots, move
+    keyboard focus to the Dock/menu bar). Rules match on a subset of
+    modifiers, so adding extra modifiers doesn't slip past them. The fn/globe
+    modifier is not accepted at all (fn+a/fn+n/... focus the Dock and
+    Notification Center)."""
+    if key == "space" and mods & {"cmd", "alt", "ctrl"}:
+        return "Spotlight / launchers / input-source switching"
+    if key == "tab" and "cmd" in mods:
+        return "application switcher"
+    if key == "`" and "cmd" in mods and mods & {"alt", "ctrl"}:
+        return "window cycling across apps"
+    if key == "q" and "cmd" in mods and mods & {"shift", "ctrl", "alt"}:
+        return "log out / lock screen"
+    if key == "escape" and {"cmd", "alt"} <= mods:
+        return "force-quit dialog"
+    if key in {"3", "4", "5", "6"} and {"cmd", "shift"} <= mods:
+        return "system screenshot (full screen)"
+    if key in _FKEYS and mods & {"ctrl", "cmd", "alt"}:
+        return "keyboard navigation / system function keys"
+    if key in _ARROWS and "ctrl" in mods:
+        return "Mission Control / switching Spaces"
+    if key == "d" and {"cmd", "alt"} <= mods:
+        return "Dock hiding"
+    return None
 
 
 def parse_key_combo(combo: str) -> tuple[frozenset[str], str]:
@@ -304,11 +321,10 @@ def parse_key_combo(combo: str) -> tuple[frozenset[str], str]:
         mod_set.add(MODIFIERS[m])
     if key not in KEY_CODES:
         raise ValidationError(f"unknown key {key!r}")
-    canon = "return" if key == "enter" else key
-    canon = {"esc": "escape", "backspace": "delete"}.get(canon, canon)
-    combo_set = frozenset(mod_set) | {canon}
-    if combo_set in _DENIED_COMBOS:
-        raise ValidationError(f"key combo {combo!r} is not allowed (system-level shortcut)")
+    canon = {"enter": "return", "esc": "escape", "backspace": "delete"}.get(key, key)
+    reason = system_shortcut_reason(frozenset(mod_set), canon)
+    if reason:
+        raise ValidationError(f"key combo {combo!r} is not allowed (system shortcut: {reason})")
     return frozenset(mod_set), key
 
 

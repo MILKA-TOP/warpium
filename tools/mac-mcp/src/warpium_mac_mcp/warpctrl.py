@@ -420,6 +420,18 @@ class LocalControlClient:
             "credential broker returned an unexpected response", "transport_unavailable"
         )
 
+    def verify_identity(self, inst: Instance) -> None:
+        data = self.send(inst, "instance.inspect", {}, {})
+        if (
+            not isinstance(data, dict)
+            or data.get("instance_id") != inst.instance_id
+            or data.get("pid") != inst.pid
+        ):
+            raise WarpctrlError(
+                "local-control endpoint answered with a different instance identity",
+                "transport_unavailable",
+            )
+
     def send(self, inst: Instance, action: str, params: dict, target: dict) -> Any:
         token = self.request_credential(inst, action)
         body = json.dumps(

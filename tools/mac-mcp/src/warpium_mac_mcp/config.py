@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import secrets
 import stat
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +27,41 @@ DEFAULT_LOGFILE_NAMES = ("warp-oss.log",)
 # which isolates UserDefaults, Application Support, keychain entries and the
 # ~/.warp-oss-<profile> config dir from the owner's normal Warpium data.
 DEFAULT_DATA_PROFILE = "mcp-test"
+
+
+# Environment passed to builds, tests and the launched app. Everything else in
+# the server's environment (API keys, cloud credentials, tokens) is dropped, so
+# code compiled from the fork (build.rs, the app itself) doesn't inherit it.
+_ENV_PASSTHROUGH = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "TERM",
+        "LANG",
+        "CARGO_HOME",
+        "RUSTUP_HOME",
+        "DEVELOPER_DIR",
+        "SDKROOT",
+        "MACOSX_DEPLOYMENT_TARGET",
+        "PROTOC",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "__CF_USER_TEXT_ENCODING",
+    }
+)
+
+
+def scrubbed_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    env = os.environ if environ is None else environ
+    return {k: v for k, v in env.items() if k in _ENV_PASSTHROUGH or k.startswith("LC_")}
 
 
 def default_config_dir() -> Path:

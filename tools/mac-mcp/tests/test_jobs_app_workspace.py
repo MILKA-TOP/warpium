@@ -12,7 +12,16 @@ from warpium_mac_mcp.config import REPO_URL, Config
 from warpium_mac_mcp.jobs import JobError, JobManager, tail_file
 from warpium_mac_mcp.pathjail import PathJail
 from warpium_mac_mcp.validation import ValidationError
-from warpium_mac_mcp.workspace import Workspace, WorkspaceError, normalize_remote
+from warpium_mac_mcp.workspace import (
+    CANONICAL_GIT_CONFIG,
+    GIT_SAFE_OPTS,
+    Workspace,
+    WorkspaceError,
+    check_run_info,
+    normalize_remote,
+    pick_artifact,
+    reset_git_config,
+)
 
 
 def wait(job, timeout=10):
@@ -289,3 +298,104 @@ def test_launch_and_quit_fake_binary(ws):
     assert info["pid"] in out["quit"]
     assert am.target_pids() == set()
     assert "WARP_DATA_PROFILE=mcp-test" in Path(info["stdout_log"]).read_text()
+
+
+def test_reset_git_config_drops_planted_settings(ws):
+    w, cfg = ws
+    clone = cfg.clone_dir
+    clone.mkdir()
+    _git("init", "-q", cwd=clone)
+    _git("remote", "add", "origin", REPO_URL, cwd=clone)
+    _git("config", "core.fsmonitor", "/tmp/payload", cwd=clone)
+    _git("config", "filter.x.smudge", "/tmp/payload", cwd=clone)
+    reset_git_config(clone)
+    text = (clone / ".git" / "config").read_text()
+    assert text == CANONICAL_GIT_CONFIG
+    assert "payload" not in text
+
+
+def test_repo_sync_steps_use_safe_git_options(ws):
+    w, cfg = ws
+    clone = cfg.clone_dir
+    clone.mkdir()
+    _git("init", "-q", cwd=clone)
+    _git("remote", "add", "origin", REPO_URL, cwd=clone)
+    captured = {}
+
+    def fake_start(kind, desc, steps, **kw):
+        captured["steps"] = steps
+        return None
+
+    w.jobs.start = fake_start
+    w.repo_sync("master")
+    for step in captured["steps"]:
+        assert list(step[1:5]) == list(GIT_SAFE_OPTS)
+
+
+def _run(**over):
+    run = {
+        "repository": {"full_name": "MILKA-TOP/warpium"},
+        "head_repository": {"full_name": "MILKA-TOP/warpium"},
+        "path": ".github/workflows/warpium-build.yml",
+        "conclusion": "success",
+        "head_branch": "master",
+        "head_sha": "abc",
+        "event": "push",
+    }
+    run.update(over)
+    return run
+
+
+def test_check_run_info():
+    assert check_run_info(_run())["head_branch"] == "master"
+    for bad in [
+        _run(head_repository={"full_name": "attacker/warpium"}),
+        _run(path=".github/workflows/ci.yml"),
+        _run(conclusion="failure"),
+        _run(repository={"full_name": "warpdotdev/warp"}),
+    ]:
+        with pytest.raises(WorkspaceError):
+            check_run_info(bad)
+
+
+def test_install_artifact_disabled_with_no_build(tmp_path):
+    cfg = Config(workspace_dir=tmp_path / "ws", config_dir=tmp_path / "c", allow_build=False)
+    cfg.ensure_dirs()
+    w = Workspace(cfg, JobManager(cfg.jobs_dir), PathJail([cfg.workspace_dir]))
+    with pytest.raises(WorkspaceError, match="disabled"):
+        w.install_artifact("123")
+
+
+def test_app_logs_refused_while_other_warpium_runs(ws):
+    w, cfg = ws
+    cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.logs_dir / "warp-oss.log").write_text("2026-01-01T00:00:00Z [INFO] daily app line\n")
+    built = cfg.clone_dir / "target" / "debug" / "warp-oss"
+    built.parent.mkdir(parents=True)
+    built.write_text("")
+    procs = [(10, str(built)), (12, "/Applications/Warpium.app/Contents/MacOS/warp-oss")]
+    jail = PathJail([cfg.workspace_dir], files=cfg.log_files)
+    am = AppManager(cfg, w, jail, processes=lambda: procs)
+    with pytest.raises(PermissionError, match="another Warpium"):
+        am.logs(source="app")
+    procs.pop()
+    assert "daily app line" in am.logs(source="app")["lines"]
+    procs.clear()  # nothing under test running: the log may be someone else's
+    with pytest.raises(PermissionError):
+        am.logs(source="app")
+
+
+def test_pick_artifact():
+    arts = [
+        {"name": "Warpium-a70e8571-macos-arm64", "expired": False},
+        {"name": "Warpium-old-macos-arm64", "expired": True},
+        {"name": "logs", "expired": False},
+    ]
+    assert pick_artifact(arts, None) == "Warpium-a70e8571-macos-arm64"
+    assert pick_artifact(arts, "logs") == "logs"
+    with pytest.raises(WorkspaceError):
+        pick_artifact(arts, "Warpium-old-macos-arm64")  # expired
+    with pytest.raises(WorkspaceError):
+        pick_artifact(arts + [{"name": "Warpium-x", "expired": False}], None)
+    with pytest.raises(WorkspaceError):
+        pick_artifact([], None)

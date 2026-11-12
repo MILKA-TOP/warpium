@@ -180,6 +180,7 @@ class _FakeWarp:
         self.dir = directory
         self.issued = {}
         self.requests = []
+        self.reported_pid = 4242
         self.sock_path = directory / f"{IID}.broker.sock"
         self.broker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.broker.bind(str(self.sock_path))
@@ -207,10 +208,14 @@ class _FakeWarp:
                         "error": {"code": "unauthorized_local_client", "message": "denied"},
                     }
                 else:
+                    if body["action"]["kind"] == "instance.inspect":
+                        payload = {"instance_id": IID, "pid": fake.reported_pid}
+                    else:
+                        payload = {"echo": body["action"]}
                     resp = {
                         "protocol_version": 1,
                         "request_id": body["request_id"],
-                        "response": {"status": "ok", "data": {"echo": body["action"]}},
+                        "response": {"status": "ok", "data": payload},
                     }
                 data = json.dumps(resp).encode()
                 self.send_response(200)
@@ -276,3 +281,16 @@ def test_client_disabled_instance(tmp_path):
     inst = parse_record(_record(endpoint=None, credential_broker=None), tmp_path)
     with pytest.raises(WarpctrlError):
         LocalControlClient(tmp_path).send(inst, "app.ping", {}, {})
+
+
+def test_verify_identity(tmp_path):
+    fake = _FakeWarp(tmp_path)
+    try:
+        inst = parse_record(_record(endpoint={"host": "127.0.0.1", "port": fake.port}), tmp_path)
+        client = LocalControlClient(tmp_path)
+        client.verify_identity(inst)  # pid 4242 matches the record
+        fake.reported_pid = 9999  # endpoint actually belongs to another process
+        with pytest.raises(WarpctrlError, match="different instance"):
+            client.verify_identity(inst)
+    finally:
+        fake.close()

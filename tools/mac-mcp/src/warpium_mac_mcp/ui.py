@@ -153,8 +153,10 @@ class UiController:
 
     def _check_point(self, sx: float, sy: float) -> None:
         pids = self._target_pids()
+        # Transparent windows are not skipped: an alpha-0 window can still
+        # receive mouse events, so it counts as covering the point.
         for w in self._p.windows():  # front-to-back
-            if w.alpha <= 0 or not w.contains(sx, sy):
+            if not w.contains(sx, sy):
                 continue
             if w.pid in pids:
                 return
@@ -209,11 +211,12 @@ class UiController:
         with self._lock:
             win = self.resolve_window(window)
             sx, sy = self._to_screen(win, x, y, from_screenshot)
-            self._check_frontmost()
-            self._check_point(sx, sy)
             for i in range(1, count + 1):
                 for kind in ("down", "up"):
+                    # Both checks before every mouse event: an overlay that
+                    # appears mid-click must not receive the rest of it.
                     self._check_frontmost()
+                    self._check_point(sx, sy)
                     self._p.post_mouse(kind, sx, sy, button, i)
                     self._sleep(self._delay)
         return {
@@ -241,6 +244,7 @@ class UiController:
             self._check_point(sx, sy)
             self._p.post_mouse("move", sx, sy, "left", 0)
             self._check_frontmost()
+            self._check_point(sx, sy)
             self._p.post_scroll(sx, sy, dx, dy)
         return {"scrolled": {"screen_x": sx, "screen_y": sy, "dx": dx, "dy": dy}}
 

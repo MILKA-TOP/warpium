@@ -129,6 +129,10 @@ def run_warpctrl(s: Services, action: str, params: dict | None, target: dict | N
             ]
         }
     inst = _select_instance(s)
+    # Like the Rust client's probe_instance: the app that answers must report
+    # the instance id and pid we selected (a stale/forged discovery record
+    # can't redirect actions to another Warp instance).
+    s.lc.verify_identity(inst)
     return s.lc.send(inst, action, clean_params, clean_target)
 
 
@@ -213,9 +217,12 @@ def create_server(s: Services) -> FastMCP:
     @mcp.tool()
     @A()
     async def install_artifact(run_id: str, artifact_name: str | None = None) -> dict:
-        """Download the Warpium .dmg from a MILKA-TOP/warpium Actions run (`gh run download`),
-        mount it read-only and copy the .app into ~/warpium-mac-test/apps/. Never touches
-        /Applications. Background job. artifact_name defaults to the 'Warpium-*' pattern."""
+        """Download the Warpium .dmg from a successful run of the fork's warpium-build.yml
+        (the run must be built from MILKA-TOP/warpium itself), mount it read-only and copy the
+        .app into ~/warpium-mac-test/apps/. Never touches /Applications. Background job.
+        Without artifact_name, the run's artifacts are listed and the single non-expired
+        'Warpium-*' one is used (e.g. run 43262238821 -> Warpium-a70e8571-macos-arm64).
+        Disabled with --no-build."""
         job = await _thread(s.workspace.install_artifact, run_id, artifact_name)
         return job.summary()
 
@@ -235,14 +242,13 @@ def create_server(s: Services) -> FastMCP:
         env: dict[str, str] | None = None,
         args: list[str] | None = None,
         profile: Literal["debug", "release"] = "debug",
-        isolate_data: bool = True,
     ) -> dict:
         """Launch Warpium: source="build" runs target/<profile>/warp-oss from the workspace clone,
-        "artifact" runs the app installed by install_artifact. env accepts RUST_LOG,
-        RUST_BACKTRACE, WARP_*, WARPUI_*. args accepts only --flag[=value]. For debug builds,
-        isolate_data sets WARP_DATA_PROFILE=mcp-test so the test app has its own settings,
-        keychain items and data, separate from the owner's daily Warpium."""
-        return await _thread(s.app.launch, source, env, args, profile, isolate_data)
+        "artifact" runs the app installed by install_artifact. env accepts only RUST_LOG,
+        RUST_BACKTRACE, RUST_LIB_BACKTRACE. args accepts only --flag[=value]. The server always
+        sets WARP_DATA_PROFILE=mcp-test; debug builds honor it (own settings, keychain items and
+        data). Release builds and artifacts ignore it and share oss-channel data."""
+        return await _thread(s.app.launch, source, env, args, profile)
 
     @mcp.tool()
     @A()

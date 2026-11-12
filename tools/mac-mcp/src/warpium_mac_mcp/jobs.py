@@ -18,7 +18,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-Step = Sequence[str] | Callable[[Callable[[str], None]], None]
+# A Python step may return a dict, which is merged into the job's ``result``.
+Step = Sequence[str] | Callable[[Callable[[str], None]], dict | None]
 
 
 class JobError(RuntimeError):
@@ -141,7 +142,9 @@ class JobManager:
                     if callable(step):
                         job.current_step = getattr(step, "__name__", "python-step")
                         log(f"$ [{job.current_step}]")
-                        step(log)
+                        out = step(log)
+                        if isinstance(out, dict):
+                            job.result.update(out)
                     else:
                         argv = list(step)
                         job.current_step = " ".join(argv)
