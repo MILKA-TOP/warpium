@@ -13,10 +13,6 @@ vm_exists "$VM_NAME" || die "VM $VM_NAME does not exist; run vm/setup.sh"
 if vm_running "$VM_NAME"; then
   stop_forward
   stop_vm
-  for _ in $(seq 1 30); do
-    vm_running "$VM_NAME" || break
-    sleep 1
-  done
 fi
 
 pw="(see $ADMIN_PASSWORD_FILE)"
@@ -38,5 +34,7 @@ If Accessibility still says "not granted": in the VM run
 and add Terminal again.
 EOF
 read -r -p "Press Return to open the VM window... " _
-tart run "$VM_NAME"
+resolve_net_args
+[ "$(vm_net_mode)" != "softnet" ] || require_softnet_ready
+tart run ${NET_ARGS[@]+"${NET_ARGS[@]}"} "$VM_NAME"
 ok "VM window closed. Next: vm/start.sh, then vm/snapshot.sh to save a clean golden copy."

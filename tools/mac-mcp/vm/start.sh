@@ -10,11 +10,15 @@ require_tart
 require_key
 vm_exists "$VM_NAME" || die "VM $VM_NAME does not exist; run vm/setup.sh (or vm/reset.sh)"
 mkdir -p "$STATE_DIR"
+vm_net_mode >/dev/null # validates WARPIUM_VM_NET early
 
 start_vm_headless
+save_net_mode # only once the running VM matches the requested mode
 step "Waiting for IP and SSH"
 IP="$(vm_ip 180)" || die "no IP after 180 s; see $VM_LOG"
-wait_for_key_ssh "$IP" 60 || die "SSH to $GUEST_USER@$IP fails; see $VM_LOG, or run vm/setup.sh"
+check_vm_route "$IP"
+wait_for_key_ssh "$IP" 60 || die "SSH to $GUEST_USER@$IP fails (or run vm/setup.sh if the key was never installed).
+$(ssh_unreachable_hint)"
 ok "$VM_NAME is at $IP"
 
 step "Checking the server inside the VM"

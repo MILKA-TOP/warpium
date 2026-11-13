@@ -125,6 +125,75 @@ place. After `git pull`, run `vm/provision.sh` (with the VM started) and, if you
 - **"host port 17654 is taken":** stop the host-mode server (Ctrl+C) or a stale forward
   (`vm/stop.sh --forward-only`).
 - **Start over completely:** `vm/stop.sh; tart delete warpium-test; vm/setup.sh`.
+- **VM not reachable / VPN route conflict:** `setup.sh` and `start.sh` check, right after
+  `tart ip`, that `route -n get <vm-ip>` goes through a vmnet `bridge*` interface (or the
+  bridged interface in bridged mode). If it doesn't, they stop with the route that wins and
+  the conflicting `netstat -rn -f inet` lines. The usual cause is a corporate VPN or a LAN
+  that also uses `192.168.64.0/24`: an unscoped route like `192.168.64  192.168.0.1  UGSc  en0`
+  beats the host's interface-scoped entry on `bridge100`, so pings and SSH to the guest time
+  out. There are two fixes:
+  1. **Bridged networking (recommended):**
+     `vm/stop.sh && WARPIUM_VM_NET=bridged vm/setup.sh`. The VM gets an address from your
+     LAN router, outside the VPN route. See [Network modes](#network-modes) for what that
+     exposes.
+  2. **Move the vmnet subnet:** `vm/fix-subnet.sh [192.168.251.1]` stops `warpium-test`.
+     It refuses to run while other Tart VMs are running unless you pass `--force`. It then
+     checks that the new /24 has no route and, after you confirm (`--yes` skips the
+     question), runs
+     `sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.vmnet Shared_Net_Address -string 192.168.251.1`
+     (and `Shared_Net_Mask 255.255.255.0`). Finally it restarts the VM and checks that the
+     VM got an address in the new subnet. The `defaults` domain must not end in `.plist`:
+     `defaults` adds the extension, so `.../com.apple.vmnet.plist` would write
+     `com.apple.vmnet.plist.plist`, which vmnet ignores. The script removes such a stray
+     file. To check the real file, run
+     `plutil -p /Library/Preferences/SystemConfiguration/com.apple.vmnet.plist`. On
+     macOS 26 the VM has been seen keeping a `192.168.64.x` address even with a correct
+     plist. That is either a stale `/var/db/dhcpd_leases` entry, which the script detects
+     when `bridge100` moved but `tart ip` did not, or macOS not honouring the setting. In
+     the second case, use bridged mode.
+  The default suggested subnet comes from `WARPIUM_VM_SUGGEST_SUBNET`.
+  `WARPIUM_VM_SKIP_ROUTE_CHECK=1` disables the check. If the route is fine but sshd still
+  doesn't answer, the guest is still booting or stuck. Check
+  `~/.config/warpium-mac-mcp/vm/warpium-test.log`, then `vm/stop.sh && tart run warpium-test`
+  to see its screen. The vanilla image has no Tart guest agent, so `tart exec` doesn't
+  work.
+
+### Network modes
+
+`WARPIUM_VM_NET` selects how the VM is networked. The value you pass to `setup.sh` or
+`start.sh` is saved in `~/.config/warpium-mac-mcp/vm/net_mode` (and `WARPIUM_VM_BRIDGE_IF`
+in `.../vm/bridge_if`) once the VM runs with it. Later runs of `start.sh`, `provision.sh`
+and the other scripts reuse the saved values. A running VM keeps its mode until
+`vm/stop.sh`.
+
+| Mode | `tart run` flag | Address | Notes |
+|---|---|---|---|
+| `nat` (default) | none | `192.168.64.x` from vmnet's DHCP | Only the host can reach the guest. Breaks when a VPN/LAN route covers the vmnet subnet. |
+| `bridged` | `--net-bridged=<if>` | from your LAN router | `tart ip --resolver=arp` (ARP table) finds the address. The interface comes from `route -n get default`; when a VPN `utun` owns the default route, the script uses the first `en*` interface that has a default route instead. Override it with `WARPIUM_VM_BRIDGE_IF` (`tart run --net-bridged=list`). |
+| `softnet` | `--net-softnet` | `192.168.64.x`, as `nat` | Tart's Softnet adds isolation on top of the same vmnet NAT, so it does **not** avoid a 192.168.64.0/24 route conflict. Tart's headless start can't ask for sudo, so the `softnet` binary must be setuid root; the scripts print the `chown`/`chmod` commands. |
+
+**Security of bridged mode.** The guest is a separate machine on your LAN, reachable by
+anyone on that network:
+
+- **SSH:** `setup.sh` installs the dedicated key, replaces the image's `admin/admin`
+  password with a random one (stored in `~/.config/warpium-mac-mcp/vm_admin_password`,
+  mode 600) and turns off SSH password and keyboard-interactive logins. It then checks
+  `sshd -T`.
+- **Screen Sharing:** the image has Screen Sharing (VNC) on. It accepts the same admin
+  password, which is the random one after setup.
+- **MCP server:** it binds the guest's `127.0.0.1` only (`serve --host 127.0.0.1`; the
+  server refuses wildcard binds). It is reached only through the host's SSH forward, which
+  listens on the host's `127.0.0.1`. It also requires the bearer token.
+- **Exposure window:** on a fresh image, the guest is on the LAN with `admin/admin` for SSH
+  and Screen Sharing from boot until `setup.sh` finishes its hardening step, usually a minute
+  or two. `setup.sh` warns and asks before it boots a VM bridged that it hasn't hardened
+  yet. `WARPIUM_VM_BRIDGED_FRESH_OK=1` skips the question. Run the first setup on a network
+  you trust, or in `nat` mode where it works.
+- **Finding the address:** Tart reads the VM's address from the host's ARP table. Tart's
+  docs say this normally works for macOS guests. If `setup.sh` stops with "no IP", check
+  the router's DHCP client list or `arp -a`.
+- Use bridged mode only on networks where that exposure is acceptable. Some networks
+  (802.1X, Wi-Fi with client isolation, MAC limits) don't give the VM an address at all.
 
 ## Host mode (fallback): quickstart
 

@@ -14,6 +14,7 @@ source "$(dirname "$0")/common.sh"
 require_macos_arm64
 mkdir -p "$CONF_DIR" "$STATE_DIR"
 chmod 700 "$CONF_DIR"
+vm_net_mode >/dev/null # validates WARPIUM_VM_NET early
 # Picks the guest image and rejects hosts older than macOS 15 before
 # anything is installed.
 IMAGE="${WARPIUM_VM_IMAGE:-$(default_image)}"
@@ -84,6 +85,7 @@ else
   echo "    with vm/snapshot.sh / vm/reset.sh share blocks (APFS copy-on-write)."
   df -h "$HOME" | tail -1 | awk '{print "    free on your home volume: " $4}'
   tart clone "$IMAGE" "$VM_NAME"
+  rm -f "$HARDENED_MARKER"
   # A new image has a new SSH host key; forget the old one for this VM name.
   [ -f "$KNOWN_HOSTS" ] && ssh-keygen -R "$VM_NAME" -f "$KNOWN_HOSTS" >/dev/null 2>&1 || true
   ok "cloned"
@@ -107,17 +109,35 @@ if [ ! -f "$SSH_KEY" ]; then
 fi
 chmod 600 "$SSH_KEY"
 
+# A fresh image accepts admin/admin over SSH and Screen Sharing until the
+# hardening step below. In bridged mode that is reachable from the whole LAN.
+if [ "$(vm_net_mode)" = "bridged" ] && [ ! -f "$HARDENED_MARKER" ] && ! vm_running "$VM_NAME" &&
+  [ "${WARPIUM_VM_BRIDGED_FRESH_OK:-0}" != "1" ]; then
+  warn "bridged mode on a VM that is not hardened yet: until this script replaces the"
+  warn "image's admin/admin password (a minute or two), anyone on your LAN can log in to"
+  warn "the guest with SSH or Screen Sharing. Do this on a network you trust."
+  [ -t 0 ] || die "not a terminal; re-run with WARPIUM_VM_BRIDGED_FRESH_OK=1 to accept this"
+  read -r -p "Boot the unhardened VM bridged to your LAN? [y/N] " answer
+  case "$answer" in
+    y | Y | yes | YES) ;;
+    *) die "aborted. Use NAT for the first setup if it works (WARPIUM_VM_NET=nat), or a trusted network" ;;
+  esac
+fi
 start_vm_headless
+save_net_mode # only once the running VM matches the requested mode
 step "Waiting for the VM's IP address"
 IP="$(vm_ip 180)" || die "no IP after 180 s; see $VM_LOG and 'tart list'"
 ok "$VM_NAME is at $IP"
+check_vm_route "$IP"
 
 step "Waiting for SSH on $IP:22"
 for _ in $(seq 1 60); do
   nc -z -G 2 "$IP" 22 >/dev/null 2>&1 && break
   sleep 2
 done
-nc -z -G 2 "$IP" 22 >/dev/null 2>&1 || die "sshd in the VM is not reachable after 120 s; see $VM_LOG, then re-run setup.sh"
+nc -z -G 2 "$IP" 22 >/dev/null 2>&1 ||
+  die "sshd in the VM is not reachable after 120 s; re-run setup.sh once the guest is up.
+$(ssh_unreachable_hint)"
 
 step "Checking key-based SSH"
 if wait_for_key_ssh "$IP" 20; then
@@ -146,6 +166,7 @@ step "Hardening guest logins"
 hardened="$(guest_ssh "$IP" 'if test -f ~/.warpium-hardened; then echo yes; else echo no; fi')" ||
   die "SSH to the guest failed while checking the hardening state; re-run setup.sh"
 if [ "$hardened" = "yes" ]; then
+  touch "$HARDENED_MARKER"
   ok "already done (password replaced, SSH password logins off)"
 else
   # Reuse a password saved by an earlier, interrupted run: the guest may
@@ -202,6 +223,7 @@ done
 touch ~/.warpium-hardened
 GUEST
   } | guest_ssh "$IP" 'bash -s' || die "guest hardening failed (password saved in $ADMIN_PASSWORD_FILE)"
+  touch "$HARDENED_MARKER"
   ok "admin password replaced (stored in $ADMIN_PASSWORD_FILE, mode 600); SSH is key-only"
 fi
 
