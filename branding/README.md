@@ -15,7 +15,7 @@ bottom-right corner, which gives it a leaf form that reads like translucent glas
 | --- | --- |
 | `mark.svg` | colour mark for light backgrounds: indigo `#2B2170` to violet `#5B3FE0` (upper), violet `#5B42FF` to `#A886FF` (lower), pink-violet overlap `#EE98FF` to `#9D62FF` |
 | `mark-on-dark.svg` | the same with a lighter upper shape (`#3A2C9C` to `#6447EC`) so it stays visible on dark backgrounds |
-| `mark-white.svg` | white mark with a 72% overlap, for coloured backgrounds |
+| `mark-white.svg` | white mark with a 72% opaque overlap, for coloured backgrounds |
 | `mark-black.svg` | black mark with a 45% overlap; tinted at runtime (the get-started pane) |
 | `logo-light.svg`, `logo-dark.svg` | mark plus the "Warpium" wordmark in `#1A1838` (light backgrounds) or white (dark) |
 
@@ -28,10 +28,10 @@ shadow) for the `.icns` and the README icon.
 1. `icon.svg`: **primary icon** (Dock, `.app`, `.dmg`, `.ico`, Linux). White mark on a
    violet gradient (`#8B5CFF` top left, `#5B3CF5`, blue `#3D6BF0` bottom right) with a soft
    cyan glow and a faint construction grid.
-2. `icon-small.svg`: the primary icon tuned for 16 to 32 px: a larger mark, a near-opaque
+2. `icon-small.svg`: the primary icon as rendered at 40 px and below: a larger mark, a near-opaque
    overlap, no grid or border.
 3. `icon-light.svg`: colour mark on white to light lavender.
-4. `icon-dark.svg`: colour mark on `#1E1B3A`.
+4. `icon-dark.svg`: colour mark on `#29254D` to `#1E1B3A`.
 5. `icon-glass.svg`: graphite mark on frosted light blue, as in the left icon of
    `app-icons.png`.
 
@@ -67,7 +67,8 @@ the font. Manrope is licensed under the SIL Open Font License 1.1; see
 `script/warpium/generate_svgs.py` is the single source of the geometry and colours. It
 writes every SVG here, the in-app SVGs (`app/assets/bundled/svg/warpium-*.svg`) and the
 `AppIcon.icon` layers. `script/warpium/render_icons.py` then renders the PNGs, `icon.ico`,
-`Warpium.icns`, the README banner, icon and product preview, and the `.dmg` background.
+`Warpium.icns`, the README banner and icon, and the `.dmg` background. It re-renders the
+README product preview only when given upstream's screenshot (`--preview-screenshot`).
 
 ```bash
 curl -L -o /tmp/Manrope.ttf \

@@ -32,7 +32,7 @@ NO_PADDING_DIR = OSS_ICON_DIR / "no-padding"
 DOCS_IMAGES = REPO_ROOT / "docs" / "images"
 MAC_RESOURCES = REPO_ROOT / "app" / "assets" / "resources" / "mac"
 
-# Below this rendered size the heavier-stroked variant stays legible.
+# At or below this size, render icon-small.svg (bigger mark, no grid or border) instead.
 SMALL_ICON_MAX_PX = 40
 
 NO_PADDING_SIZES = [16, 32, 48, 64, 128, 256, 512, 1024]
@@ -109,11 +109,14 @@ def write(image: Image.Image, path: Path) -> None:
 
 # The app window in upstream's 1448x828 README screenshot: left, top, right (exclusive) and
 # corner radius. It runs off the bottom of the image.
+PREVIEW_SIZE = (1448, 828)
 PREVIEW_WINDOW = (152, 213, 1293, 10)
 
 
 def render_preview(screenshot: Path) -> Image.Image:
     shot = Image.open(screenshot).convert("RGBA")
+    if shot.size != PREVIEW_SIZE:
+        raise SystemExit(f"expected a {PREVIEW_SIZE} screenshot (upstream's README image), got {shot.size}")
     canvas = render_svg(BRANDING / "preview-background.svg", shot.width, shot.height)
     left, top, right, radius = PREVIEW_WINDOW
     window = Image.new("L", shot.size, 0)

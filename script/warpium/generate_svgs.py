@@ -38,8 +38,9 @@ APP_SVG = REPO_ROOT / "app" / "assets" / "bundled" / "svg"
 APP_ICON_ASSETS = REPO_ROOT / "app" / "channels" / "oss" / "icon" / "AppIcon.icon" / "Assets"
 
 # --- Brand palette (the "Цвета" swatches of the brand board). ---------------------------
-INK = "#1A1838"  # wordmark on light backgrounds
-PALETTE = ["#23204A", "#6B45FF", "#A18CFF", "#DDD8FB", "#F5F3FD"]
+# The palette itself (#23204A, #6B45FF, #A18CFF, #DDD8FB, #F5F3FD) is documented in
+# branding/README.md; the gradients below are built around it.
+WORDMARK_ON_LIGHT = "#1A1838"
 
 # --- Mark geometry, in mark units (y grows downwards). -----------------------------------
 SHAPE_H = 240.0  # height of one parallelogram
@@ -131,6 +132,19 @@ def _overlap_points() -> tuple[Point, Point]:
     the overlap), and where its bottom edge meets the lower shape's left edge."""
     top_right = (SHAPE_W + SHEAR * (SHAPE_H - OFFSET_Y) / SHAPE_H, OFFSET_Y)
     bottom_left = (OFFSET_X + SHEAR * OFFSET_Y / SHAPE_H, SHAPE_H)
+    # overlap_path() joins these points with straight lines, so they must fall on the straight
+    # parts of the edges, clear of every rounded corner.
+    side = SHAPE_H / math.cos(math.radians(31))
+    along_side = (SHAPE_H - OFFSET_Y) / math.cos(math.radians(31))  # from each obtuse corner
+    lower_top_left = OFFSET_X + SHEAR
+    upper_bottom_right = SHAPE_W
+    if not (
+        0 < OFFSET_Y < SHAPE_H
+        and OBTUSE_CUT <= along_side <= side - ACUTE_CUT
+        and lower_top_left + OBTUSE_CUT <= top_right[0] <= lower_top_left + SHAPE_W - ACUTE_CUT
+        and ACUTE_CUT <= bottom_left[0] <= upper_bottom_right - OBTUSE_CUT
+    ):
+        raise ValueError("mark geometry: the overlap corners fall inside a rounded corner")
     return top_right, bottom_left
 
 
@@ -172,11 +186,16 @@ class MarkStyle:
     lower: Gradient | str
     overlap: Gradient | str
     # Monochrome styles punch the overlap out of the two shapes and fill it with the same
-    # colour at this opacity, so a tinted icon keeps the "glass" overlap.
+    # colour at this opacity, so a tinted icon keeps the "glass" overlap. (An SVG mask would
+    # avoid the faint anti-aliasing seam along the overlap's edge, but cairosvg treats masks
+    # as alpha rather than luminance, so the committed PNGs would not match resvg in the app.)
     overlap_opacity: float | None = None
 
 
 _TOP_RIGHT, _BOTTOM_LEFT = _overlap_points()
+
+# Large faint shapes behind the README preview and the .dmg window.
+FAINT = MarkStyle("#7C5CFF", "#8D6BFF", "#E59BFF")
 
 COLOR = MarkStyle(
     upper=Gradient([(0, "#2B2170"), (0.55, "#35278F"), (1, "#5B3FE0")], (SHEAR, 0), (SHAPE_W, SHAPE_H)),
@@ -254,15 +273,16 @@ class TextOutliner:
         self.blob = hb.Blob.from_file_path(str(font_path))
         self.face = hb.Face(self.blob)
         self.upem = self.face.upem
-        self.font_path = font_path
         self.variable = TTFont(font_path)
-        self.instances: dict[int, TTFont] = {}
+        self.instances: dict[int, tuple[TTFont, hb.Font]] = {}
 
-    def _instance(self, weight: int) -> TTFont:
+    def _instance(self, weight: int) -> tuple[TTFont, hb.Font]:
         if weight not in self.instances:
-            self.instances[weight] = instancer.instantiateVariableFont(
-                TTFont(self.font_path), {"wght": weight}
-            )
+            # instantiateVariableFont copies the font unless inplace=True.
+            static = instancer.instantiateVariableFont(self.variable, {"wght": weight})
+            shaper = hb.Font(self.face)
+            shaper.set_variations({"wght": weight})
+            self.instances[weight] = (static, shaper)
         return self.instances[weight]
 
     def outline(self, text: str, size: float, weight: int, tracking: float = 0.0) -> tuple[str, float]:
@@ -270,13 +290,11 @@ class TextOutliner:
 
         `tracking` is extra letter spacing in em.
         """
-        font = hb.Font(self.face)
-        font.set_variations({"wght": weight})
+        instance, font = self._instance(weight)
         buf = hb.Buffer()
         buf.add_str(text)
         buf.guess_segment_properties()
         hb.shape(font, buf, {"kern": True, "liga": True})
-        instance = self._instance(weight)
         glyph_set = instance.getGlyphSet()
         order = instance.getGlyphOrder()
         scale = size / self.upem
@@ -350,14 +368,14 @@ def icon_svg(variant: str, small: bool = False) -> str:
             )
             layers.append(f'<rect width="{size}" height="{size}" fill="url(#glow)"/>')
             layers.append(construction_grid(size))
-        # At 16-32 px a fainter overlap blurs into the background; keep it nearly white.
+        # At small sizes a fainter overlap blurs into the background; keep it nearly white.
         style, prefix = (WHITE_SMALL if small else WHITE), "mark"
     elif variant == "light":
         defs.append(Gradient([(0, "#FFFFFF"), (1, "#EEEAFD")], (0, 0), (0, 1024)).defs("bg"))
         layers.append(f'<rect width="{size}" height="{size}" fill="url(#bg)"/>')
         style, prefix = COLOR, "mark"
     elif variant == "dark":
-        defs.append(Gradient([(0, "#29254D"), (1, "#1A1733")], (0, 0), (0, 1024)).defs("bg"))
+        defs.append(Gradient([(0, "#29254D"), (1, "#1E1B3A")], (0, 0), (0, 1024)).defs("bg"))
         layers.append(f'<rect width="{size}" height="{size}" fill="url(#bg)"/>')
         style, prefix = COLOR_ON_DARK, "mark"
     elif variant == "glass":
@@ -382,7 +400,7 @@ def icon_svg(variant: str, small: bool = False) -> str:
             f'<path d="{squircle_path(size, inset=4)}" stroke="{border}" stroke-opacity="{border_opacity}" stroke-width="8"/>'
         )
     body = f'<g clip-path="url(#squircle)">{"".join(layers)}</g>'
-    note = "tuned for 16-32 px: bigger mark, no grid or border" if small else "full bleed"
+    note = "for 40 px and below: bigger mark, no grid or border" if small else "full bleed"
     return svg_doc(size, size, body, f"Warpium app icon, {variant} variant ({note}). Generated by script/warpium/generate_svgs.py.", "".join(defs))
 
 
@@ -419,9 +437,9 @@ def logo_svg(text: TextOutliner, on_dark: bool) -> str:
     baseline = height / 2 + cap / 2
     style = COLOR_ON_DARK if on_dark else COLOR
     mark_defs, mark_body = mark(style, "logo", mark_transform(pad + mark_w / 2, height / 2, mark_w))
-    fill = "#FFFFFF" if on_dark else INK
+    fill = "#FFFFFF" if on_dark else WORDMARK_ON_LIGHT
     body = mark_body + f'<path transform="translate({_fmt(pad + mark_w + gap)} {_fmt(baseline)})" fill="{fill}" d="{word}"/>'
-    variant = "white title for dark backgrounds" if on_dark else f"{INK} title for light backgrounds"
+    variant = "white title for dark backgrounds" if on_dark else f"{WORDMARK_ON_LIGHT} title for light backgrounds"
     return svg_doc(round(width), height, body, f"Warpium logo with wordmark, {variant}. Generated by script/warpium/generate_svgs.py.", mark_defs)
 
 
@@ -476,9 +494,8 @@ def preview_header_svg(text: TextOutliner) -> str:
         '<stop offset="0" stop-color="#5A41E6" stop-opacity="0.55"/>'
         '<stop offset="1" stop-color="#5A41E6" stop-opacity="0"/></radialGradient>',
     ]
-    faint = MarkStyle("#7C5CFF", "#8D6BFF", "#E59BFF")
-    left_defs, left = mark(faint, "bl", "translate(-260 330) scale(1.4)")
-    right_defs, right = mark(faint, "br", "translate(1060 -120) scale(1.3)")
+    left_defs, left = mark(FAINT, "bl", "translate(-260 330) scale(1.4)")
+    right_defs, right = mark(FAINT, "br", "translate(1060 -120) scale(1.3)")
     defs += [left_defs, right_defs]
     mark_h = 92
     mark_w = MARK_W * mark_h / MARK_H
@@ -510,8 +527,7 @@ def dmg_background_svg(text: TextOutliner) -> str:
         Gradient([(0, "#26214F"), (1, "#18152F")], (0, 0), (width, height)).defs("bg"),
         Gradient([(0, "#A18CFF"), (1, "#6B45FF")], (262, 0), (438, 0)).defs("arrow"),
     ]
-    faint = MarkStyle("#7C5CFF", "#8D6BFF", "#E59BFF")
-    shapes_defs, shapes = mark(faint, "bg", "translate(380 300) scale(0.9)")
+    shapes_defs, shapes = mark(FAINT, "bg", "translate(380 300) scale(0.9)")
     defs.append(shapes_defs)
     caption, cap_w = text.outline("Drag Warpium to Applications", 13, 600)
     footer, foot_w = text.outline("Warpium", 30, 650, tracking=-0.012)
