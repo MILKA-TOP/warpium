@@ -7,8 +7,8 @@
 #   --ref REF         commit, branch or tag the release is built from, used to decide which
 #                     PRs are part of it (default: TAG). Use e.g. `--ref master` to preview
 #                     the notes for a tag that doesn't exist yet.
-#   --previous TAG    previous Warpium release tag (default: the newest published GitHub
-#                     Release other than TAG; none for the first release)
+#   --previous TAG    previous Warpium release tag (default: the highest published Warpium
+#                     release below TAG in version order; none for the first release)
 #   --dmg PATH        the release .dmg; its SHA-256 checksum is added to the notes
 #   --repo OWNER/REPO GitHub repository (default: $GH_REPO, else MILKA-TOP/warpium)
 #
@@ -56,57 +56,94 @@ fi
 UPSTREAM_TAG="${TAG%.*}"
 DMG_NAME="Warpium-$TAG-arm64.dmg"
 
-# ancestor A B: succeeds when commit A is reachable from B.
-ancestor() {
-  local status
-  status="$(gh api "repos/$REPO/compare/$1...$2?per_page=1" --jq .status)"
-  [[ "$status" == "ahead" || "$status" == "identical" ]]
+fail() {
+  echo "error: $*" >&2
+  exit 1
 }
 
-if [[ "$PREVIOUS_SET" == 0 ]]; then
-  # Releases come newest first. Drafts are skipped, and so is TAG itself, so re-publishing a
-  # release still compares against the one before it.
-  PREVIOUS="$(gh api "repos/$REPO/releases?per_page=100" \
-    --jq "[.[] | select(.draft | not) | .tag_name | select(. != \"$TAG\")] | first // empty")"
-fi
+# Seconds since the epoch for an ISO 8601 UTC timestamp (GNU or BSD date).
+epoch() {
+  date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s
+}
 
-if ! ref_sha="$(gh api "repos/$REPO/commits/$REF" --jq .sha 2>/dev/null)"; then
-  echo "error: $REF does not exist in $REPO (use --ref master to preview an untagged release)" >&2
-  exit 1
+# ancestor A B: succeeds when commit A is reachable from B, fails when it isn't, and aborts
+# the script when GitHub can't answer, so an API error never silently drops or adds a PR.
+ancestor() {
+  local status
+  if ! status="$(gh api "repos/$REPO/compare/$1...$2?per_page=1" --jq .status)"; then
+    fail "could not compare $1 with $2"
+  fi
+  case "$status" in
+    ahead | identical) return 0 ;;
+    behind | diverged) return 1 ;;
+    *) fail "unexpected compare status '$status' for $1...$2" ;;
+  esac
+}
+
+ref_sha="$(gh api "repos/$REPO/commits/$REF" --jq .sha 2>/dev/null)" ||
+  fail "could not resolve $REF in $REPO; check gh auth, or pass --ref master to preview an untagged release"
+ref_epoch="$(epoch "$(gh api "repos/$REPO/commits/$ref_sha" --jq .commit.committer.date)")"
+
+if [[ "$PREVIOUS_SET" == 0 ]]; then
+  # The highest published Warpium release below TAG in version order, so re-publishing an
+  # older release still compares against the one before it.
+  release_tags="$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+    --jq '.[] | select(.draft | not) | .tag_name')"
+  PREVIOUS="$({
+    grep -E "$WARPIUM_TAG_RE" <<<"$release_tags" || true
+    echo "$TAG"
+  } | sort -V -u | awk -v tag="$TAG" '$0 == tag { print prev; exit } { prev = $0 }')"
 fi
 
 # Candidate PRs: everything merged into master since the day before the previous release's
-# commit (the margin covers clock skew between commit and merge timestamps), or all of them
-# for the first release. The compare API then decides exactly what the release contains.
+# commit, or all of them for the first release. Timestamps only narrow the candidates (with a
+# day of margin for clock skew between commit and merge times); the compare API decides
+# exactly which PRs the release contains.
+DAY=86400
 search="base:master"
 if [[ -n "$PREVIOUS" ]]; then
   prev_sha="$(gh api "repos/$REPO/commits/$PREVIOUS" --jq .sha)"
-  prev_date="$(gh api "repos/$REPO/commits/$prev_sha" --jq .commit.committer.date)"
-  since="$(date -u -d "${prev_date} - 1 day" +%Y-%m-%d 2>/dev/null ||
-    date -u -j -v-1d -f '%Y-%m-%dT%H:%M:%SZ' "$prev_date" +%Y-%m-%d)"
+  prev_epoch="$(epoch "$(gh api "repos/$REPO/commits/$prev_sha" --jq .commit.committer.date)")"
+  since_epoch=$((prev_epoch - DAY))
+  since="$(date -u -d "@$since_epoch" +%Y-%m-%d 2>/dev/null || date -u -r "$since_epoch" +%Y-%m-%d)"
   search+=" merged:>=$since"
 fi
 
+PR_LIMIT=1000
+# Captured first (not read from a process substitution) so a failed query aborts the script.
+pr_rows="$(gh pr list --repo "$REPO" --state merged --base master --search "$search" \
+  --limit "$PR_LIMIT" --json number,title,mergedAt,mergeCommit \
+  --jq 'sort_by(.mergedAt) | .[] | select(.mergeCommit != null) | [.number, .mergeCommit.oid, .mergedAt, .title] | @tsv')"
+if [[ "$(grep -c . <<<"$pr_rows")" -ge "$PR_LIMIT" ]]; then
+  fail "more than $PR_LIMIT candidate PRs; pass --previous to narrow the range"
+fi
+
 prs=()
-while IFS=$'\t' read -r number merge_sha title; do
+while IFS=$'\t' read -r number merge_sha merged_at title; do
   [[ -n "$number" ]] || continue
+  merged_epoch="$(epoch "$merged_at")"
+  # Merged well after REF's commit: can't be part of it.
+  ((merged_epoch <= ref_epoch + DAY)) || continue
   ancestor "$merge_sha" "$ref_sha" || continue
-  if [[ -n "$PREVIOUS" ]] && ancestor "$merge_sha" "$prev_sha"; then
+  # Merged well after the previous release's commit: can't be part of that release.
+  if [[ -n "$PREVIOUS" ]] && ((merged_epoch <= prev_epoch + DAY)) && ancestor "$merge_sha" "$prev_sha"; then
     continue
   fi
   prs+=("- $title (#$number)")
-done < <(gh pr list --repo "$REPO" --state merged --base master --search "$search" --limit 500 \
-  --json number,title,mergedAt,mergeCommit \
-  --jq 'sort_by(.mergedAt) | .[] | select(.mergeCommit != null) | [.number, .mergeCommit.oid, .title] | @tsv')
+done <<<"$pr_rows"
 
 checksum=""
 if [[ -n "$DMG" ]]; then
-  if command -v sha256sum >/dev/null; then
+  DMG_NAME="$(basename "$DMG")"
+  if [[ -f "$DMG.sha256" ]]; then
+    # Reuse the checksum file uploaded next to the .dmg, so the notes and the asset agree.
+    checksum="$(cut -d' ' -f1 "$DMG.sha256")"
+  elif command -v sha256sum >/dev/null; then
     checksum="$(sha256sum "$DMG" | cut -d' ' -f1)"
   else
     checksum="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
   fi
-  DMG_NAME="$(basename "$DMG")"
+  [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || fail "could not read the SHA-256 of $DMG"
 fi
 
 # --- Notes -------------------------------------------------------------------------------

@@ -59,11 +59,7 @@ jobs:
       - name: Bump FORK_COUNTER
         if: inputs.bump
         run: |
-          current="$(sed -n 's/^FORK_COUNTER=//p' WARPIUM_VERSION | tr -d '\r[:space:]')"
-          if [[ ! "$current" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::Can't parse FORK_COUNTER '$current' in WARPIUM_VERSION"
-            exit 1
-          fi
+          current="$(script/warpium/version --fork-counter)"
           next=$((current + 1))
           sed -i "s/^FORK_COUNTER=.*/FORK_COUNTER=$next/" WARPIUM_VERSION
           version="$(script/warpium/version --tag)"
@@ -100,6 +96,8 @@ jobs:
     uses: ./.github/workflows/warpium-build.yml
     with:
       release_tag: ${{ needs.tag.outputs.tag }}
-    # The called workflow's release job needs to create the GitHub Release.
+    # The called workflow's release job creates the GitHub Release and lists merged PRs for
+    # the notes; a called workflow can't get more permissions than its caller grants.
     permissions:
       contents: write
+      pull-requests: read

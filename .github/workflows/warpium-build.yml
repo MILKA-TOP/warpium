@@ -44,7 +44,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: warpium-build-${{ inputs.release_tag || github.ref }}
+  # A release_tag call shares the group of a pushed tag, so two builds of one release queue.
+  group: warpium-build-${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
   # Only cancel superseded PR runs; master runs must finish to save the cache.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -241,6 +242,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      # release_notes.sh lists the merged PRs.
+      pull-requests: read
     steps:
       # Only for script/warpium/release_notes.sh; the notes query GitHub, not local history.
       - uses: actions/checkout@v6.0.3
@@ -278,16 +281,26 @@ jobs:
           TAG: ${{ needs.preflight.outputs.release_tag }}
         run: |
           dmg="dist/Warpium-$TAG-arm64.dmg"
+          # Only the highest version becomes Latest, so re-publishing an older release
+          # doesn't move releases/latest (linked from the README) back to it.
+          highest="$({
+            gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+              --jq '.[] | select((.draft or .prerelease) | not) | .tag_name' |
+              grep -E '^v[0-9]+\.[0-9]{4}(\.[0-9]{2}){4}\.[a-z]+_[0-9]{2}\.[1-9][0-9]*$' || true
+            echo "$TAG"
+          } | sort -V | tail -n 1)"
+          latest="$([[ "$highest" == "$TAG" ]] && echo true || echo false)"
+          echo "Mark as latest: $latest (highest Warpium release: $highest)"
           if gh release view "$TAG" >/dev/null 2>&1; then
             # Re-run for an existing release: refresh the assets and the notes.
             gh release upload "$TAG" "$dmg" "$dmg.sha256" --clobber
             gh release edit "$TAG" --title "Warpium $TAG" --notes-file release-notes.md \
-              --draft=false --prerelease=false --latest
+              --draft=false --prerelease=false --latest="$latest"
           else
             gh release create "$TAG" "$dmg" "$dmg.sha256" \
               --verify-tag \
               --title "Warpium $TAG" \
               --notes-file release-notes.md \
-              --latest
+              --latest="$latest"
           fi
           echo "Published https://github.com/$GH_REPO/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"

@@ -77,8 +77,9 @@ gh workflow run warpium-release.yml --repo MILKA-TOP/warpium --ref master -f bum
 1. With `bump=true`, increments `FORK_COUNTER` in `WARPIUM_VERSION` and pushes a
    `Release Warpium <version>` commit to `master` as `github-actions[bot]`. That works
    because `master` has no branch protection; the push fails if `master` moved after the run
-   started. If `master` gets protected, bump `FORK_COUNTER` in a PR instead, merge it and run
-   with `bump=false`.
+   started. This one-line version bump is the only automated commit to `master`; agents still
+   never push there. If `master` gets protected, or you want the bump reviewed, change
+   `FORK_COUNTER` in a PR instead, merge it and run with `bump=false`.
 2. Tags the commit with `script/warpium/version` and pushes the tag. If the tag already exists
    on the same commit (a retry), it is reused; on another commit the run fails and asks for
    `bump=true`.
@@ -87,8 +88,9 @@ gh workflow run warpium-release.yml --repo MILKA-TOP/warpium --ref master -f bum
    don't trigger other workflows; for the same reason the bump commit gets no `master` build.
 
 The `release` job uploads `Warpium-<version>-arm64.dmg` and `Warpium-<version>-arm64.dmg.sha256`
-and publishes the release as **latest** (not a prerelease), titled `Warpium <version>`. Re-running
-it for an existing release replaces the assets and the notes. The newest release is always at
+and publishes the release (never a prerelease), titled `Warpium <version>`. It is marked
+**latest** when it is the highest Warpium version, so re-running it for an older release, which
+replaces that release's assets and notes, doesn't move "latest" back. The newest release is at
 <https://github.com/MILKA-TOP/warpium/releases/latest>.
 
 The notes come from [`script/warpium/release_notes.sh`](script/warpium/release_notes.sh): the
