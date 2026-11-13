@@ -1,0 +1,10 @@
+<svg width="636" height="472" viewBox="194 276 636 472" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<linearGradient id="warpium-mark-gradient" x1="250" y1="388" x2="774" y2="692" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#3FD9A8"/>
+<stop offset="1" stop-color="#1F9BE6"/>
+</linearGradient>
+</defs>
+<polyline points="250,388 381,692 512,486 643,692 774,388" stroke="url(#warpium-mark-gradient)" stroke-width="112" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="512" cy="334" r="58" fill="#FFB938"/>
+</svg>

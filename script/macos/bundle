@@ -387,6 +387,9 @@ if [[ "$CARGO_PROFILE" == "dev" ]]; then
   TARGET_PROFILE_DIR="debug"
 fi
 
+DMG_VOLUME_NAME="Warp"
+DMG_BACKGROUND="app/assets/resources/mac/warp_install_image.png"
+DMG_VOLUME_ICON=""
 if [[ $RELEASE_CHANNEL = "local" ]]; then
     WARP_BIN="warp"
     BUNDLE_ID="dev.warp.Warp-Local"
@@ -432,6 +435,9 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     BUNDLE_ID="dev.milka.Warpium"
     WARP_APP_NAME="Warpium"
     WARP_SCHEME_NAME="warposs"
+    DMG_VOLUME_NAME="Warpium"
+    DMG_BACKGROUND="app/assets/resources/mac/warpium_install_image.png"
+    DMG_VOLUME_ICON="app/channels/oss/icon/Warpium.icns"
     # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
     # (which would otherwise pull in the Sentry framework dependency).
     FEATURES="release_bundle,extern_plist"
@@ -962,10 +968,10 @@ if [[ "$ARTIFACT" = app ]]; then
     local source_folder="$1"
 
     local args=(
-      --volname Warp
+      --volname "$DMG_VOLUME_NAME"
       # For --no-internet-enable, see https://github.com/create-dmg/create-dmg/issues/179
       --no-internet-enable
-      --background app/assets/resources/mac/warp_install_image.png
+      --background "$DMG_BACKGROUND"
       --icon-size 128
       --window-size 700 500
       --format UDZO
@@ -983,6 +989,10 @@ if [[ "$ARTIFACT" = app ]]; then
     # See https://github.com/create-dmg/create-dmg/issues/72
     if [[ "${RUNNER_NAME:-}" == nsc-* ]]; then
       args+=(--skip-jenkins)
+    fi
+
+    if [[ -n "$DMG_VOLUME_ICON" ]]; then
+      args+=(--volicon "$DMG_VOLUME_ICON")
     fi
 
     args+=("$DMG_DIR/$DMG_NAME" "$source_folder")

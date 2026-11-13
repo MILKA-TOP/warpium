@@ -1048,8 +1048,16 @@ copyright = "Warpium © 2026 MILKA-TOP. Based on Warp © Denver Technologies, In
 identifier = "dev.milka.Warpium"
 name = "Warpium"
 resources = ["assets/onboarding"]
-icon = ["channels/oss/icon/no-padding/512x512.png", "channels/oss/icon/no-padding/icon.ico"]
-short_description = "Warpium: a personal fork of the open-source Warp terminal."
+# cargo-bundle copies the .icns as-is on macOS (Apple's icon grid, @2x sizes included). On
+# Xcode 26 script/compile_icon then switches the bundle to the Liquid Glass AppIcon.icon, and the
+# .icns remains the fallback and the .dmg volume icon. All are generated from branding/ by
+# script/warpium/render_icons.py.
+icon = [
+  "channels/oss/icon/Warpium.icns",
+  "channels/oss/icon/no-padding/512x512.png",
+  "channels/oss/icon/no-padding/icon.ico",
+]
+short_description = "Warpium: a lightweight IDE for AI-driven mobile development, built on Warp."
 
 [package.metadata.bundle.bin.stable]
 category = "public.app-category.developer-tools"

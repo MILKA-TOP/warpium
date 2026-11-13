@@ -1,0 +1,16 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Warpium app icon tuned for 16-32 px: heavier strokes, no border. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0E4A57"/>
+      <stop offset="1" stop-color="#071726"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="220" y1="400" x2="804" y2="720" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6DF5C8"/>
+      <stop offset="1" stop-color="#38B6FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="200" fill="url(#bg)"/>
+  <polyline points="220,410 366,720 512,500 658,720 804,410" stroke="url(#mark)" stroke-width="150" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="512" cy="300" r="82" fill="#FFC857"/>
+</svg>
