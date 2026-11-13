@@ -59,6 +59,20 @@ impl Channel {
         }
     }
 
+    /// Returns the product name shown in prominent user-visible chrome (window titles, the
+    /// app menu, the About page). The OSS channel is branded as the Warpium fork; internal
+    /// identifiers such as data directories, URL schemes and CLI names keep their Warp names.
+    pub fn app_display_name(&self) -> &'static str {
+        match self {
+            Channel::Oss => "Warpium",
+            Channel::Stable
+            | Channel::Preview
+            | Channel::Dev
+            | Channel::Local
+            | Channel::Integration => "Warp",
+        }
+    }
+
     /// Returns the Warp Control CLI command name corresponding to this channel.
     pub fn warpctrl_command_name(&self) -> &'static str {
         match self {

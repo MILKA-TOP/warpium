@@ -37,7 +37,7 @@ pub struct ChannelState {
 impl ChannelState {
     pub fn init() -> Self {
         let channel = Channel::Oss;
-        let app_id = AppId::new("dev", "warp", "WarpOss");
+        let app_id = AppId::new("dev", "milka", "Warpium");
         Self {
             channel,
             additional_features: Default::default(),
@@ -370,6 +370,14 @@ impl ChannelState {
     #[cfg(not(feature = "test-util"))]
     pub fn app_version() -> Option<&'static str> {
         option_env!("GIT_RELEASE_TAG")
+    }
+
+    /// The version shown to users (e.g. on the About page). Warpium builds bake their fork version
+    /// in as `WARPIUM_VERSION_TAG` rather than `GIT_RELEASE_TAG`: [`Self::app_version`] gates
+    /// Warp-release behavior (remote-server version handshakes, changelogs, update checks) that
+    /// a fork version must not trigger.
+    pub fn display_version() -> Option<&'static str> {
+        option_env!("WARPIUM_VERSION_TAG").or_else(Self::app_version)
     }
 
     pub fn sentry_url() -> Cow<'static, str> {

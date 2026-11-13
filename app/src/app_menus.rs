@@ -22,6 +22,7 @@ use warpui::{AppContext, SingletonEntity};
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::auth;
 use crate::auth::AuthStateProvider;
+use crate::channel::ChannelState;
 use crate::default_terminal::DefaultTerminal;
 use crate::features::{FeatureFlag, runtime_flags_menu_items};
 use crate::root_view::OpenLaunchConfigArg;
@@ -245,7 +246,8 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
         None,
     )));
     menu_items.push(MenuItem::Standard(StandardAction::Quit));
-    Menu::new("Warp", menu_items)
+    // macOS shows the process name here, but warpui uses this title for "Hide …"/"Quit …".
+    Menu::new(ChannelState::channel().app_display_name(), menu_items)
 }
 
 fn make_new_file_menu(ctx: &AppContext) -> Menu {
