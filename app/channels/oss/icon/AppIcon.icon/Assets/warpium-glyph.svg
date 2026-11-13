@@ -1,5 +1,0 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
-<!-- White Warpium glyph for the macOS 26 AppIcon.icon; copied there by script/warpium/render_icons.py. -->
-<polyline points="250,388 381,692 512,486 643,692 774,388" stroke="#FFFFFF" stroke-width="112" stroke-linecap="round" stroke-linejoin="round"/>
-<circle cx="512" cy="334" r="58" fill="#FFC857"/>
-</svg>

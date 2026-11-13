@@ -112,13 +112,14 @@ See [AGENTS.md](AGENTS.md) for the upstream engineering guide (code style, testi
 
 ## Branding
 
-The Warpium logo is an original mark: a geometric "W" with an amber dot, a nod to the "-ium" of a chemical element. Its SVG sources live in [`branding/`](branding) (app icon, small-size icon, README banner, and `.dmg` background), and the in-app logos are in `app/assets/bundled/svg/warpium-*.svg`. After editing a source, regenerate the PNG, `.ico`, and `.icns` files with:
+The Warpium mark is two overlapping slanted parallelograms in indigo and violet, with a glass-like pink overlap. The primary app icon is the white mark on a violet-to-blue gradient. See [`branding/README.md`](branding/README.md) for the palette, the icon variants, the wordmark font and how to regenerate the assets. In short:
 
 ```bash
-uv run script/warpium/render_icons.py
+uv run script/warpium/generate_svgs.py --font /path/to/Manrope.ttf  # SVG sources
+uv run script/warpium/render_icons.py                               # PNG, .ico, .icns
 ```
 
-The macOS 26 (Liquid Glass) icon is `app/channels/oss/icon/AppIcon.icon`, compiled by `script/compile_icon` during bundling.
+The macOS 26 (Liquid Glass) icon is `app/channels/oss/icon/AppIcon.icon`, compiled by `script/compile_icon` during bundling. The `.icns` is the fallback for older macOS.
 
 ## Licensing
 
@@ -127,7 +128,7 @@ Warpium keeps upstream Warp's licensing unchanged:
 - The UI framework crates (`warpui_core` and `warpui`) are licensed under the [MIT license](LICENSE-MIT).
 - The rest of the code is licensed under the [GNU AGPL v3](LICENSE-AGPL).
 
-Under the AGPL, the complete source code for every Warpium build is available in this repository. The Warpium wordmark is set in Roboto (Apache License 2.0).
+Under the AGPL, the complete source code for every Warpium build is available in this repository. The Warpium wordmark is set in Manrope (SIL Open Font License 1.1) and committed as outlines, so the font is not shipped.
 
 ## Trademarks
 

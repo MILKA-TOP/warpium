@@ -6,17 +6,24 @@
 """Render Warpium's raster branding assets from the SVG sources in `branding/`.
 
 Run from anywhere with `uv run script/warpium/render_icons.py` (cairosvg also needs the
-system cairo library). Outputs are committed, so this only needs to run after editing an
-SVG source.
+system cairo library). Outputs are committed, so this only needs to run after the SVG
+sources change (they are written by `script/warpium/generate_svgs.py`).
+
+The README product preview places the window from upstream Warp's README screenshot on
+`branding/preview-background.svg`. It is only re-rendered when that screenshot is passed:
+
+    curl -L -o /tmp/warp-preview.png \
+        https://github.com/user-attachments/assets/9976b2da-2edd-4604-a36c-8fd53719c6d4
+    uv run script/warpium/render_icons.py --preview-screenshot /tmp/warp-preview.png
 """
 
+import argparse
 import io
-import shutil
 import struct
 from pathlib import Path
 
 import cairosvg
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BRANDING = REPO_ROOT / "branding"
@@ -100,7 +107,35 @@ def write(image: Image.Image, path: Path) -> None:
     print(f"wrote {path.relative_to(REPO_ROOT)}")
 
 
+# The app window in upstream's 1448x828 README screenshot: left, top, right (exclusive) and
+# corner radius. It runs off the bottom of the image.
+PREVIEW_WINDOW = (152, 213, 1293, 10)
+
+
+def render_preview(screenshot: Path) -> Image.Image:
+    shot = Image.open(screenshot).convert("RGBA")
+    canvas = render_svg(BRANDING / "preview-background.svg", shot.width, shot.height)
+    left, top, right, radius = PREVIEW_WINDOW
+    window = Image.new("L", shot.size, 0)
+    ImageDraw.Draw(window).rounded_rectangle(
+        (left, top, right - 1, shot.height + radius), radius=radius, fill=255
+    )
+    # Clip the window to the card's rounded corners as well.
+    card = canvas.getchannel("A")
+    shot.putalpha(Image.composite(card, Image.new("L", shot.size, 0), window))
+    canvas.alpha_composite(shot)
+    return canvas
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--preview-screenshot",
+        type=Path,
+        help="upstream Warp's README screenshot; re-renders docs/images/warpium-preview.png",
+    )
+    args = parser.parse_args()
+
     for size in NO_PADDING_SIZES:
         write(render_icon(size), NO_PADDING_DIR / f"{size}x{size}.png")
 
@@ -118,16 +153,14 @@ def main() -> None:
     write_icns(icns_path)
     print(f"wrote {icns_path.relative_to(REPO_ROOT)}")
 
-    glyph_path = OSS_ICON_DIR / "AppIcon.icon" / "Assets" / "warpium-glyph.svg"
-    shutil.copyfile(BRANDING / "glyph.svg", glyph_path)
-    print(f"wrote {glyph_path.relative_to(REPO_ROOT)}")
-
     write(render_mac_icon(512), DOCS_IMAGES / "warpium-icon.png")
     write(render_svg(BRANDING / "banner.svg", 2560, 800), DOCS_IMAGES / "warpium-banner.png")
     write(
         render_svg(BRANDING / "dmg-background.svg", 700, 500),
         MAC_RESOURCES / "warpium_install_image.png",
     )
+    if args.preview_screenshot:
+        write(render_preview(args.preview_screenshot), DOCS_IMAGES / "warpium-preview.png")
 
 
 if __name__ == "__main__":
