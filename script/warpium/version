@@ -2,10 +2,11 @@
 #
 # Prints the Warpium version derived from WARPIUM_VERSION at the repo root.
 #
-# Usage: script/warpium/version [--tag | --plist | --upstream-tag]
+# Usage: script/warpium/version [--tag | --plist | --upstream-tag | --fork-counter]
 #   --tag           (default) release tag and GIT_RELEASE_TAG, e.g. v0.2026.06.03.09.49.stable_00.1
 #   --plist         numeric CFBundleShortVersionString, e.g. 0.2026.06.03.09.49.00.1
 #   --upstream-tag  upstream Warp release tag the fork is based on, e.g. v0.2026.06.03.09.49.stable_00
+#   --fork-counter  the validated FORK_COUNTER, e.g. 1
 
 set -euo pipefail
 
@@ -43,8 +44,9 @@ case "${1:---tag}" in
   --tag) echo "$UPSTREAM_TAG.$FORK_COUNTER" ;;
   --plist) echo "$PLIST_BASE.$FORK_COUNTER" ;;
   --upstream-tag) echo "$UPSTREAM_TAG" ;;
+  --fork-counter) echo "$FORK_COUNTER" ;;
   *)
-    echo "usage: $0 [--tag | --plist | --upstream-tag]" >&2
+    echo "usage: $0 [--tag | --plist | --upstream-tag | --fork-counter]" >&2
     exit 1
     ;;
 esac

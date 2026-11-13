@@ -1,0 +1,103 @@
+# One-click Warpium release: optionally bumps FORK_COUNTER on master, tags master with
+# the version from WARPIUM_VERSION, then builds the .dmg and publishes the GitHub Release
+# by calling the Warpium Build workflow, so there is a single build definition.
+#
+# Run it from Actions > Warpium Release > Run workflow (branch: master), or:
+#   gh workflow run warpium-release.yml --repo MILKA-TOP/warpium --ref master -f bump=true
+#
+# Tags pushed with GITHUB_TOKEN don't trigger other workflows, which is why the build is
+# called from here instead of relying on the tag trigger of warpium-build.yml.
+name: Warpium Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Bump FORK_COUNTER in WARPIUM_VERSION and commit it to master first (leave off for the first release of a new UPSTREAM_TAG)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warpium-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Require master
+        if: github.ref != 'refs/heads/master'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::Run Warpium Release on master, not $REF."
+          exit 1
+
+      # Checks out the commit the run was started on (github.sha), so the bump push below
+      # fails instead of skipping commits if master moved in the meantime.
+      - uses: actions/checkout@v6.0.3
+        with:
+          sparse-checkout: |
+            WARPIUM_VERSION
+            script/warpium
+          sparse-checkout-cone-mode: false
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Bump FORK_COUNTER
+        if: inputs.bump
+        run: |
+          current="$(script/warpium/version --fork-counter)"
+          next=$((current + 1))
+          sed -i "s/^FORK_COUNTER=.*/FORK_COUNTER=$next/" WARPIUM_VERSION
+          version="$(script/warpium/version --tag)"
+          git commit -m "Release Warpium $version" -- WARPIUM_VERSION
+          # master has no branch protection, so the workflow token can push the bump.
+          # If that changes, bump FORK_COUNTER in a PR and run this with bump=false.
+          git push origin HEAD:refs/heads/master
+          echo "Bumped FORK_COUNTER $current -> $next" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create and push tag
+        id: tag
+        run: |
+          tag="$(script/warpium/version --tag)"
+          head="$(git rev-parse HEAD)"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            git fetch --no-tags --depth=1 origin "refs/tags/$tag:refs/tags/$tag"
+            tagged="$(git rev-parse "$tag^{commit}")"
+            if [[ "$tagged" != "$head" ]]; then
+              echo "::error::Tag $tag already exists on ${tagged::12}, not ${head::12}. Run with bump=true to release a new version."
+              exit 1
+            fi
+            # Same commit: a retry of a failed release, so rebuild and republish it.
+            echo "Tag $tag already points to ${head::12}; reusing it." >> "$GITHUB_STEP_SUMMARY"
+          else
+            git tag -a "$tag" -m "Warpium $tag"
+            git push origin "refs/tags/$tag"
+            echo "Tagged ${head::12} as $tag" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and publish
+    needs: tag
+    uses: ./.github/workflows/warpium-build.yml
+    with:
+      release_tag: ${{ needs.tag.outputs.tag }}
+    # The called workflow's release job creates the GitHub Release and lists merged PRs for
+    # the notes; a called workflow can't get more permissions than its caller grants.
+    permissions:
+      contents: write
+      pull-requests: read
