@@ -183,8 +183,9 @@ uv run warpium-mac-mcp doctor                  # --no-port-check while the serve
 installing artifacts, screenshots and input need. The **local-build toolchain** (rustup,
 cargo, protoc, Xcode/Metal; `bld` lines, `build_ready`) is only needed for `build` and
 `run_integration_test`, so a missing toolchain doesn't fail doctor when you use CI artifacts.
-The first `protoc`/`xcrun` call after boot can be slow; a check that takes more than 60 s is
-reported as "timed out, run doctor again" rather than missing.
+The first `protoc`/`xcrun` call after boot can be slow; a check that takes more than 60 s
+(20 s in the MCP `doctor` tool, to keep one call bounded) is reported as "timed out, run
+doctor again" rather than missing.
 
 To build Warpium locally, the workspace needs:
 
