@@ -60,7 +60,12 @@ die() {
 # --- checks ---------------------------------------------------------------
 require_macos_arm64() {
   [ "$(uname -s)" = "Darwin" ] || die "run this on the Mac host, not in the container"
-  [ "$(uname -m)" = "arm64" ] || die "Tart needs an Apple Silicon Mac (uname -m is $(uname -m))"
+  if [ "$(uname -m)" != "arm64" ]; then
+    if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
+      die "this shell runs under Rosetta (uname -m is $(uname -m)); open a native arm64 terminal and re-run"
+    fi
+    die "Tart needs an Apple Silicon Mac (uname -m is $(uname -m))"
+  fi
 }
 
 require_tart() {

@@ -26,8 +26,9 @@ macOS VM. The VM boundary is the main isolation layer:
   one-time permission step) and disables SSH password logins.
 - Limits of the boundary: the VM uses Tart's default NAT network, so the guest can reach the
   internet and, like any device on that network, services the host exposes on its non-loopback
-  interfaces. For stricter isolation use `tart run --net-softnet` (see the Tart docs). The
-  passwordless sudo of the cirruslabs image stays enabled inside the guest.
+  interfaces. For stricter isolation use `tart run --net-softnet` (see the Tart docs; it needs
+  `openai/tools/softnet`, which requires a macOS 26 host). The passwordless sudo of the
+  cirruslabs image stays enabled inside the guest.
 
 **Host mode (fallback).** The server runs on your real Mac. Then everything below applies to
 your own desktop and user account, and the input guard is what keeps input away from your

@@ -11,16 +11,17 @@ first**: this server can build and run code from the fork, and it can type into 
 There are two ways to run it:
 
 - **In a macOS VM (recommended).** The server and Warpium run in a throwaway
-  [Tart](https://tart.run) VM on your Mac. Clicks, keystrokes and app windows stay on the VM's
-  own screen, so you can keep working while the agent tests, and the VM can't see your files,
-  keychain or GitHub login. See [VM setup](#vm-setup-recommended).
+  [Tart](https://tart.run) ([openai/tart](https://github.com/openai/tart)) VM on your Mac.
+  Clicks, keystrokes and app windows stay on the VM's own screen, so you can keep working while
+  the agent tests, and the VM can't see your files, keychain or GitHub login. See [VM setup](#vm-setup-recommended).
 - **Directly on your Mac (fallback).** Simpler, but the agent drives your real desktop: it
   takes focus and moves the cursor while it works. See [Host mode](#host-mode-fallback-quickstart).
 
 ## VM setup (recommended)
 
 All scripts are in `vm/`, run **on the Mac host** from `tools/mac-mcp`, are idempotent and
-print what they do. They need an Apple Silicon Mac, Homebrew and uv (`brew install uv`).
+print what they do. They need an Apple Silicon Mac, uv (`brew install uv`) and Tart, which
+`setup.sh` installs with Homebrew if `tart` isn't already on PATH.
 
 **Status: written and syntax/shellcheck-tested, but not yet run on a real Mac.** Report the
 output of the failing step if something breaks.
@@ -34,9 +35,10 @@ output of the failing step if something breaks.
 | Disk | 50 GB sparse image using ~25-30 GB at first; plan for ~60 GB free | `WARPIUM_VM_DISK_GB` (grow only) |
 | Golden copy / resets | a few GB each: APFS clones share unchanged blocks | |
 
-The image is the cirruslabs *vanilla* macOS (macOS 26 Tahoe on a macOS 26+ host, Sequoia on
-macOS 15): auto-login, SSH and passwordless sudo, nothing else installed. The Xcode images
-(~60+ GB) aren't needed because the VM runs CI `.dmg` artifacts, not local builds.
+The image is the cirruslabs *vanilla* macOS (`ghcr.io/cirruslabs/macos-*-vanilla`, still the
+images the openai/tart docs use; macOS 26 Tahoe on a macOS 26+ host, Sequoia on macOS 15):
+auto-login, SSH and passwordless sudo, nothing else installed. The Xcode images (~60+ GB)
+aren't needed because the VM runs CI `.dmg` artifacts, not local builds.
 
 ### Steps
 
@@ -53,8 +55,12 @@ vm/print-client-config.sh # prints `claude mcp add ...` for the container (conta
 
 What each step does:
 
-1. **`setup.sh`** installs Tart (`brew install cirruslabs/cli/tart`), clones the image into
-   the VM `warpium-test` and sets CPU/RAM. It creates a dedicated key
+1. **`setup.sh`** prints which Homebrew it found (prefix and architecture; an Intel/Rosetta
+   Homebrew in `/usr/local` on Apple Silicon gets a warning and is called via `arch -x86_64`),
+   installs Tart unless `tart` is already on PATH (`brew install openai/tools/tart`; Tart moved
+   there from `cirruslabs/cli`, and on macOS 15 hosts it skips the macOS 26-only `softnet`
+   dependency), checks that `tart --version` runs, clones the image into the VM
+   `warpium-test` and sets CPU/RAM. It creates a dedicated key
    `~/.config/warpium-mac-mcp/vm_ed25519` and installs it in the guest using the image's
    default `admin`/`admin` password (once). Then it replaces that password with a random one
    (saved to `~/.config/warpium-mac-mcp/vm_admin_password`, mode 600, and kept working for

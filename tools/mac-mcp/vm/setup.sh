@@ -1,7 +1,7 @@
 #!/bin/bash
 # One-time (idempotent) host setup for the isolated Warpium test VM.
 #
-#   1. installs Tart (brew install cirruslabs/cli/tart)
+#   1. installs Tart (brew install openai/tools/tart) unless tart is on PATH
 #   2. clones a vanilla macOS image into the VM "warpium-test" and sets CPU/RAM
 #   3. creates a dedicated SSH key, installs it in the guest, replaces the
 #      image's default admin/admin password and disables SSH password logins
@@ -14,17 +14,67 @@ source "$(dirname "$0")/common.sh"
 require_macos_arm64
 mkdir -p "$CONF_DIR" "$STATE_DIR"
 chmod 700 "$CONF_DIR"
+# Picks the guest image and rejects hosts older than macOS 15 before
+# anything is installed.
+IMAGE="${WARPIUM_VM_IMAGE:-$(default_image)}"
 
 # --- 1. Tart ---------------------------------------------------------------
+step "Checking Homebrew"
+BREW=()
+BREW_PREFIX=""
+if command -v brew >/dev/null 2>&1; then
+  if ! BREW_PREFIX="$(brew --prefix 2>/dev/null)"; then
+    BREW_PREFIX="unknown"
+    warn "'brew --prefix' failed; Homebrew looks broken (try 'brew doctor')"
+  else
+    BREW=(brew)
+  fi
+  case "$BREW_PREFIX" in
+    /opt/homebrew) ok "$(command -v brew), prefix $BREW_PREFIX (arm64, native)" ;;
+    /usr/local)
+      echo "    $(command -v brew), prefix $BREW_PREFIX (x86_64: an Intel/Rosetta install)"
+      warn "this Mac is Apple Silicon but Homebrew is the Intel one in /usr/local. Continuing;"
+      warn "brew installs run via 'arch -x86_64 brew' (Homebrew refuses /usr/local installs"
+      warn "natively on arm64). Tart is an arm64 binary and runs natively either way. A native"
+      warn "Homebrew in /opt/homebrew is recommended: https://brew.sh"
+      BREW=(arch -x86_64 brew)
+      ;;
+    unknown) ;;
+    *) ok "$(command -v brew), prefix $BREW_PREFIX (custom prefix, architecture unknown)" ;;
+  esac
+else
+  echo "    Homebrew not found (only needed to install Tart): https://brew.sh"
+fi
+
 step "Checking Tart"
 if ! command -v tart >/dev/null 2>&1; then
-  command -v brew >/dev/null 2>&1 || die "Homebrew is required: https://brew.sh"
-  brew install cirruslabs/cli/tart
+  [ "${#BREW[@]}" -gt 0 ] || die "Tart is not installed and no working Homebrew was found: install Homebrew from https://brew.sh (or Tart manually: https://tart.run/quick-start/) and re-run vm/setup.sh"
+  if [ "${BREW[0]}" = "arch" ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+    die "Rosetta 2 is not installed, so the /usr/local Homebrew can't run. Install it with 'softwareupdate --install-rosetta' or install a native Homebrew in /opt/homebrew (https://brew.sh)"
+  fi
+  # Tart moved from cirruslabs/cli to openai/tools. Its dependency softnet
+  # (only used by 'tart run --net-softnet') requires macOS 26, so skip it on
+  # older hosts.
+  BREW_ARGS=()
+  if [ "$(host_macos_major)" -lt 26 ]; then
+    warn "openai/tools/softnet requires macOS 26; installing Tart without it (only 'tart run --net-softnet' needs it)"
+    BREW_ARGS=(--ignore-dependencies)
+  fi
+  step "Installing Tart: ${BREW[*]} install ${BREW_ARGS[*]:+${BREW_ARGS[*]} }openai/tools/tart"
+  "${BREW[@]}" install ${BREW_ARGS[@]+"${BREW_ARGS[@]}"} openai/tools/tart ||
+    die "'brew install openai/tools/tart' failed (see the output above). Manual install: https://tart.run/quick-start/"
+  hash -r
+  if ! command -v tart >/dev/null 2>&1; then
+    die "Tart was installed but 'tart' is not on PATH; add $BREW_PREFIX/bin to PATH and re-run vm/setup.sh"
+  fi
 fi
-ok "$(tart --version 2>/dev/null | head -1 || echo tart) at $(command -v tart)"
+if ! TART_VERSION="$(tart --version 2>/dev/null)"; then
+  TART_ERR="$(tart --version 2>&1 | head -5)" || true
+  die "'$(command -v tart) --version' failed: ${TART_ERR:-no output}. Reinstall Tart ('brew reinstall tart', or uninstall it and re-run vm/setup.sh) or remove the broken binary"
+fi
+ok "Tart ${TART_VERSION%%$'\n'*} at $(command -v tart)"
 
 # --- 2. VM -----------------------------------------------------------------
-IMAGE="${WARPIUM_VM_IMAGE:-$(default_image)}"
 if vm_exists "$VM_NAME"; then
   ok "VM $VM_NAME exists (delete it with 'tart delete $VM_NAME' to start over)"
 else
