@@ -48,6 +48,15 @@ class Platform(Protocol):
         """All on-screen windows of all apps, front-to-back."""
         ...
 
+    def displays(self) -> list[tuple[float, float, float, float]]:
+        """Bounds (x, y, width, height) of every active display, in the same global
+        top-left-origin point space as window bounds. Empty if unknown."""
+        ...
+
+    def process_path(self, pid: int) -> str | None:
+        """Executable path of ``pid`` (kernel record), or None if unknown."""
+        ...
+
     def activate(self, pid: int) -> None: ...
 
     def post_mouse(self, kind: str, x: float, y: float, button: str, click_state: int) -> None: ...
@@ -153,6 +162,28 @@ class MacPlatform:
                 )
             )
         return out
+
+    def displays(self) -> list[tuple[float, float, float, float]]:
+        import Quartz
+
+        try:
+            err, ids, count = Quartz.CGGetActiveDisplayList(32, None, None)
+        except Exception:  # any pyobjc failure means "unknown" (fail closed)
+            return []
+        if err != 0 or not ids:
+            return []
+        out = []
+        for did in list(ids)[: int(count)]:
+            r = Quartz.CGDisplayBounds(did)
+            out.append(
+                (float(r.origin.x), float(r.origin.y), float(r.size.width), float(r.size.height))
+            )
+        return out
+
+    def process_path(self, pid: int) -> str | None:
+        from .app import executable_path
+
+        return executable_path(pid)
 
     # --- input -----------------------------------------------------------
     def post_mouse(self, kind: str, x: float, y: float, button: str, click_state: int) -> None:

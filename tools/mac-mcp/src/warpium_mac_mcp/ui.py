@@ -7,7 +7,9 @@ Invariants enforced here (unit-tested against a fake platform):
   a target PID; otherwise the call stops with :class:`FocusError`.
 * Mouse events additionally require that the topmost on-screen window under
   the pointer belongs to a target PID (so a notification banner or another
-  app's floating window can't receive the click).
+  app's floating window can't receive the click). The one exception is a
+  full-display backdrop window owned by a macOS system UI process (see
+  :func:`is_system_backdrop`), which does not take clicks in normal use.
 """
 
 from __future__ import annotations
@@ -21,6 +23,63 @@ from pathlib import Path
 
 from .platform import Platform, WindowInfo, png_size
 from .validation import KEY_CODES, ValidationError, parse_key_combo, validate_click, validate_text
+
+# Owner names of macOS system UI processes that keep full-display windows
+# above normal app windows without intercepting clicks in normal operation
+# (e.g. the Dock's layer-20 desktop / Mission Control / app-launcher backdrop
+# on recent macOS). Only exempted together with a system executable path and
+# full-display bounds, see is_system_backdrop().
+SYSTEM_UI_OWNERS = frozenset(
+    {
+        "Dock",
+        "Window Server",
+        "WindowServer",
+        "Control Center",
+        "ControlCenter",
+        "SystemUIServer",
+        "Notification Center",
+        "NotificationCenter",
+        "Spotlight",
+        "WindowManager",
+        "Wallpaper",
+    }
+)
+# A backdrop must cover at least this fraction of a display's area. The Dock
+# bar, the menu bar, menus, popovers and banners are far smaller, so they keep
+# counting as occluders.
+BACKDROP_MIN_DISPLAY_COVERAGE = 0.9
+# The owning executable must live here, so a third-party app that merely names
+# itself "Dock" is not exempted.
+SYSTEM_EXECUTABLE_PREFIXES = ("/System/", "/usr/libexec/", "/usr/sbin/", "/usr/bin/")
+
+Rect = tuple[float, float, float, float]
+
+
+def _overlap(a0: float, a_len: float, b0: float, b_len: float) -> float:
+    return max(0.0, min(a0 + a_len, b0 + b_len) - max(a0, b0))
+
+
+def is_system_backdrop(w: WindowInfo, displays: list[Rect], exe_path: str | None) -> bool:
+    """True if ``w`` is a full-display window of a macOS system UI process.
+
+    Requires all of: a known system UI owner name, an executable under a
+    system prefix, a positive layer (above normal app windows), and bounds
+    covering at least ``BACKDROP_MIN_DISPLAY_COVERAGE`` of some active
+    display. Unknown displays or an unknown executable path mean False, so the
+    window stays an occluder (fail closed).
+    """
+    if w.owner not in SYSTEM_UI_OWNERS or w.layer <= 0:
+        return False
+    if not exe_path or not exe_path.startswith(SYSTEM_EXECUTABLE_PREFIXES):
+        return False
+    for dx, dy, dw, dh in displays:
+        area = dw * dh
+        if area <= 0:
+            continue
+        covered = _overlap(w.x, w.width, dx, dw) * _overlap(w.y, w.height, dy, dh)
+        if covered / area >= BACKDROP_MIN_DISPLAY_COVERAGE:
+            return True
+    return False
 
 
 class FocusError(PermissionError):
@@ -76,6 +135,7 @@ class UiController:
         self._sleep = sleep
         self._delay = event_delay_s
         self._last_scale: dict[int, float] = {}
+        self._exe_cache: dict[tuple[int, str], str | None] = {}
         self._lock = threading.Lock()  # serialize input sequences
 
     # --- observation -------------------------------------------------------
@@ -151,15 +211,28 @@ class UiController:
             )
         return front
 
+    def _exe_path(self, w: WindowInfo) -> str | None:
+        key = (w.pid, w.owner)
+        if key not in self._exe_cache:
+            self._exe_cache[key] = self._p.process_path(w.pid)
+        return self._exe_cache[key]
+
     def _check_point(self, sx: float, sy: float) -> None:
         pids = self._target_pids()
+        displays: list[Rect] | None = None
         # Transparent windows are not skipped: an alpha-0 window can still
-        # receive mouse events, so it counts as covering the point.
+        # receive mouse events, so it counts as covering the point. Warpium's
+        # own windows at any layer (context menus, popups) never block.
         for w in self._p.windows():  # front-to-back
             if not w.contains(sx, sy):
                 continue
             if w.pid in pids:
                 return
+            if w.owner in SYSTEM_UI_OWNERS:
+                if displays is None:
+                    displays = self._p.displays()
+                if is_system_backdrop(w, displays, self._exe_path(w)):
+                    continue
             raise FocusError(
                 f"refusing input: point ({sx:.0f},{sy:.0f}) is covered by a window of "
                 f"{w.owner or 'another app'!r} (pid {w.pid}, layer {w.layer}, alpha {w.alpha}). "

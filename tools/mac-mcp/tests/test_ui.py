@@ -36,6 +36,8 @@ class FakePlatform:
         self.activated = []
         # Hook to change state between events (simulates focus stolen mid-sequence).
         self.after_event = None
+        self.display_list = [(0.0, 0.0, 1728.0, 1117.0)]
+        self.exe_paths = {}
 
     def frontmost_pid(self):
         return self.front
@@ -71,6 +73,12 @@ class FakePlatform:
     def resize_png(self, src, dst, max_width):
         w, h = png_size(src)
         make_png(dst, max_width, int(h * max_width / w))
+
+    def displays(self):
+        return list(self.display_list)
+
+    def process_path(self, pid):
+        return self.exe_paths.get(pid)
 
     def screen_recording_allowed(self):
         return True
@@ -156,6 +164,84 @@ def test_click_refused_under_overlay_layer(ui, fp):
     fp.wins.insert(0, WindowInfo(4, 1, "Window Server", "Menubar", 0, 0, 3000, 125, 24))
     with pytest.raises(FocusError):
         ui.click(10, 20)
+
+
+DOCK = 637
+DOCK_EXE = "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock"
+
+
+@pytest.fixture
+def mac_layout(fp):
+    """The real smoke-test layout: 1728x1117 display, Warpium window at
+    (0,33,1728,952), and the Dock's full-display layer-20 window on top."""
+    fp.exe_paths[DOCK] = DOCK_EXE
+    fp.wins = [
+        WindowInfo(50, DOCK, "Dock", "", 0, 0, 1728, 1117, 20, alpha=1.0),
+        WindowInfo(1, WARP, "Warpium", "main", 0, 33, 1728, 952, 0),
+        WindowInfo(2, OTHER, "Other", "x", 0, 0, 1728, 1117, 0),
+    ]
+    return fp
+
+
+def test_dock_full_display_backdrop_does_not_block(ui, mac_layout):
+    ui.click(131, 19)  # screen (131, 52): the point refused on the real Mac
+    ui.click(700, 300)  # screen (700, 333): window centre
+    assert len(mac_layout.events) == 4
+
+
+def test_dock_bar_strip_still_blocks(ui, mac_layout):
+    # The visible Dock bar is a strip at the bottom edge, in front of everything.
+    mac_layout.wins.insert(0, WindowInfo(51, DOCK, "Dock", "", 400, 1040, 928, 77, 20))
+    mac_layout.wins[2] = WindowInfo(1, WARP, "Warpium", "main", 0, 33, 1728, 1084, 0)
+    with pytest.raises(FocusError, match="Dock"):
+        ui.click(500, 1050)  # screen (500, 1083): on the Dock bar
+    ui.click(100, 1050)  # screen (100, 1083): beside the bar, under the backdrop only
+    assert len(mac_layout.events) == 2
+
+
+def test_foreign_window_above_backdrop_still_blocks(ui, mac_layout):
+    mac_layout.wins.insert(0, WindowInfo(60, OTHER, "Slack", "", 600, 200, 400, 300, 0))
+    with pytest.raises(FocusError, match="Slack"):
+        ui.click(700, 300)  # screen (700, 333)
+    assert mac_layout.events == []
+
+
+def test_foreign_full_display_window_still_blocks(ui, mac_layout):
+    # Only system UI processes are exempt: another app's full-screen overlay
+    # (even at a high layer) keeps blocking.
+    mac_layout.wins.insert(0, WindowInfo(61, OTHER, "Overlay", "", 0, 0, 1728, 1117, 20))
+    with pytest.raises(FocusError, match="Overlay"):
+        ui.click(700, 300)
+
+
+def test_fake_dock_with_non_system_executable_blocks(ui, mac_layout):
+    mac_layout.exe_paths[DOCK] = "/Users/me/Downloads/Dock.app/Contents/MacOS/Dock"
+    with pytest.raises(FocusError, match="Dock"):
+        ui.click(700, 300)
+
+
+def test_backdrop_blocks_when_displays_unknown(ui, mac_layout):
+    mac_layout.display_list = []  # fail closed
+    with pytest.raises(FocusError, match="Dock"):
+        ui.click(700, 300)
+
+
+def test_own_popup_above_backdrop_never_blocks(ui, mac_layout):
+    # Warpium's own context menu at a popup layer, in front of the Dock backdrop.
+    mac_layout.wins.insert(0, WindowInfo(70, WARP, "Warpium", "", 650, 300, 200, 150, 101))
+    ui.click(700, 300)  # screen (700, 333): on Warpium's popup
+    assert len(mac_layout.events) == 2
+
+
+def test_backdrop_on_second_display(ui, fp):
+    fp.display_list = [(0.0, 0.0, 1728.0, 1117.0), (1728.0, 0.0, 1920.0, 1080.0)]
+    fp.exe_paths[DOCK] = DOCK_EXE
+    fp.wins = [
+        WindowInfo(52, DOCK, "Dock", "", 1728, 0, 1920, 1080, 20),
+        WindowInfo(1, WARP, "Warpium", "main", 1800, 100, 800, 600, 0),
+    ]
+    ui.click(10, 10)
+    assert len(fp.events) == 2
 
 
 def test_transparent_window_still_blocks(ui, fp):
