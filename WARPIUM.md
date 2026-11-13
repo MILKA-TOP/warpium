@@ -18,9 +18,10 @@ should stay free of this material.
   files over edits to upstream ones (that is why this guide is not part of AGENTS.md).
 - The `warp` app crate needs `protoc`, which the dev container doesn't have, so it can't be
   compiled there. Other crates can be checked locally; CI is the compile check for the app.
-- To build, run and screenshot the app on the owner's real Mac, use the host MCP server
-  (`tools/mac-mcp`, branch `claude/mac-mcp`), which runs Warpium inside an isolated Tart macOS
-  VM so testing never touches the owner's desktop.
+- To build, run and screenshot the app on the owner's real Mac, use the `warpium-mac` MCP
+  server when it is connected (its tools are `mcp__warpium-mac__*`). It runs Warpium inside an
+  isolated Tart macOS VM so testing never touches the owner's desktop. Its source is
+  `tools/mac-mcp/` (on the `claude/mac-mcp` branch until that is merged).
 
 ## What is still shared with upstream's OSS build
 
@@ -89,9 +90,10 @@ upstream part of the version may be older than the upstream commit Warpium is bu
 `.github/workflows/warpium-build.yml` ("Warpium Build") is fork-only; upstream's workflows are
 gated to `warpdotdev` and don't run here. Don't change whether workflows are enabled.
 
-- **Triggers:** pushes to `master`, pull requests into `master`, Warpium tags, and manual runs.
-  Changes to `**/*.md` and `specs/**` alone don't trigger a build. Pull requests into
-  `claude/**` branches (stacked PRs) are covered once PR #5 lands.
+- **Triggers:** check the `on:` block of the workflow for the current list. At the time of
+  writing: pushes to `master`, pull requests into `master`, Warpium tags, and manual runs;
+  changes to `**/*.md` and `specs/**` alone don't trigger a build. Stacked pull requests into
+  `claude/**` branches don't build unless the workflow lists them (PR #5 proposes adding them).
 - **Jobs:** a cheap `ubuntu-latest` preflight computes the version and the artifact name, then
   the macOS job builds on `macos-15-intel` and cross-compiles arm64 with `--selfsign`
   (about 1.5 h). It checks the plist version and the app icon in the built bundle.

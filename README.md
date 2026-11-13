@@ -28,7 +28,7 @@ Warpium is a lightweight IDE for AI-driven mobile development, built on [Warp](h
 
 <img align="right" width="96" alt="Warpium app icon" src="docs/images/warpium-icon.png" />
 
-1. **Download** the latest `Warpium-…-arm64.dmg` from [Releases](https://github.com/MILKA-TOP/warpium/releases). For the newest development build, open [Actions](https://github.com/MILKA-TOP/warpium/actions/workflows/warpium-build.yml), pick the latest successful run on `master` and download its artifact: a `.zip` that contains the `.dmg`.
+1. **Download** the latest `Warpium-…-arm64.dmg` from [Releases](https://github.com/MILKA-TOP/warpium/releases). Until the first release is published, or for the newest development build, open [Actions](https://github.com/MILKA-TOP/warpium/actions/workflows/warpium-build.yml), pick the latest successful run on `master` and download its artifact: a `.zip` that contains the `.dmg`. Downloading from Actions needs a GitHub sign-in, and artifacts expire after 30 days.
 2. **Open the `.dmg`** and drag **Warpium** to **Applications**.
 3. **Allow it to launch.** Warpium is not notarized by Apple, so macOS blocks it at first. Either run this in Terminal:
 
@@ -42,6 +42,7 @@ Warpium is a lightweight IDE for AI-driven mobile development, built on [Warp](h
 **Good to know**
 
 - Only Apple silicon (arm64) Macs are supported for now.
+- Downloaded builds don't include the built-in `modify-settings` agent skill yet; builds from source do.
 - Warpium can be installed next to the official Warp app; their app data and preferences are separate.
 - It shares `~/.warp-oss` (settings, themes, skills) with upstream Warp's open-source build.
 - Don't install it next to an upstream `WarpOss.app`: both handle `warposs://` links, so sign-in may open the wrong app.

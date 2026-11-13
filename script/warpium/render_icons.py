@@ -113,10 +113,7 @@ PREVIEW_SIZE = (1448, 828)
 PREVIEW_WINDOW = (152, 213, 1293, 10)
 
 
-def render_preview(screenshot: Path) -> Image.Image:
-    shot = Image.open(screenshot).convert("RGBA")
-    if shot.size != PREVIEW_SIZE:
-        raise SystemExit(f"expected a {PREVIEW_SIZE} screenshot (upstream's README image), got {shot.size}")
+def render_preview(shot: Image.Image) -> Image.Image:
     canvas = render_svg(BRANDING / "preview-background.svg", shot.width, shot.height)
     left, top, right, radius = PREVIEW_WINDOW
     window = Image.new("L", shot.size, 0)
@@ -138,6 +135,12 @@ def main() -> None:
         help="upstream Warp's README screenshot; re-renders docs/images/warpium-preview.png",
     )
     args = parser.parse_args()
+    shot = None
+    if args.preview_screenshot:
+        # Check before anything is overwritten.
+        shot = Image.open(args.preview_screenshot).convert("RGBA")
+        if shot.size != PREVIEW_SIZE:
+            raise SystemExit(f"expected a {PREVIEW_SIZE} screenshot (upstream's README image), got {shot.size}")
 
     for size in NO_PADDING_SIZES:
         write(render_icon(size), NO_PADDING_DIR / f"{size}x{size}.png")
@@ -162,8 +165,8 @@ def main() -> None:
         render_svg(BRANDING / "dmg-background.svg", 700, 500),
         MAC_RESOURCES / "warpium_install_image.png",
     )
-    if args.preview_screenshot:
-        write(render_preview(args.preview_screenshot), DOCS_IMAGES / "warpium-preview.png")
+    if shot is not None:
+        write(render_preview(shot), DOCS_IMAGES / "warpium-preview.png")
 
 
 if __name__ == "__main__":

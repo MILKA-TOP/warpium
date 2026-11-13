@@ -28,7 +28,7 @@ shadow) for the `.icns` and the README icon.
 1. `icon.svg`: **primary icon** (Dock, `.app`, `.dmg`, `.ico`, Linux). White mark on a
    violet gradient (`#8B5CFF` top left, `#5B3CF5`, blue `#3D6BF0` bottom right) with a soft
    cyan glow and a faint construction grid.
-2. `icon-small.svg`: the primary icon as rendered at 40 px and below: a larger mark, a near-opaque
+2. `icon-small.svg`: the primary icon at small sizes (up to `SMALL_ICON_MAX_PX` in `render_icons.py`): a larger mark, a near-opaque
    overlap, no grid or border.
 3. `icon-light.svg`: colour mark on white to light lavender.
 4. `icon-dark.svg`: colour mark on `#29254D` to `#1E1B3A`.
