@@ -4,6 +4,10 @@
 # runners, uploads it as a workflow artifact and, for Warpium release tags, attaches
 # it to a GitHub Release. It needs no secrets and no private Warp repositories.
 #
+# Releases are normally cut with the "Warpium Release" workflow (warpium-release.yml),
+# which pushes the tag and calls this workflow with `release_tag`; a tag pushed by
+# hand still triggers the same release path.
+#
 # Every build is stamped with the version from WARPIUM_VERSION (see
 # script/warpium/version), e.g. v0.2026.06.03.09.49.stable_00.1.
 name: Warpium Build
@@ -27,12 +31,20 @@ on:
       - 'specs/**'
       - 'tools/**'
   workflow_dispatch:
+  # Called by warpium-release.yml. Tags pushed with GITHUB_TOKEN don't trigger other
+  # workflows, so the release workflow runs this build itself.
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Warpium release tag to build and publish (must match WARPIUM_VERSION at that tag)
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: warpium-build-${{ github.ref }}
+  group: warpium-build-${{ inputs.release_tag || github.ref }}
   # Only cancel superseded PR runs; master runs must finish to save the cache.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -56,6 +68,8 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       plist_version: ${{ steps.version.outputs.plist_version }}
       artifact_name: ${{ steps.version.outputs.artifact_name }}
+      # The tag to publish a release for; empty for branch and PR builds.
+      release_tag: ${{ steps.version.outputs.release_tag }}
     steps:
       - name: Report runner
         run: |
@@ -64,6 +78,7 @@ jobs:
 
       - uses: actions/checkout@v6.0.3
         with:
+          ref: ${{ inputs.release_tag || '' }}
           sparse-checkout: |
             WARPIUM_VERSION
             script/warpium
@@ -72,8 +87,8 @@ jobs:
       - name: Compute Warpium version
         id: version
         env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ inputs.release_tag && 'tag' || github.ref_type }}
+          REF_NAME: ${{ inputs.release_tag || github.ref_name }}
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           version="$(script/warpium/version --tag)"
@@ -84,13 +99,16 @@ jobs:
               exit 1
             fi
             artifact_name="Warpium-$version-macos-arm64"
+            release_tag="$version"
           else
             artifact_name="Warpium-$version-${SHA::8}-macos-arm64"
+            release_tag=""
           fi
           {
             echo "version=$version"
             echo "plist_version=$plist_version"
             echo "artifact_name=$artifact_name"
+            echo "release_tag=$release_tag"
           } >> "$GITHUB_OUTPUT"
           echo "Warpium $version (CFBundleShortVersionString $plist_version), artifact $artifact_name" >> "$GITHUB_STEP_SUMMARY"
 
@@ -105,6 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.3
         with:
+          ref: ${{ inputs.release_tag || '' }}
           # The NLD classifier models are stored in Git LFS and embedded into
           # the binary; without them the app would embed LFS pointer files.
           lfs: true
@@ -217,28 +236,58 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [preflight, macos-arm64]
-    if: github.ref_type == 'tag'
+    if: needs.preflight.outputs.release_tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
+      # Only for script/warpium/release_notes.sh; the notes query GitHub, not local history.
+      - uses: actions/checkout@v6.0.3
+        with:
+          ref: ${{ needs.preflight.outputs.release_tag }}
+          sparse-checkout: script/warpium
+          sparse-checkout-cone-mode: false
+
       - uses: actions/download-artifact@v8.0.1
         with:
           name: ${{ needs.preflight.outputs.artifact_name }}
           path: dist
 
-      - name: Create release
+      - name: Checksum and release notes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.preflight.outputs.release_tag }}
         run: |
+          dmg="Warpium-$TAG-arm64.dmg"
+          if [[ ! -f "dist/$dmg" ]]; then
+            echo "::error::dist/$dmg is missing from the build artifact"
+            ls -l dist
+            exit 1
+          fi
+          # `shasum -a 256 -c` format, so users can verify the download next to the .dmg.
+          (cd dist && sha256sum "$dmg" > "$dmg.sha256")
+          script/warpium/release_notes.sh --tag "$TAG" --dmg "dist/$dmg" > release-notes.md
+          cat release-notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.release_tag }}
+        run: |
+          dmg="dist/Warpium-$TAG-arm64.dmg"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.dmg --clobber
+            # Re-run for an existing release: refresh the assets and the notes.
+            gh release upload "$TAG" "$dmg" "$dmg.sha256" --clobber
+            gh release edit "$TAG" --title "Warpium $TAG" --notes-file release-notes.md \
+              --draft=false --prerelease=false --latest
           else
-            gh release create "$TAG" dist/*.dmg \
+            gh release create "$TAG" "$dmg" "$dmg.sha256" \
               --verify-tag \
               --title "Warpium $TAG" \
-              --generate-notes
+              --notes-file release-notes.md \
+              --latest
           fi
+          echo "Published https://github.com/$GH_REPO/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"

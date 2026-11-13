@@ -63,14 +63,47 @@ else identical to the untagged OSS build.
 
 ### Releasing
 
+Run **Actions → Warpium Release → Run workflow** on `master`, or:
+
 ```bash
-# 1. Bump FORK_COUNTER in WARPIUM_VERSION (e.g. 1 -> 2) and merge that to master.
-# 2. Tag the merged commit with the derived version and push the tag:
-git tag "$(script/warpium/version)"
-git push origin "$(script/warpium/version)"
+# First release of the current UPSTREAM_TAG/FORK_COUNTER (no bump):
+gh workflow run warpium-release.yml --repo MILKA-TOP/warpium --ref master -f bump=false
+# Every later release: bump FORK_COUNTER (e.g. 1 -> 2) first.
+gh workflow run warpium-release.yml --repo MILKA-TOP/warpium --ref master -f bump=true
 ```
 
-The workflow publishes a GitHub Release with `Warpium-<version>-arm64.dmg` attached.
+`.github/workflows/warpium-release.yml` ("Warpium Release"):
+
+1. With `bump=true`, increments `FORK_COUNTER` in `WARPIUM_VERSION` and pushes a
+   `Release Warpium <version>` commit to `master` as `github-actions[bot]`. That works
+   because `master` has no branch protection; the push fails if `master` moved after the run
+   started. If `master` gets protected, bump `FORK_COUNTER` in a PR instead, merge it and run
+   with `bump=false`.
+2. Tags the commit with `script/warpium/version` and pushes the tag. If the tag already exists
+   on the same commit (a retry), it is reused; on another commit the run fails and asks for
+   `bump=true`.
+3. Calls Warpium Build (`workflow_call` with `release_tag`), which builds that tag and runs
+   its `release` job. A separate call is needed because tags pushed with `GITHUB_TOKEN`
+   don't trigger other workflows; for the same reason the bump commit gets no `master` build.
+
+The `release` job uploads `Warpium-<version>-arm64.dmg` and `Warpium-<version>-arm64.dmg.sha256`
+and publishes the release as **latest** (not a prerelease), titled `Warpium <version>`. Re-running
+it for an existing release replaces the assets and the notes. The newest release is always at
+<https://github.com/MILKA-TOP/warpium/releases/latest>.
+
+The notes come from [`script/warpium/release_notes.sh`](script/warpium/release_notes.sh): the
+PRs merged into `master` since the previous release (checked with the compare API, so upstream
+PR numbers never appear), the upstream tag, install steps, the checksum and known limitations.
+Update its known-limitations list when the README's "Good to know" changes. Preview it locally
+with an authenticated `gh`:
+
+```bash
+script/warpium/release_notes.sh --ref master            # notes for the next tag
+script/warpium/release_notes.sh --tag v0.2026.06.03.09.49.stable_00.1  # an existing tag
+```
+
+Pushing a Warpium tag by hand (`git push origin "$(script/warpium/version)"`) still builds
+and publishes the same release through the tag trigger of Warpium Build.
 
 ### After merging upstream Warp
 
@@ -92,7 +125,7 @@ gated to `warpdotdev` and don't run here. Don't change whether workflows are ena
 
 - **Triggers:** check the `on:` block of the workflow for the current list. At the time of
   writing: pushes to `master`, pull requests into `master` or into `claude/**` (stacked PRs),
-  Warpium tags, and manual runs. Changes to `**/*.md`, `specs/**` and `tools/**` alone don't
+  Warpium tags, manual runs, and calls from Warpium Release. Changes to `**/*.md`, `specs/**` and `tools/**` alone don't
   trigger a build, so a PR that only touches tooling such as `tools/mac-mcp` gets no macOS build.
 - **Jobs:** a cheap `ubuntu-latest` preflight computes the version and the artifact name, then
   the macOS job builds on `macos-15-intel` and cross-compiles arm64 with `--selfsign`
@@ -102,9 +135,10 @@ gated to `warpdotdev` and don't run here. Don't change whether workflows are ena
   builds on Apple silicon include it.
 - **Artifacts:** `Warpium-<version>-<sha8>-macos-arm64` for branch and PR builds,
   `Warpium-<version>-macos-arm64` for tags; each contains `Warpium-<version>-arm64.dmg`.
-- **Releases:** only tags with the extra fork component (`v*.*.*.*.*.*.*_*.*`) trigger one,
-  so mirrored upstream tags can't publish a release. Preflight fails if the tag doesn't match
-  `WARPIUM_VERSION`.
+- **Releases:** the `release` job runs for a `workflow_call` from Warpium Release (see
+  [Releasing](#releasing)) or a pushed tag with the extra fork component
+  (`v*.*.*.*.*.*.*_*.*`), so mirrored upstream tags can't publish a release. Preflight fails if
+  the tag doesn't match `WARPIUM_VERSION`.
 
 ## Local release build
 
