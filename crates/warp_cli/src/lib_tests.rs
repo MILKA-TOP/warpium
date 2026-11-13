@@ -4137,3 +4137,37 @@ fn report_external_reference_missing_reference_type_fails() {
         "missing --reference-type should fail to parse"
     );
 }
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn ripgrep_search_parses_filter_flags() {
+    let args = Args::try_parse_from([
+        "warp",
+        "ripgrep-search",
+        "--no-ignore",
+        "--include-glob=src/**/*.kt",
+        "--include-glob=*.gradle.kts",
+        "--exclude-glob=!Cargo.lock",
+        "--exclude-glob=-generated-*",
+        "needle",
+        "/repo",
+    ])
+    .unwrap();
+
+    let Some(Command::Worker(WorkerCommand::RipgrepSearch {
+        no_ignore,
+        include_globs,
+        exclude_globs,
+        pattern,
+        paths,
+        ..
+    })) = args.command
+    else {
+        panic!("Expected `warp ripgrep-search` command");
+    };
+    assert!(no_ignore);
+    assert_eq!(include_globs, vec!["src/**/*.kt", "*.gradle.kts"]);
+    assert_eq!(exclude_globs, vec!["!Cargo.lock", "-generated-*"]);
+    assert_eq!(pattern, "needle");
+    assert_eq!(paths, vec![std::path::PathBuf::from("/repo")]);
+}

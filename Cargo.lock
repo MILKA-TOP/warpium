@@ -15976,6 +15976,7 @@ dependencies = [
  "command",
  "futures",
  "getrandom 0.2.16",
+ "globset",
  "grep",
  "ignore",
  "instant",
@@ -15984,6 +15985,8 @@ dependencies = [
  "serde",
  "serde_json",
  "string-offset",
+ "tempfile",
+ "thiserror 2.0.17",
  "warp_cli",
 ]
 

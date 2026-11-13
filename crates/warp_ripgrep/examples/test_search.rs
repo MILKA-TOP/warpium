@@ -16,7 +16,14 @@ fn main() -> Result<()> {
     println!("Searching for pattern: {pattern}");
     println!("In paths: {paths:?}");
 
-    warp_ripgrep::search::run_search_subprocess(&[pattern], paths, false, false, None)?;
+    warp_ripgrep::search::run_search_subprocess(
+        &[pattern],
+        paths,
+        false,
+        false,
+        &warp_ripgrep::filter::SearchFilters::default(),
+        None,
+    )?;
 
     Ok(())
 }

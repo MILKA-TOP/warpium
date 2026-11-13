@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use futures::StreamExt as _;
@@ -13,6 +13,7 @@ use remote_server::proto::RipgrepSearchSuccess;
 use remote_server::protocol::RequestId;
 use string_offset::ByteOffset;
 use warp_errors::report_error;
+use warp_ripgrep::filter::{PathFilter, SearchFilters};
 use warp_ripgrep::search::{Match as RipgrepMatch, Submatch};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -143,6 +144,7 @@ impl GlobalSearch {
         };
         let ignore_case = !search_config.use_case_sensitivity;
         let multiline = effective_pattern.contains('\n');
+        let filters = search_config.filters;
 
         // Split roots into the local filesystem source and one remote
         // source per host.
@@ -194,11 +196,29 @@ impl GlobalSearch {
                 local_roots,
                 ignore_case,
                 multiline,
+                filters.clone(),
                 ctx,
             );
         }
 
+        // The remote protocol has no filter fields, so remote hosts always respect ignore files
+        // and globs are applied to the returned matches instead.
+        let remote_path_filter = if filters.has_globs() && !remote_roots.is_empty() {
+            match PathFilter::new(&filters) {
+                Ok(path_filter) => Some(path_filter),
+                Err(err) => {
+                    log::warn!("GlobalSearch: not filtering remote matches: {err}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         for (host_id, paths) in remote_roots {
+            let path_filter = remote_path_filter
+                .clone()
+                .map(|path_filter| (path_filter, paths.clone()));
             let params = RipgrepSearchParams {
                 pattern: effective_pattern.clone(),
                 roots: paths,
@@ -206,7 +226,7 @@ impl GlobalSearch {
                 multiline,
                 max_matches: REMOTE_MAX_MATCH_COUNT,
             };
-            self.spawn_remote_search(search_id, host_id, params, ctx);
+            self.spawn_remote_search(search_id, host_id, params, path_filter, ctx);
         }
     }
 
@@ -217,6 +237,7 @@ impl GlobalSearch {
         roots: Vec<PathBuf>,
         ignore_case: bool,
         multiline: bool,
+        filters: SearchFilters,
         ctx: &mut ModelContext<Self>,
     ) {
         let spawner = ctx.spawner();
@@ -230,6 +251,7 @@ impl GlobalSearch {
                     roots,
                     ignore_case,
                     multiline,
+                    filters,
                     spawner,
                 )
                 .await;
@@ -255,6 +277,7 @@ impl GlobalSearch {
         search_id: u32,
         host_id: HostId,
         params: RipgrepSearchParams,
+        path_filter: Option<(PathFilter, Vec<StandardizedPath>)>,
         ctx: &mut ModelContext<Self>,
     ) {
         let pending = RemoteServerManager::handle(ctx).update(ctx, |manager, _| {
@@ -270,7 +293,8 @@ impl GlobalSearch {
                 match pending.result().await {
                     Ok(success) => {
                         let capped = success.capped;
-                        let mut items = Self::remote_matches_to_global(&host_id, success);
+                        let mut items =
+                            Self::remote_matches_to_global(&host_id, success, path_filter.as_ref());
                         let match_count = items.len();
                         flush_batch(&spawner, search_id, &mut items).await;
                         Some(SourceResult {
@@ -310,10 +334,12 @@ impl GlobalSearch {
     }
 
     /// Converts a remote search response into per-submatch result rows,
-    /// attaching the originating host to each match location.
+    /// attaching the originating host to each match location. When `path_filter` is set, drops
+    /// matches in files it rejects, resolving paths against the given search roots.
     fn remote_matches_to_global(
         host_id: &HostId,
         success: RipgrepSearchSuccess,
+        path_filter: Option<&(PathFilter, Vec<StandardizedPath>)>,
     ) -> Vec<GlobalSearchMatch> {
         success
             .matches
@@ -326,6 +352,11 @@ impl GlobalSearch {
                         return None;
                     }
                 };
+                if let Some((path_filter, roots)) = path_filter
+                    && !Self::is_remote_path_allowed(&path, roots, path_filter)
+                {
+                    return None;
+                }
                 let submatches = m
                     .submatches
                     .into_iter()
@@ -344,6 +375,25 @@ impl GlobalSearch {
             })
             .flat_map(Self::expand_submatches)
             .collect()
+    }
+
+    /// Whether `path` passes `path_filter`, relative to the deepest of `roots` containing it.
+    /// Paths outside every root are kept.
+    fn is_remote_path_allowed(
+        path: &StandardizedPath,
+        roots: &[StandardizedPath],
+        path_filter: &PathFilter,
+    ) -> bool {
+        let relative = roots
+            .iter()
+            .filter_map(|root| path.strip_prefix(root))
+            .min_by_key(|relative| relative.len());
+        match relative {
+            Some(relative) if !relative.is_empty() => {
+                path_filter.is_file_allowed(Path::new(relative))
+            }
+            _ => true,
+        }
     }
 
     /// Records the completion of one search source (`None` when the source
@@ -409,6 +459,7 @@ impl GlobalSearch {
         roots: Vec<PathBuf>,
         ignore_case: bool,
         multiline: bool,
+        filters: SearchFilters,
         spawner: ModelSpawner<GlobalSearch>,
     ) -> Result<usize> {
         let roots_display: Vec<_> = roots.iter().map(|r| r.display().to_string()).collect();
@@ -418,8 +469,13 @@ impl GlobalSearch {
         );
 
         let patterns = &[pattern];
-        let stream =
-            warp_ripgrep::search::search_streaming(patterns, &roots, ignore_case, multiline)?;
+        let stream = warp_ripgrep::search::search_streaming_with_filters(
+            patterns,
+            &roots,
+            ignore_case,
+            multiline,
+            &filters,
+        )?;
         futures::pin_mut!(stream);
 
         let mut total_match_count: usize = 0;

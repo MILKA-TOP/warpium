@@ -9,6 +9,7 @@ use async_channel::Sender;
 use instant::Instant;
 use pathfinder_geometry::vector::vec2f;
 use remote_server::HostId;
+use settings::Setting as _;
 use string_offset::{ByteOffset, CharCounter};
 use warp_core::r#async::debounce;
 use warp_core::send_telemetry_from_ctx;
@@ -17,6 +18,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as ThemeFill};
 use warp_editor::editor::NavigationKey;
+use warp_ripgrep::filter::{PathFilter, SearchFilters, is_valid_glob, parse_glob_list};
 use warp_ripgrep::search::Submatch;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -48,6 +50,7 @@ use crate::editor::{
     PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, TextOptions,
 };
 use crate::search::ItemHighlightState as SearchHighlightState;
+use crate::settings::{CodeSettings, CodeSettingsChangedEvent};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
@@ -107,6 +110,10 @@ pub enum GlobalSearchAction {
     FocusResultsList,
     ToggleRegexSearch,
     ToggleCaseSensitivity,
+    ToggleSearchDetails,
+    ToggleUseIgnoreFiles,
+    FocusIncludeEditor,
+    FocusExcludeEditor,
 }
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -344,6 +351,15 @@ pub struct GlobalSearchView {
     regex_button: ViewHandle<ActionButton>,
     case_sensitivity_enabled: bool,
     case_sensitivity_button: ViewHandle<ActionButton>,
+    search_details_visible: bool,
+    search_details_button: ViewHandle<ActionButton>,
+    include_editor: ViewHandle<EditorView>,
+    exclude_editor: ViewHandle<EditorView>,
+    filter_change_tx: Sender<()>,
+    last_searched_filters: Option<SearchFilters>,
+    /// Whether ignore files and the exclude setting apply and hidden files are skipped.
+    use_ignore_files: bool,
+    use_ignore_files_button: ViewHandle<ActionButton>,
 }
 
 impl Entity for GlobalSearchView {
@@ -502,6 +518,30 @@ impl TypedActionView for GlobalSearchView {
                     button.set_active(self.case_sensitivity_enabled, ctx);
                 });
                 self.rerun_search_from_query(ctx, true);
+            }
+            GlobalSearchAction::ToggleSearchDetails => {
+                self.search_details_visible = !self.search_details_visible;
+                self.search_details_button.update(ctx, |button, ctx| {
+                    button.set_active(self.search_details_visible, ctx);
+                });
+                if self.search_details_visible {
+                    self.focus_filter_editor(self.include_editor.clone(), ctx);
+                } else {
+                    self.enter_query_mode(ctx);
+                }
+            }
+            GlobalSearchAction::ToggleUseIgnoreFiles => {
+                self.use_ignore_files = !self.use_ignore_files;
+                self.use_ignore_files_button.update(ctx, |button, ctx| {
+                    button.set_active(self.use_ignore_files, ctx);
+                });
+                self.rerun_search_from_query(ctx, true);
+            }
+            GlobalSearchAction::FocusIncludeEditor => {
+                self.focus_filter_editor(self.include_editor.clone(), ctx);
+            }
+            GlobalSearchAction::FocusExcludeEditor => {
+                self.focus_filter_editor(self.exclude_editor.clone(), ctx);
             }
         }
     }
@@ -686,12 +726,61 @@ impl GlobalSearchView {
                 })
         });
 
+        let search_details_button = ctx.add_typed_action_view(|_ctx| {
+            ActionButton::new_with_boxed_theme(String::new(), Arc::new(NakedTheme))
+                .with_icon(UiIcon::DotsHorizontal)
+                .with_tooltip("Toggle Search Details")
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(GlobalSearchAction::ToggleSearchDetails);
+                })
+        });
+
+        let use_ignore_files_button = ctx.add_typed_action_view(|_ctx| {
+            ActionButton::new_with_boxed_theme(String::new(), Arc::new(NakedTheme))
+                .with_icon(UiIcon::FilterFunnel)
+                .with_tooltip("Use Exclude Settings and Ignore Files")
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(GlobalSearchAction::ToggleUseIgnoreFiles);
+                })
+        });
+        use_ignore_files_button.update(ctx, |button, ctx| {
+            button.set_active(true, ctx);
+        });
+
+        let include_editor = Self::create_filter_editor("e.g. src/**/*.kt, *.gradle.kts", ctx);
+        let exclude_editor =
+            Self::create_filter_editor("e.g. *build*, **/node_modules/**, *.lock", ctx);
+
+        let (filter_change_tx, filter_change_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(
+            debounce(QUERY_DEBOUNCE_PERIOD, filter_change_rx),
+            Self::handle_debounced_filter_change,
+            |_, _| {},
+        );
+
         ctx.subscribe_to_view(&query_editor, |me, _handle, event, ctx| {
             me.handle_query_editor_event(event, ctx);
         });
 
+        for filter_editor in [&include_editor, &exclude_editor] {
+            ctx.subscribe_to_view(filter_editor, |me, _handle, event, ctx| {
+                me.handle_filter_editor_event(event, ctx);
+            });
+        }
+
         ctx.subscribe_to_model(&find_model, |me, _handle, event, ctx| {
             me.handle_find_model_event(event, ctx);
+        });
+
+        ctx.subscribe_to_model(&CodeSettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, CodeSettingsChangedEvent::GlobalSearchExclude { .. })
+                && me.use_ignore_files
+                && me.last_searched_pattern.is_some()
+            {
+                me.rerun_search_from_query(ctx, true);
+            }
         });
         let handle = ctx.handle();
 
@@ -721,7 +810,43 @@ impl GlobalSearchView {
             regex_button,
             case_sensitivity_enabled: false,
             case_sensitivity_button,
+            search_details_visible: false,
+            search_details_button,
+            include_editor,
+            exclude_editor,
+            filter_change_tx,
+            last_searched_filters: None,
+            use_ignore_files: true,
+            use_ignore_files_button,
         }
+    }
+
+    fn create_filter_editor(
+        placeholder: &'static str,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<EditorView> {
+        ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let options = EditorOptions {
+                text: TextOptions::ui_text(Some(13.), appearance),
+                select_all_on_focus: true,
+                clear_selections_on_blur: true,
+                propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::Always,
+                single_line: true,
+                autogrow: false,
+                soft_wrap: false,
+                ..Default::default()
+            };
+
+            let mut editor = EditorView::new(options, ctx);
+            editor.set_placeholder_text(placeholder, ctx);
+            editor
+        })
+    }
+
+    fn focus_filter_editor(&mut self, editor: ViewHandle<EditorView>, ctx: &mut ViewContext<Self>) {
+        self.set_query_mode_state(ctx);
+        ctx.focus(&editor);
     }
 
     pub fn on_left_panel_focused(
@@ -834,6 +959,60 @@ impl GlobalSearchView {
         self.rerun_search_from_query(ctx, false);
     }
 
+    fn handle_debounced_filter_change(&mut self, _event: (), ctx: &mut ViewContext<Self>) {
+        // Skip when Enter already searched with these filters, or the edit didn't change the
+        // parsed globs (e.g. a trailing comma).
+        if self.last_searched_filters.as_ref() == Some(&self.search_filters(ctx)) {
+            return;
+        }
+        self.rerun_search_from_query(ctx, true);
+    }
+
+    fn handle_filter_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
+        match event {
+            EditorEvent::Edited(_)
+            | EditorEvent::BufferReplaced
+            | EditorEvent::BufferReinitialized => {
+                let _ = self.filter_change_tx.try_send(());
+            }
+            EditorEvent::Enter => {
+                self.rerun_search_from_query(ctx, true);
+            }
+            _ => {}
+        }
+    }
+
+    /// Builds the search filters from the toggle, the filter inputs and the exclude setting.
+    fn search_filters(&self, ctx: &AppContext) -> SearchFilters {
+        // Invalid globs in the setting are dropped rather than failing every search, since they
+        // can't be fixed from the search panel.
+        let mut exclude_globs: Vec<String> = if self.use_ignore_files {
+            CodeSettings::as_ref(ctx)
+                .global_search_exclude
+                .value()
+                .iter()
+                .filter(|glob| {
+                    let is_valid = is_valid_glob(glob);
+                    if !is_valid {
+                        log::warn!("GlobalSearch: ignoring invalid global_search_exclude glob");
+                    }
+                    is_valid
+                })
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        exclude_globs.extend(parse_glob_list(
+            &self.exclude_editor.as_ref(ctx).buffer_text(ctx),
+        ));
+        SearchFilters {
+            use_ignore_files: self.use_ignore_files,
+            include_globs: parse_glob_list(&self.include_editor.as_ref(ctx).buffer_text(ctx)),
+            exclude_globs,
+        }
+    }
+
     fn handle_query_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
         match event {
             EditorEvent::Navigate(NavigationKey::Down) => {
@@ -916,6 +1095,16 @@ impl GlobalSearchView {
 
         self.last_searched_pattern = Some(pattern.clone());
 
+        let filters = self.search_filters(ctx);
+        self.last_searched_filters = Some(filters.clone());
+        if let Err(err) = PathFilter::new(&filters) {
+            self.cancel_search(ctx);
+            self.reset_search_state(false);
+            self.last_error = Some(err.to_string());
+            ctx.notify();
+            return;
+        }
+
         let roots = self.search_roots.clone();
         self.find_model.update(ctx, |model, model_ctx| {
             model.run_search(
@@ -924,6 +1113,7 @@ impl GlobalSearchView {
                 SearchConfig {
                     use_regex: self.regex_search_enabled,
                     use_case_sensitivity: self.case_sensitivity_enabled,
+                    filters,
                 },
                 model_ctx,
             );
@@ -2116,6 +2306,7 @@ impl View for GlobalSearchView {
             );
         editor_row.add_child(case_sensitivity_button);
         editor_row.add_child(regex_button);
+        editor_row.add_child(ChildView::new(&self.search_details_button).finish());
         let editor_row = editor_row.finish();
 
         let query_row_container = Container::new(editor_row)
@@ -2138,6 +2329,24 @@ impl View for GlobalSearchView {
             .with_child(search_label)
             .with_child(query_row);
 
+        if self.search_details_visible {
+            header_column = header_column
+                .with_child(self.render_filter_input(
+                    "Files to include",
+                    &self.include_editor,
+                    None,
+                    GlobalSearchAction::FocusIncludeEditor,
+                    appearance,
+                ))
+                .with_child(self.render_filter_input(
+                    "Files to exclude",
+                    &self.exclude_editor,
+                    Some(ChildView::new(&self.use_ignore_files_button).finish()),
+                    GlobalSearchAction::FocusExcludeEditor,
+                    appearance,
+                ));
+        }
+
         let files = self.unique_match_count();
         let file_word = if files == 1 { "file" } else { "files" };
 
@@ -2146,7 +2355,7 @@ impl View for GlobalSearchView {
         } else if self.is_search_in_progress && self.total_match_count == 0 {
             "Searching…".to_string()
         } else if !self.is_search_in_progress && self.total_match_count == 0 {
-            "No results found. Review your gitignore files.".to_string()
+            "No results found. Review your gitignore files and search filters.".to_string()
         } else {
             match self.total_match_count {
                 1 => format!("1 result in {files} {file_word}"),
@@ -2180,6 +2389,27 @@ impl View for GlobalSearchView {
 
         if self.last_searched_pattern.is_some() {
             header_column = header_column.with_child(match_text);
+        }
+
+        let has_remote_roots = self
+            .search_roots
+            .iter()
+            .any(|root| matches!(root, LocalOrRemotePath::Remote(_)));
+        if self.search_details_visible && !self.use_ignore_files && has_remote_roots {
+            let remote_note = Span::new(
+                "Remote folders always use ignore files and skip hidden files.".to_string(),
+                UiComponentStyles {
+                    font_family_id: Some(appearance.ui_font_family()),
+                    font_size: Some(12.),
+                    font_color: Some(blended_colors::text_disabled(theme, theme.background())),
+                    ..Default::default()
+                },
+            )
+            .with_soft_wrap()
+            .build()
+            .finish();
+            header_column =
+                header_column.with_child(Container::new(remote_note).with_margin_top(4.).finish());
         }
 
         if self.capped_matches {
@@ -2244,6 +2474,53 @@ impl View for GlobalSearchView {
 }
 
 impl GlobalSearchView {
+    /// Renders a labeled glob input box with an optional trailing button inside the box.
+    fn render_filter_input(
+        &self,
+        label: &'static str,
+        editor: &ViewHandle<EditorView>,
+        trailing_button: Option<Box<dyn Element>>,
+        focus_action: GlobalSearchAction,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+
+        let label = Text::new_inline(label, appearance.ui_font_family(), 12.)
+            .with_color(blended_colors::text_sub(theme, theme.background()))
+            .finish();
+
+        let mut input_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Shrinkable::new(1.0, Clipped::new(ChildView::new(editor).finish()).finish())
+                    .finish(),
+            );
+        if let Some(trailing_button) = trailing_button {
+            input_row.add_child(trailing_button);
+        }
+
+        let input_box = Container::new(input_row.finish())
+            .with_padding(Padding::uniform(6.))
+            .with_border(Border::all(BORDER_WIDTH).with_border_fill(theme.surface_3()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(BORDER_RADIUS)))
+            .with_margin_top(2.)
+            .with_margin_bottom(4.)
+            .finish();
+
+        let input = EventHandler::new(input_box)
+            .on_left_mouse_down(move |ctx, _, _| {
+                ctx.dispatch_typed_action(focus_action.clone());
+                DispatchEventResult::StopPropagation
+            })
+            .finish();
+
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(Container::new(label).with_margin_top(2.).finish())
+            .with_child(input)
+            .finish()
+    }
+
     fn render_zero_state(
         &self,
         icon: Icon,
