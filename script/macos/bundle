@@ -439,8 +439,12 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     DMG_BACKGROUND="app/assets/resources/mac/warpium_install_image.png"
     DMG_VOLUME_ICON="app/channels/oss/icon/Warpium.icns"
     # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
-    # (which would otherwise pull in the Sentry framework dependency).
-    FEATURES="release_bundle,extern_plist"
+    # (which would otherwise pull in the Sentry framework dependency). Remove
+    # only that feature so extra ones passed via --features are kept.
+    FEATURES=",$FEATURES,"
+    FEATURES="${FEATURES//,cocoa_sentry,/,}"
+    FEATURES="${FEATURES#,}"
+    FEATURES="${FEATURES%,}"
 fi
 
 OUT_DIR="target/$TARGET_PROFILE_DIR/bundle/osx"
