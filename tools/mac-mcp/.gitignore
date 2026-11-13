@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+# Client configs carry the bearer token. Never commit them.
+.mcp.json
+*.token
+client-config*.txt

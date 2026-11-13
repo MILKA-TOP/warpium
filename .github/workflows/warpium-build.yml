@@ -18,12 +18,14 @@ on:
     paths-ignore:
       - '**/*.md'
       - 'specs/**'
+      - 'tools/**'
   pull_request:
     # `claude/**` lets PRs stacked on an unmerged fork branch build too.
     branches: [master, 'claude/**']
     paths-ignore:
       - '**/*.md'
       - 'specs/**'
+      - 'tools/**'
   workflow_dispatch:
 
 permissions:

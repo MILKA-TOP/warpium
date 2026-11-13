@@ -91,9 +91,9 @@ upstream part of the version may be older than the upstream commit Warpium is bu
 gated to `warpdotdev` and don't run here. Don't change whether workflows are enabled.
 
 - **Triggers:** check the `on:` block of the workflow for the current list. At the time of
-  writing: pushes to `master`, pull requests into `master`, Warpium tags, and manual runs;
-  changes to `**/*.md` and `specs/**` alone don't trigger a build. Stacked pull requests into
-  `claude/**` branches don't build unless the workflow lists them (PR #5 proposes adding them).
+  writing: pushes to `master`, pull requests into `master` or into `claude/**` (stacked PRs),
+  Warpium tags, and manual runs. Changes to `**/*.md`, `specs/**` and `tools/**` alone don't
+  trigger a build, so a PR that only touches tooling such as `tools/mac-mcp` gets no macOS build.
 - **Jobs:** a cheap `ubuntu-latest` preflight computes the version and the artifact name, then
   the macOS job builds on `macos-15-intel` and cross-compiles arm64 with `--selfsign`
   (about 1.5 h). It checks the plist version and the app icon in the built bundle.

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OPTIONAL. Not installed automatically. The recommended way to run the server
+  is in the foreground in a terminal (Ctrl+C stops it).
+
+  To use: replace YOUR_USER and the paths, copy to ~/Library/LaunchAgents/,
+  then `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.milka.warpium-mac-mcp.plist`.
+  Stop and remove with `launchctl bootout gui/$(id -u)/dev.milka.warpium-mac-mcp`.
+
+  Under launchd, macOS attributes Screen Recording and Accessibility to the uv/python binary
+  instead of your terminal, so you have to grant those permissions to that binary separately.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.milka.warpium-mac-mcp</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOUR_USER/.local/bin/uv</string>
+    <string>run</string>
+    <string>--directory</string>
+    <string>/Users/YOUR_USER/src/warpium-mcp/tools/mac-mcp</string>
+    <string>warpium-mac-mcp</string>
+    <string>serve</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/YOUR_USER/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USER/.config/warpium-mac-mcp/server.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USER/.config/warpium-mac-mcp/server.log</string>
+</dict>
+</plist>
