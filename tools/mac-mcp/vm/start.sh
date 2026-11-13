@@ -3,6 +3,11 @@
 # opens an SSH local forward host 127.0.0.1:17654 -> guest 127.0.0.1:17654, so
 # the container keeps using http://host.docker.internal:17654/mcp unchanged.
 # Idempotent: re-run it any time (e.g. after the forward died).
+#
+# WARPIUM_VM_VNC=1 also starts Virtualization.framework's VNC server
+# (tart run --vnc-experimental; nothing runs in the guest) and prints the
+# vnc:// URL to watch the guest screen live. The VM must be started this way:
+# if it already runs without VNC, stop it first (vm/stop.sh).
 source "$(dirname "$0")/common.sh"
 
 require_macos_arm64
@@ -75,4 +80,18 @@ cat <<EOF
 
 ${_B}Ready.${_N} The container connects to http://host.docker.internal:$MCP_PORT/mcp
 (first time: vm/print-client-config.sh). Stop with vm/stop.sh.
+Watch tool calls and new screenshots live: vm/watch.sh
 EOF
+
+if vnc_requested; then
+  if url="$(wait_for_vnc_url 30)"; then
+    cat <<EOF
+
+${_B}Live view (VNC):${_N} $url
+  open it in macOS Screen Sharing:  open "$url"
+  The URL carries a per-run password; it changes every time the VM starts.
+EOF
+  else
+    warn "tart printed no vnc:// URL within 30 s; look for 'VNC server is running at' in $VM_LOG"
+  fi
+fi

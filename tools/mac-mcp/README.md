@@ -105,7 +105,26 @@ What each step does:
 vm/start.sh      # before a session (idempotent; re-run if the forward died)
 vm/stop.sh       # shuts the VM down and closes the forward (--forward-only keeps the VM)
 vm/reset.sh --yes  # throw the VM away and recreate it from warpium-test-golden
+vm/watch.sh      # follow the guest's audit log and new screenshots live (Ctrl+C stops)
 ```
+
+**Watch the VM's screen live:** `vm/stop.sh`, then `WARPIUM_VM_VNC=1 vm/start.sh`. This
+starts `tart run --no-graphics --vnc-experimental`: Virtualization.framework's own VNC server
+runs on the host, and nothing is turned on inside the guest (its Screen Sharing stays off). At
+the end, `start.sh` prints the `vnc://` URL that tart reported (it carries a password that
+changes on every VM start) and the command to open it, `open "vnc://..."`. The URL is also in
+`~/.config/warpium-mac-mcp/vm/warpium-test.log`. Composes with `WARPIUM_VM_NET=bridged`.
+
+**Watch tool calls live:** `vm/watch.sh [N]` shows the last N (default 20) audit records, then
+follows new ones and prints the guest path of each new screenshot (with an `scp` line to fetch
+it). By hand:
+`ssh -i ~/.config/warpium-mac-mcp/vm_ed25519 admin@$(tart ip warpium-test) tail -f ~/.config/warpium-mac-mcp/audit.log`.
+
+**System dialogs in the VM:** the guest server runs with `--vm-mode`, so an agent can see and
+answer macOS alerts and permission prompts there: `list_system_dialogs`, then
+`screenshot(window="id:<id>")` and `click`/`type_text`/`press_keys` with `window="id:<id>"`,
+or `screenshot(window="screen")` and `target="screen"` for the whole display. See SECURITY.md
+("VM mode relaxations"); a host-mode server never has these.
 
 `reset.sh` gives every test session a clean macOS with the server and permissions already in
 place. After `git pull`, run `vm/provision.sh` (with the VM started) and, if you like,
@@ -118,10 +137,13 @@ place. After `git pull`, run `vm/provision.sh` (with the VM started) and, if you
   `~/.config/warpium-mac-mcp/server.log` inside the VM.
 - **Shell in the guest:**
   `ssh -i ~/.config/warpium-mac-mcp/vm_ed25519 -o UserKnownHostsFile=~/.config/warpium-mac-mcp/vm_known_hosts -o HostKeyAlias=warpium-test admin@$(tart ip warpium-test)`
-- **See the VM's screen:** `vm/stop.sh && tart run warpium-test` (opens a window; add
-  `--net-bridged=<if>` in bridged mode). Screen Sharing (VNC) is turned off in the guest.
+- **See the VM's screen:** `WARPIUM_VM_VNC=1 vm/start.sh` (see Daily use), or
+  `vm/stop.sh && tart run warpium-test` (opens a window; add `--net-bridged=<if>` in bridged
+  mode). Screen Sharing in the guest stays off either way.
 - **`doctor` says a permission is not granted:** the permissions shown come from the running
-  server (it records them at start and on every `doctor` call). Re-run
+  server (it records them at start and on every `doctor` call), not from your SSH session.
+  `provision.sh` prints them with `warpium-mac-mcp server-status`, which reads that record
+  (exit code 0 = both granted, 1 = one missing, 2 = no running server). Re-run
   `vm/grant-permissions.sh`; if Accessibility stays off, run
   `tccutil reset Accessibility com.apple.Terminal` in the guest and enable it again.
 - **"Hardening guest logins" failed** (for example `eDSAuthFailed` from an older
@@ -393,6 +415,13 @@ have, so use `install_artifact(run_id)` and `app_launch(source="artifact")` inst
 | `warpctrl_catalog` | Allowed actions, parameter shapes and enums. |
 | `list_targets` | `app.active` plus window, tab, pane and session lists. |
 | `get_metadata(scope, target)` | `<scope>.inspect` for window, tab, pane, session or instance. |
+| `list_system_dialogs` | **VM mode only.** On-screen windows of macOS system UI processes (UserNotificationCenter, SecurityAgent, CoreServicesUIAgent, universalAccessAuthWarn, coreautha, System Settings, ...) with ids and bounds. |
+
+VM mode only (`serve --vm-mode`, set by `vm/provision.sh`): `screenshot(window="screen")`
+captures the whole display and `screenshot(window="id:<id>")` a system dialog;
+`click`, `type_text` and `press_keys` take `window="id:<id>"` (a dialog: its process is
+brought to the front, coordinates are dialog-relative) or `target="screen"` (screen points;
+keys go to whatever has keyboard focus).
 
 Coordinates: `click` and `scroll` take **window-relative points**. `screenshot` returns
 `image_px_per_window_point`; divide pixel coordinates by it, or pass `from_screenshot=true`

@@ -86,12 +86,36 @@ def _build_command(name: str, argv: list[str], ok: Callable[[str], bool], fix: s
     return Check(name, rc == 0 and ok(out), out, fix, False, "build")
 
 
-def in_virtual_machine() -> bool | None:
-    """macOS sets kern.hv_vmm_present=1 inside a Virtualization.framework guest."""
+# Model identifier of a Virtualization.framework macOS guest (Tart, UTM, ...),
+# e.g. "VirtualMac2,1". Real Macs report MacBookPro18,3, Mac14,2, iMac21,1, ...
+VM_MODEL_PREFIX = "VirtualMac"
+
+
+def vm_signals() -> dict:
+    """Raw VM evidence: ``kern.hv_vmm_present`` (1 inside a hypervisor guest)
+    and ``hw.model``. Values are None when they could not be read."""
     if sys.platform != "darwin":
-        return None
+        return {"hv_vmm_present": None, "model": None}
     rc, out = _run(["/usr/sbin/sysctl", "-n", "kern.hv_vmm_present"], timeout=10)
-    return out.strip() == "1" if rc == 0 else None
+    hv = out.strip() if rc == 0 else None
+    rc, out = _run(["/usr/sbin/sysctl", "-n", "hw.model"], timeout=10)
+    model = out.strip() if rc == 0 else None
+    return {"hv_vmm_present": hv, "model": model}
+
+
+def is_vm(signals: dict) -> bool | None:
+    """True only when both signals agree on a VM guest; None when neither
+    could be read (not macOS, or sysctl failed)."""
+    hv, model = signals.get("hv_vmm_present"), signals.get("model")
+    if hv is None and model is None:
+        return None
+    return hv == "1" and bool(model) and model.startswith(VM_MODEL_PREFIX)
+
+
+def in_virtual_machine() -> bool | None:
+    """True inside a Virtualization.framework macOS guest such as the Tart VM.
+    The server's --vm-mode requires this to be True."""
+    return is_vm(vm_signals())
 
 
 def summarize(checks: list[Check]) -> dict:
@@ -124,6 +148,7 @@ def record_server_permissions(cfg: Config, platform_impl) -> dict | None:
         # None = macOS didn't say (API unavailable), not "denied".
         "screen_recording": tri(platform_impl.screen_recording_allowed()),
         "accessibility": tri(platform_impl.accessibility_allowed()),
+        "vm_mode": cfg.vm_mode,
     }
     path = server_permissions_path(cfg)
     try:

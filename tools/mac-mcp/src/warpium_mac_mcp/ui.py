@@ -10,6 +10,12 @@ Invariants enforced here (unit-tested against a fake platform):
   app's floating window can't receive the click). The one exception is a
   full-display backdrop window owned by a macOS system UI process (see
   :func:`is_system_backdrop`), which does not take clicks in normal use.
+
+VM mode (``serve --vm-mode``, only inside a macOS VM guest) relaxes these for
+the throwaway guest: the whole display can be captured, system dialogs
+(:data:`SYSTEM_DIALOG_OWNERS`) can be listed, captured and sent input via
+``window="id:<n>"``, and ``target="screen"`` sends input at screen points to
+whatever is there. Warpium windows keep the guarded path in both modes.
 """
 
 from __future__ import annotations
@@ -44,6 +50,27 @@ SYSTEM_UI_OWNERS = frozenset(
         "Wallpaper",
     }
 )
+# Owner names of macOS system UI processes whose windows (alerts, permission
+# prompts, auth sheets, Settings) VM mode may list, capture and send input to.
+# Only together with an executable under SYSTEM_EXECUTABLE_PREFIXES.
+SYSTEM_DIALOG_OWNERS = frozenset(
+    {
+        "UserNotificationCenter",
+        "SecurityAgent",
+        "CoreServicesUIAgent",
+        "universalAccessAuthWarn",
+        "System Settings",
+        "System Preferences",
+        "coreautha",
+        "Notification Center",
+        "NotificationCenter",
+        "loginwindow",
+        "Software Update",
+        "Installer",
+    }
+)
+# Pseudo window id of the whole main display in VM mode (screenshot "screen").
+SCREEN_WINDOW_ID = 0
 # A backdrop must cover at least this fraction of a display's area. The Dock
 # bar, the menu bar, menus, popovers and banners are far smaller, so they keep
 # counting as occluders.
@@ -90,6 +117,17 @@ class InputDisabledError(PermissionError):
     pass
 
 
+class VmModeRequiredError(PermissionError):
+    pass
+
+
+def _vm_only(what: str) -> VmModeRequiredError:
+    return VmModeRequiredError(
+        f"{what} is only available in VM mode (server started with --vm-mode inside a "
+        "macOS VM guest); in host mode only Warpium windows can be captured or receive input"
+    )
+
+
 @dataclass
 class Screenshot:
     path: Path
@@ -102,6 +140,17 @@ class Screenshot:
         return self.image_width / self.window.width if self.window.width else 1.0
 
     def metadata(self) -> dict:
+        if self.window.window_id == SCREEN_WINDOW_ID:
+            how = (
+                "Whole display. Pass target='screen' to click/type_text/press_keys; x/y are "
+                "screen points. Divide screenshot pixel coordinates by "
+                "image_px_per_window_point, or pass from_screenshot=true."
+            )
+        else:
+            how = (
+                "click/scroll take window-relative points. Divide screenshot pixel "
+                "coordinates by image_px_per_window_point, or pass from_screenshot=true."
+            )
         return {
             "window": self.window.public(),
             "image": {
@@ -110,10 +159,7 @@ class Screenshot:
                 "path": str(self.path),
             },
             "image_px_per_window_point": round(self.image_px_per_point, 4),
-            "coordinates": (
-                "click/scroll take window-relative points. Divide screenshot pixel "
-                "coordinates by image_px_per_window_point, or pass from_screenshot=true."
-            ),
+            "coordinates": how,
         }
 
 
@@ -127,6 +173,7 @@ class UiController:
         screenshots_dir: Path | None = None,
         sleep: Callable[[float], None] = time.sleep,
         event_delay_s: float = 0.01,
+        vm_mode: bool = False,
     ):
         self._p = platform
         self._target_pids = target_pids
@@ -134,6 +181,7 @@ class UiController:
         self._shots = screenshots_dir
         self._sleep = sleep
         self._delay = event_delay_s
+        self._vm = vm_mode
         self._last_scale: dict[int, float] = {}
         self._lock = threading.Lock()  # serialize input sequences
 
@@ -173,13 +221,19 @@ class UiController:
     ) -> Screenshot:
         if not 200 <= max_width <= 4000:
             raise ValidationError("max_width must be between 200 and 4000")
-        win = self.resolve_window(window)
+        if self._vm:
+            win = self._resolve_vm(window, allow_screen=True)
+        else:
+            win = self.resolve_window(window)
         out_dir = self._shots or Path(tempfile.gettempdir())
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
         raw = out_dir / f"{stamp}-w{win.window_id}-raw.png"
         final = out_dir / f"{stamp}-w{win.window_id}.png"
-        self._p.capture_window(win.window_id, raw)
+        if win.window_id == SCREEN_WINDOW_ID:
+            self._p.capture_screen(raw)
+        else:
+            self._p.capture_window(win.window_id, raw)
         w, _h = png_size(raw)
         if w > max_width:
             self._p.resize_png(raw, final, max_width)
@@ -190,6 +244,131 @@ class UiController:
         shot = Screenshot(final, win, iw, ih)
         self._last_scale[win.window_id] = shot.image_px_per_point
         return shot
+
+    # --- VM mode -----------------------------------------------------------
+    @property
+    def vm_mode(self) -> bool:
+        return self._vm
+
+    def list_system_dialogs(self) -> list[WindowInfo]:
+        """On-screen windows of macOS system UI processes, front-to-back (VM mode only)."""
+        if not self._vm:
+            raise _vm_only("list_system_dialogs")
+        out = []
+        for w in self._p.windows():
+            if w.owner not in SYSTEM_DIALOG_OWNERS or w.width <= 1 or w.height <= 1:
+                continue
+            exe = self._p.process_path(w.pid)
+            if exe and exe.startswith(SYSTEM_EXECUTABLE_PREFIXES):
+                out.append(w)
+        return out
+
+    def _screen_window(self) -> WindowInfo:
+        displays = self._p.displays()
+        if not displays:
+            raise LookupError("no active display reported by macOS")
+        x, y, w, h = displays[0]  # CGGetActiveDisplayList lists the main display first
+        return WindowInfo(SCREEN_WINDOW_ID, 0, "screen", "main display", x, y, w, h, 0)
+
+    def _resolve_vm(self, window: str | int, allow_screen: bool = False) -> WindowInfo:
+        """VM mode: a Warpium window as in host mode, a system dialog by
+        ``id:<n>``, or (``allow_screen``) the whole display as ``"screen"``."""
+        if allow_screen and window == "screen":
+            return self._screen_window()
+        if isinstance(window, str) and window.startswith("id:") and window[3:].isdigit():
+            wid = int(window[3:])
+            for w in self.list_windows():
+                if w.window_id == wid:
+                    return w
+            for w in self.list_system_dialogs():
+                if w.window_id == wid:
+                    return w
+            raise LookupError(
+                f"window id {wid} is neither a Warpium window nor a system dialog "
+                "(see list_windows / list_system_dialogs)"
+            )
+        return self.resolve_window(window)
+
+    def _activate_for_input(self, pid: int) -> bool:
+        """VM mode: best-effort activation of a system dialog's process. Agent
+        processes such as UserNotificationCenter may never report as frontmost,
+        so this does not fail; the result says whether it became frontmost."""
+        if self._p.frontmost_pid() == pid:
+            return True
+        self._p.activate(pid)
+        for _ in range(10):
+            if self._p.frontmost_pid() == pid:
+                return True
+            self._sleep(0.1)
+        return False
+
+    def _vm_input_target(self, window: str | int | None, target: str) -> WindowInfo | None:
+        """The non-Warpium target of an input call: the screen pseudo-window for
+        target="screen" or a system dialog for window="id:<n>" (VM mode only).
+        None means the call takes the guarded Warpium path, as in host mode."""
+        if target not in ("window", "screen"):
+            raise ValidationError("target must be 'window' or 'screen'")
+        if target == "screen":
+            if not self._vm:
+                raise _vm_only("target='screen'")
+            return self._screen_window()
+        if not self._vm or window in (None, "", "frontmost-warpium"):
+            return None
+        win = self._resolve_vm(window)
+        return None if win.pid in self._target_pids() else win
+
+    def _to_screen_vm(
+        self, win: WindowInfo, x: float, y: float, from_screenshot: bool
+    ) -> tuple[float, float]:
+        if win.window_id != SCREEN_WINDOW_ID:
+            return self._to_screen(win, x, y, from_screenshot)
+        if from_screenshot:
+            scale = self._last_scale.get(SCREEN_WINDOW_ID)
+            if not scale:
+                raise ValidationError(
+                    "no screenshot of the screen yet; take screenshot(window='screen') first"
+                )
+            x, y = win.x + x / scale, win.y + y / scale
+        if not win.contains(x, y):
+            raise ValidationError(
+                f"({x:.0f},{y:.0f}) is outside the display "
+                f"({win.x:.0f},{win.y:.0f} {win.width:.0f}x{win.height:.0f} points)"
+            )
+        return x, y
+
+    def _topmost_at(self, sx: float, sy: float) -> WindowInfo | None:
+        for w in self._p.windows():  # front-to-back
+            if w.contains(sx, sy):
+                return w
+        return None
+
+    def _vm_click(
+        self, win: WindowInfo, x: float, y: float, button: str, count: int, from_screenshot: bool
+    ) -> dict:
+        sx, sy = self._to_screen_vm(win, x, y, from_screenshot)
+        hit = self._topmost_at(sx, sy)
+        pid = win.pid if win.window_id != SCREEN_WINDOW_ID else (hit.pid if hit else None)
+        frontmost = self._activate_for_input(pid) if pid else None
+        for i in range(1, count + 1):
+            for kind in ("down", "up"):
+                self._p.post_mouse(kind, sx, sy, button, i)
+                self._sleep(self._delay)
+        return {
+            "clicked": {"screen_x": sx, "screen_y": sy, "button": button, "count": count},
+            "window_id": win.window_id,
+            "vm_mode": True,
+            "hit_window": None
+            if hit is None
+            else {"window_id": hit.window_id, "owner": hit.owner, "pid": hit.pid},
+            "target_frontmost": frontmost,
+        }
+
+    def _vm_key_pid(self, win: WindowInfo) -> tuple[int | None, bool | None]:
+        """Where VM-mode keyboard events go: the dialog's process (activated
+        first), or the global HID tap (None) for target="screen"."""
+        if win.window_id == SCREEN_WINDOW_ID:
+            return None, None
+        return win.pid, self._activate_for_input(win.pid)
 
     # --- guards ------------------------------------------------------------
     def _require_input_enabled(self) -> None:
@@ -275,10 +454,14 @@ class UiController:
         count: int = 1,
         window: str | int = "frontmost-warpium",
         from_screenshot: bool = False,
+        target: str = "window",
     ) -> dict:
         self._require_input_enabled()
         validate_click(button, count)
         with self._lock:
+            other = self._vm_input_target(window, target)
+            if other is not None:
+                return self._vm_click(other, x, y, button, count, from_screenshot)
             win = self.resolve_window(window)
             sx, sy = self._to_screen(win, x, y, from_screenshot)
             for i in range(1, count + 1):
@@ -318,11 +501,25 @@ class UiController:
             self._p.post_scroll(sx, sy, dx, dy)
         return {"scrolled": {"screen_x": sx, "screen_y": sy, "dx": dx, "dy": dy}}
 
-    def press_keys(self, combo: str) -> dict:
+    def press_keys(
+        self, combo: str, window: str | int | None = None, target: str = "window"
+    ) -> dict:
         self._require_input_enabled()
         mods, key = parse_key_combo(combo)
         code = KEY_CODES[key]
         with self._lock:
+            other = self._vm_input_target(window, target)
+            if other is not None:
+                kpid, frontmost = self._vm_key_pid(other)
+                self._p.post_key(code, True, mods, kpid)
+                self._sleep(self._delay)
+                self._p.post_key(code, False, mods, kpid)
+                return {
+                    "pressed": combo,
+                    "window_id": other.window_id,
+                    "vm_mode": True,
+                    "target_frontmost": frontmost,
+                }
             pid = self._check_frontmost()
             self._p.post_key(code, True, mods, pid)
             self._sleep(self._delay)
@@ -330,11 +527,35 @@ class UiController:
             self._p.post_key(code, False, mods, pid)
         return {"pressed": combo}
 
-    def type_text(self, text: str, chunk: int = 16) -> dict:
+    def type_text(
+        self,
+        text: str,
+        chunk: int = 16,
+        window: str | int | None = None,
+        target: str = "window",
+    ) -> dict:
         self._require_input_enabled()
         validate_text(text)
         sent = 0
         with self._lock:
+            other = self._vm_input_target(window, target)
+            if other is not None:
+                kpid, frontmost = self._vm_key_pid(other)
+                for piece in _split_text(text, chunk):
+                    if piece in ("\n", "\t"):
+                        code = KEY_CODES["return" if piece == "\n" else "tab"]
+                        self._p.post_key(code, True, frozenset(), kpid)
+                        self._p.post_key(code, False, frozenset(), kpid)
+                    else:
+                        self._p.post_unicode(piece, kpid)
+                    sent += len(piece)
+                    self._sleep(self._delay)
+                return {
+                    "typed_chars": sent,
+                    "window_id": other.window_id,
+                    "vm_mode": True,
+                    "target_frontmost": frontmost,
+                }
             for piece in _split_text(text, chunk):
                 pid = self._check_frontmost()
                 if piece in ("\n", "\t"):

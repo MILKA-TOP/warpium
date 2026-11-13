@@ -63,11 +63,19 @@ class Platform(Protocol):
 
     def post_scroll(self, x: float, y: float, dx: int, dy: int) -> None: ...
 
-    def post_key(self, keycode: int, down: bool, modifiers: frozenset[str], pid: int) -> None: ...
+    def post_key(
+        self, keycode: int, down: bool, modifiers: frozenset[str], pid: int | None
+    ) -> None:
+        """pid=None posts to the global HID tap (VM mode, target="screen")."""
+        ...
 
-    def post_unicode(self, text: str, pid: int) -> None: ...
+    def post_unicode(self, text: str, pid: int | None) -> None: ...
 
     def capture_window(self, window_id: int, out: Path) -> None: ...
+
+    def capture_screen(self, out: Path) -> None:
+        """The whole main display (VM mode only)."""
+        ...
 
     def resize_png(self, src: Path, dst: Path, max_width: int) -> None: ...
 
@@ -244,22 +252,24 @@ class MacPlatform:
             flags |= m[mod]
         return flags
 
-    def _post_keyboard(self, ev, pid: int) -> None:
+    def _post_keyboard(self, ev, pid: int | None) -> None:
         import Quartz
 
-        if self._key_delivery == "pid":
+        if self._key_delivery == "pid" and pid is not None:
             Quartz.CGEventPostToPid(int(pid), ev)
         else:
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
-    def post_key(self, keycode: int, down: bool, modifiers: frozenset[str], pid: int) -> None:
+    def post_key(
+        self, keycode: int, down: bool, modifiers: frozenset[str], pid: int | None
+    ) -> None:
         import Quartz
 
         ev = Quartz.CGEventCreateKeyboardEvent(None, keycode, down)
         Quartz.CGEventSetFlags(ev, self._flags(modifiers))
         self._post_keyboard(ev, pid)
 
-    def post_unicode(self, text: str, pid: int) -> None:
+    def post_unicode(self, text: str, pid: int | None) -> None:
         import Quartz
 
         units = len(text.encode("utf-16-le")) // 2
@@ -284,6 +294,20 @@ class MacPlatform:
                 str(int(window_id)),
                 str(out),
             ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if r.returncode != 0 or not out.exists():
+            raise RuntimeError(
+                f"screencapture failed ({r.returncode}): {r.stderr.strip()} "
+                "- is Screen Recording granted to the terminal running the server?"
+            )
+
+    def capture_screen(self, out: Path) -> None:
+        # -m: main display only. Only reachable in VM mode (ui.py checks it).
+        r = subprocess.run(
+            ["/usr/sbin/screencapture", "-x", "-m", "-t", "png", str(out)],
             capture_output=True,
             text=True,
             timeout=30,

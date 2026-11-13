@@ -80,7 +80,7 @@ cat > "$HOME/$GUEST_DIR/serve.command" <<EOF
 export PATH="$GUEST_PATH"
 pkill -f "warpium-mac-mcp serve --host 127.0.0.1 --port $PORT" 2>/dev/null && sleep 1
 cd "\$HOME/$GUEST_DIR"
-exec uv run --frozen warpium-mac-mcp serve --host 127.0.0.1 --port $PORT 2>&1 | tee -a "\$HOME/.config/warpium-mac-mcp/server.log"
+exec uv run --frozen warpium-mac-mcp serve --host 127.0.0.1 --port $PORT --vm-mode 2>&1 | tee -a "\$HOME/.config/warpium-mac-mcp/server.log"
 EOF
 chmod 755 "$HOME/$GUEST_DIR/serve.command"
 
@@ -109,6 +109,14 @@ if [ "$console_user" != "$USER" ]; then
   echo "       provide one; reboot the VM (vm/stop.sh && vm/start.sh) and re-run." >&2
   exit 1
 fi
+# Stop a running server first, so the HTTP 401 awaited below comes from the new
+# one (the old server would otherwise answer until serve.command replaces it).
+pattern="warpium-mac-mcp serve --host 127.0.0.1 --port $PORT"
+pkill -f "$pattern" 2>/dev/null || true
+for _ in $(seq 1 20); do
+  pgrep -f "$pattern" >/dev/null 2>&1 || break
+  sleep 0.5
+done
 # bootout is asynchronous: wait until the old job is gone before bootstrapping.
 # Bootstrapping starts the agent once (RunAtLoad); serve.command stops an old server.
 launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
@@ -140,6 +148,19 @@ exit 1
 GUEST
 } | guest_ssh "$IP" 'bash -s' || die "starting the guest server failed (output above)"
 ok "server running in the guest"
+
+# An SSH session has its own (empty) TCC grants, so permissions are read from
+# the record the server process itself writes at start (pid + executable),
+# not from this session. doctor below uses the same record.
+step "Permissions of the server process in the guest"
+perm_rc=0
+guest_ssh "$IP" "export PATH='$GUEST_PATH'; cd ~/$GUEST_DIR && uv run --frozen warpium-mac-mcp server-status --wait 30" ||
+  perm_rc=$?
+case "$perm_rc" in
+  0) ok "the server has Screen Recording and Accessibility" ;;
+  1) warn "the server lacks a permission (above). Run vm/grant-permissions.sh, then vm/provision.sh again" ;;
+  *) warn "could not read the server's permission record (rc $perm_rc); ask the MCP doctor tool instead" ;;
+esac
 
 step "Guest doctor"
 guest_ssh "$IP" "export PATH='$GUEST_PATH'; cd ~/$GUEST_DIR && uv run --frozen warpium-mac-mcp doctor --no-port-check" ||

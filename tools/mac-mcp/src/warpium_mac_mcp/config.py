@@ -105,6 +105,9 @@ class Config:
     # the app is the point of the server; SECURITY.md explains what they mean.
     allow_input: bool = True
     allow_build: bool = True
+    # Relaxed screen/input rules for a throwaway macOS VM guest (serve --vm-mode,
+    # refused unless doctor.in_virtual_machine() is True). See SECURITY.md.
+    vm_mode: bool = False
     extra_allowed_hosts: tuple[str, ...] = ()
 
     @property

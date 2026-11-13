@@ -49,6 +49,23 @@ metadata). warpctrl needs a build with the warp_control_cli feature (the build()
 Settings > Scripting enabled once in the test app.
 """
 
+VM_INSTRUCTIONS = """
+VM mode is on: this server runs in a throwaway macOS VM guest. screenshot(window='screen')
+captures the whole display; list_system_dialogs finds system alerts/permission prompts; pass
+window='id:<id>' (a dialog) or target='screen' to screenshot/click/type_text/press_keys to see
+and answer them.
+"""
+
+SCREENSHOT_VM_DOC = """PNG of a Warpium window, downscaled to max_width. VM mode also allows
+window='screen' (the whole main display; click with target='screen') and 'id:<window_id>' of a
+system dialog from list_system_dialogs. window: 'frontmost-warpium', an index from
+list_windows, 'id:<window_id>', or 'screen'. Returns the image plus bounds and the pixel/point
+scale for click coordinates."""
+
+
+def _win_arg(window: str) -> str | int:
+    return int(window) if window.isdigit() else window
+
 
 @dataclass
 class Services:
@@ -94,6 +111,7 @@ def build_services(cfg: Config, platform: Platform | None) -> Services:
         app.target_pids,
         allow_input=cfg.allow_input,
         screenshots_dir=cfg.screenshots_dir,
+        vm_mode=cfg.vm_mode,
     )
     lc = LocalControlClient(discovery_dir())
     return Services(
@@ -158,7 +176,7 @@ def create_server(s: Services) -> FastMCP:
     cfg = s.cfg
     mcp = FastMCP(
         "warpium-mac",
-        instructions=INSTRUCTIONS,
+        instructions=INSTRUCTIONS + (VM_INSTRUCTIONS if cfg.vm_mode else ""),
         host=cfg.host,
         port=cfg.port,
         stateless_http=False,
@@ -189,6 +207,7 @@ def create_server(s: Services) -> FastMCP:
             **summarize(checks),
             "input_enabled": cfg.allow_input,
             "build_enabled": cfg.allow_build,
+            "vm_mode": cfg.vm_mode,
         }
 
     # ------------------------------------------------------ workspace & build
@@ -324,7 +343,7 @@ def create_server(s: Services) -> FastMCP:
         wins = await _thread(s.ui.list_windows)
         return {"windows": [dict(index=i, **w.public()) for i, w in enumerate(wins)]}
 
-    @mcp.tool(structured_output=False)
+    @mcp.tool(structured_output=False, description=SCREENSHOT_VM_DOC if cfg.vm_mode else None)
     @A()
     async def screenshot(window: str = "frontmost-warpium", max_width: int = 1600) -> list:
         """PNG of one Warpium window only (never the full screen), downscaled to max_width.
@@ -334,6 +353,19 @@ def create_server(s: Services) -> FastMCP:
         shot = await _thread(s.ui.screenshot, win, max_width)
         return [Image(path=shot.path), json.dumps(shot.metadata(), indent=1)]
 
+    if cfg.vm_mode:
+
+        @mcp.tool()
+        @A()
+        async def list_system_dialogs() -> dict:
+            """VM mode only. On-screen windows of macOS system UI processes (permission
+            prompts and alerts from UserNotificationCenter, SecurityAgent, CoreServicesUIAgent,
+            universalAccessAuthWarn, coreautha, System Settings, ...), front-to-back, with
+            window ids and screen bounds. Capture one with screenshot(window='id:<id>') and
+            answer it with click/type_text/press_keys(window='id:<id>')."""
+            wins = await _thread(s.ui.list_system_dialogs)
+            return {"dialogs": [dict(owner=w.owner, layer=w.layer, **w.public()) for w in wins]}
+
     # ------------------------------------------------------------------ input
     @mcp.tool()
     @A()
@@ -341,21 +373,46 @@ def create_server(s: Services) -> FastMCP:
         """Bring the Warpium window under test to the front (required before input tools)."""
         return await _thread(s.ui.focus)
 
-    @mcp.tool()
-    @A()
-    async def click(
-        x: float,
-        y: float,
-        button: Literal["left", "right", "middle"] = "left",
-        count: int = 1,
-        window: str = "frontmost-warpium",
-        from_screenshot: bool = False,
-    ) -> dict:
-        """Click at window-relative point (x, y). With from_screenshot=true, x/y are pixel
-        coordinates in the last screenshot of that window. Refused unless Warpium is frontmost
-        and the point is not covered by another app's window."""
-        win: str | int = int(window) if window.isdigit() else window
-        return await _thread(s.ui.click, x, y, button, count, win, from_screenshot)
+    if not cfg.vm_mode:
+
+        @mcp.tool()
+        @A()
+        async def click(
+            x: float,
+            y: float,
+            button: Literal["left", "right", "middle"] = "left",
+            count: int = 1,
+            window: str = "frontmost-warpium",
+            from_screenshot: bool = False,
+        ) -> dict:
+            """Click at window-relative point (x, y). With from_screenshot=true, x/y are pixel
+            coordinates in the last screenshot of that window. Refused unless Warpium is
+            frontmost and the point is not covered by another app's window."""
+            win: str | int = int(window) if window.isdigit() else window
+            return await _thread(s.ui.click, x, y, button, count, win, from_screenshot)
+
+    else:
+
+        @mcp.tool()
+        @A()
+        async def click(
+            x: float,
+            y: float,
+            button: Literal["left", "right", "middle"] = "left",
+            count: int = 1,
+            window: str = "frontmost-warpium",
+            from_screenshot: bool = False,
+            target: Literal["window", "screen"] = "window",
+        ) -> dict:
+            """Click at window-relative point (x, y) of a Warpium window (guarded: Warpium must
+            be frontmost and the point uncovered) or, VM mode only, of a system dialog
+            (window='id:<id>' from list_system_dialogs; its process is brought to the front
+            first). target='screen': x/y are screen points (or, with from_screenshot=true,
+            pixels of the last screenshot(window='screen')) and the click goes to whatever is
+            there. With from_screenshot=true, x/y are pixels in the last screenshot of the
+            window."""
+            win: str | int = int(window) if window.isdigit() else window
+            return await _thread(s.ui.click, x, y, button, count, win, from_screenshot, target)
 
     @mcp.tool()
     @A()
@@ -372,19 +429,50 @@ def create_server(s: Services) -> FastMCP:
         win: str | int = int(window) if window.isdigit() else window
         return await _thread(s.ui.scroll, x, y, dx, dy, win, from_screenshot)
 
-    @mcp.tool()
-    @A(redact_when=("redact", ["text"]))
-    async def type_text(text: str, redact: bool = False) -> dict:
-        """Type text into the frontmost Warpium window. '\\n' is sent as Return (which runs the
-        command in a terminal), '\\t' as Tab. redact=true keeps the text out of the audit log."""
-        return await _thread(s.ui.type_text, text)
+    if not cfg.vm_mode:
 
-    @mcp.tool()
-    @A()
-    async def press_keys(combo: str) -> dict:
-        """Press a key combination in Warpium, e.g. 'cmd+t', 'cmd+shift+]', 'ctrl+c', 'enter',
-        'escape', 'up'. System shortcuts (cmd+space, cmd+tab, ...) are refused."""
-        return await _thread(s.ui.press_keys, combo)
+        @mcp.tool()
+        @A(redact_when=("redact", ["text"]))
+        async def type_text(text: str, redact: bool = False) -> dict:
+            """Type text into the frontmost Warpium window. '\\n' is sent as Return (which runs
+            the command in a terminal), '\\t' as Tab. redact=true keeps the text out of the
+            audit log."""
+            return await _thread(s.ui.type_text, text)
+
+        @mcp.tool()
+        @A()
+        async def press_keys(combo: str) -> dict:
+            """Press a key combination in Warpium, e.g. 'cmd+t', 'cmd+shift+]', 'ctrl+c',
+            'enter', 'escape', 'up'. System shortcuts (cmd+space, cmd+tab, ...) are refused."""
+            return await _thread(s.ui.press_keys, combo)
+
+    else:
+
+        @mcp.tool()
+        @A(redact_when=("redact", ["text"]))
+        async def type_text(
+            text: str,
+            redact: bool = False,
+            window: str = "frontmost-warpium",
+            target: Literal["window", "screen"] = "window",
+        ) -> dict:
+            """Type text into the frontmost Warpium window, or (VM mode) into a system dialog
+            (window='id:<id>' from list_system_dialogs) or whatever has keyboard focus
+            (target='screen'). '\\n' is sent as Return, '\\t' as Tab. redact=true keeps the
+            text out of the audit log."""
+            return await _thread(s.ui.type_text, text, 16, _win_arg(window), target)
+
+        @mcp.tool()
+        @A()
+        async def press_keys(
+            combo: str,
+            window: str = "frontmost-warpium",
+            target: Literal["window", "screen"] = "window",
+        ) -> dict:
+            """Press a key combination, e.g. 'cmd+t', 'enter', 'escape', 'tab', in Warpium, or
+            (VM mode) in a system dialog (window='id:<id>') or wherever keyboard focus is
+            (target='screen'). System shortcuts (cmd+space, cmd+tab, ...) are refused."""
+            return await _thread(s.ui.press_keys, combo, _win_arg(window), target)
 
     # -------------------------------------------------------------- warpctrl
     @mcp.tool()

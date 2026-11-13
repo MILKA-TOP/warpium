@@ -36,7 +36,7 @@ def _config(args: argparse.Namespace) -> Config:
         kw["workspace_dir"] = args.workspace.expanduser().resolve()
     if args.config_dir:
         kw["config_dir"] = args.config_dir.expanduser().resolve()
-    for name in ("allow_input", "allow_build"):
+    for name in ("allow_input", "allow_build", "vm_mode"):
         if hasattr(args, name):
             kw[name] = getattr(args, name)
     if getattr(args, "allow_host", None):
@@ -59,8 +59,25 @@ def check_bind_host(host: str) -> None:
         )
 
 
+def check_vm_mode(signals: dict | None = None) -> None:
+    """--vm-mode relaxes the screen/input guards; refuse it outside a macOS VM
+    guest so the relaxations can never apply to a real desktop."""
+    from .doctor import is_vm, vm_signals
+
+    signals = vm_signals() if signals is None else signals
+    if is_vm(signals) is not True:
+        raise SystemExit(
+            "refusing --vm-mode: this machine is not a macOS VM guest "
+            f"(kern.hv_vmm_present={signals.get('hv_vmm_present')!r}, "
+            f"hw.model={signals.get('model')!r}; a VM reports 1 and VirtualMac*). "
+            "VM mode lifts the protections for your real desktop; run without it on a host."
+        )
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     check_bind_host(args.host)
+    if args.vm_mode:
+        check_vm_mode()
     cfg = _config(args)
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -96,6 +113,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         allow_input=cfg.allow_input,
         allow_build=cfg.allow_build,
         key_delivery=args.key_delivery,
+        vm_mode=cfg.vm_mode,
     )
     app = build_asgi_app(services, token)
     print(f"warpium-mac-mcp listening on http://{cfg.host}:{cfg.port}/mcp", file=sys.stderr)
@@ -105,6 +123,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     )
     print(f"  workspace:  {cfg.workspace_dir}", file=sys.stderr)
     print(f"  audit log:  {cfg.audit_log_path}", file=sys.stderr)
+    if cfg.vm_mode:
+        print(
+            "  VM mode:    ON (whole-screen capture and input to system dialogs allowed)",
+            file=sys.stderr,
+        )
     if platform is None:
         print(
             "  WARNING: macOS APIs unavailable; screenshot/input tools will fail", file=sys.stderr
@@ -148,6 +171,49 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     )
     print(format_checks(checks))
     return 0 if summarize(checks)["all_required_ok"] else 1
+
+
+def format_server_status(perms: dict | None) -> tuple[str, int]:
+    """Text and exit code for `server-status`: 0 both permissions granted,
+    1 a permission is missing or unknown, 2 no running server found."""
+    if perms is None:
+        return (
+            "no running server found (no live permission record; is the server running "
+            "under this user and config dir?)",
+            2,
+        )
+
+    def state(v: object) -> str:
+        return "unknown" if v is None else ("granted" if v else "NOT granted")
+
+    lines = [
+        f"server pid {perms.get('pid')} ({perms.get('exe')}), checked {perms.get('checked_at')}",
+        f"  Screen Recording: {state(perms.get('screen_recording'))}",
+        f"  Accessibility:    {state(perms.get('accessibility'))}",
+        f"  VM mode:          {'on' if perms.get('vm_mode') else 'off'}",
+    ]
+    good = perms.get("screen_recording") is True and perms.get("accessibility") is True
+    return "\n".join(lines), 0 if good else 1
+
+
+def cmd_server_status(args: argparse.Namespace) -> int:
+    import time
+
+    from .doctor import load_server_permissions
+
+    cfg = _config(args)
+    deadline = time.monotonic() + max(0.0, args.wait)
+    perms = load_server_permissions(cfg)
+    while perms is None and time.monotonic() < deadline:
+        time.sleep(0.5)
+        perms = load_server_permissions(cfg)
+    if args.json:
+        print(json.dumps(perms))
+        _, rc = format_server_status(perms)
+    else:
+        text, rc = format_server_status(perms)
+        print(text)
+    return rc
 
 
 def client_config_text(
@@ -219,7 +285,24 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="extra Host header name to accept (e.g. a VM gateway IP)",
     )
+    p_serve.add_argument(
+        "--vm-mode",
+        action="store_true",
+        help="inside a macOS VM guest only (refused elsewhere): allow whole-screen "
+        "screenshots and input to system dialogs (vm/provision.sh sets it)",
+    )
     p_serve.set_defaults(func=cmd_serve)
+
+    p_st = sub.add_parser(
+        "server-status",
+        help="permissions the running server process itself has (from its own record)",
+    )
+    _add_common(p_st)
+    p_st.add_argument(
+        "--wait", type=float, default=0.0, help="seconds to wait for a running server's record"
+    )
+    p_st.add_argument("--json", action="store_true", help="print the raw record as JSON")
+    p_st.set_defaults(func=cmd_server_status)
 
     p_doc = sub.add_parser("doctor", help="check prerequisites and permissions")
     _add_common(p_doc)

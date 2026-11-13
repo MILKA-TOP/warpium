@@ -93,9 +93,10 @@ spawn (`WARP_SHELL_PATH`), redirect its data (`WARP_DATA_PROFILE`) or carry secr
   argument list, never `shell=True`.
 - Read or write files outside `~/warpium-mac-test/` and the Warpium log file. Paths go through
   `realpath`, then a containment check, so `..` segments and symlinks pointing outside are rejected.
-- Capture other apps' windows or the full screen.
+- Capture other apps' windows or the full screen (outside a VM guest; see "VM mode
+  relaxations").
 - Send input to any app other than the Warpium process it launched, or one running from the
-  workspace. Process executables are read from the kernel (`proc_pidpath`), not from `ps`/argv[0],
+  workspace (same exception). Process executables are read from the kernel (`proc_pidpath`), not from `ps`/argv[0],
   which any process can spoof.
 - Bind to `0.0.0.0` or `::`. Wildcard binds are refused outright.
 - Touch `/Applications` or your other repos, or kill, screenshot or type into your daily
@@ -162,6 +163,30 @@ Implemented in `src/warpium_mac_mcp/ui.py` and unit-tested with a fake platform.
   is not accepted at all. Bare `f11`/`f12` (Show Desktop / Notification Center) and `ctrl+digit`
   (switch Desktop) are refused too.
 
+## VM mode relaxations (`serve --vm-mode`)
+
+A system alert or permission prompt in the VM guest (for example from UserNotificationCenter
+on Warpium's first launch) covers the Warpium window, and the input guard above then refuses
+every click with no way to see or dismiss the alert. The guest is a throwaway machine with
+nothing of yours on it, so inside it, and only there, the server can lift the restriction:
+
+- **Opt-in and VM-only.** `--vm-mode` must be passed explicitly (the guest's launchd agent
+  from `vm/provision.sh` does; nothing on the host does). The server refuses to start with it
+  unless the machine is a Virtualization.framework guest: both `kern.hv_vmm_present` is `1`
+  **and** `hw.model` starts with `VirtualMac`. A real Mac reports `0` and a model such as
+  `Mac14,2`, so a host-mode server can't enable the relaxations by accident.
+- **What it allows:** `screenshot(window="screen")` (the whole main display);
+  `list_system_dialogs` (windows of a fixed list of system UI processes, each with an
+  executable under `/System/` or `/usr/`, read from the kernel); `screenshot`, `click`,
+  `type_text` and `press_keys` with `window="id:<id>"` of such a dialog (its process is
+  activated first; the frontmost and topmost-window checks are skipped because agent processes
+  like UserNotificationCenter never become frontmost); and `target="screen"` for input at
+  screen points (keys go to the global HID tap, i.e. whatever has focus).
+- **What stays the same:** input to Warpium windows keeps every check of the input guard,
+  system shortcuts stay refused, `--no-input` still disables all input, and every call,
+  including the VM-only ones, is in the audit log. Without `--vm-mode` the tool list, tool
+  parameters and behavior are exactly as described above.
+
 ## Test-app isolation
 
 - The server always sets `WARP_DATA_PROFILE=mcp-test`, and the client cannot change or unset
@@ -197,7 +222,8 @@ you use only for this.
 
 `uv run warpium-mac-mcp doctor` reports whether both are granted. The running server records
 its own state at start and on every `doctor` tool call; a CLI `doctor` run from another
-context (e.g. over SSH into the VM) reports the server's state, not its own.
+context (e.g. over SSH into the VM) reports the server's state, not its own;
+`warpium-mac-mcp server-status` prints just that record (`vm/provision.sh` uses it).
 
 In VM mode the grants go to Terminal.app **inside the guest** (it runs the server there), via
 the one-time `vm/grant-permissions.sh` step. Nothing is granted on your host.

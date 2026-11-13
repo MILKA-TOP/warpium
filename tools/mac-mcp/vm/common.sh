@@ -47,6 +47,7 @@ PENDING_PASSWORD_FILE="$ADMIN_PASSWORD_FILE.pending"
 FORWARD_PID_FILE="$STATE_DIR/forward.pid"
 VM_LOG="$STATE_DIR/$VM_NAME.log"
 FORWARD_LOG="$STATE_DIR/forward.log"
+VNC_LOG_MARK_FILE="$STATE_DIR/$VM_NAME.vnc-log-mark"
 
 # vmnet's shared (NAT) network, used by Tart VMs. Unset keys mean 192.168.64.1/24.
 # `defaults` takes the path *without* .plist: it appends the extension, so
@@ -727,15 +728,52 @@ start_vm_headless() {
       *--net-*) [ -n "$want" ] && [[ "$cmd" == *" $want "* ]] ;;
       *) [ -z "$want" ] ;;
     esac || die "VM $VM_NAME is running with other network settings ('$cmd'); run vm/stop.sh and re-run to use $NET_DESC"
+    if vnc_requested && [[ "$cmd" != *" --vnc-experimental "* ]]; then
+      die "VM $VM_NAME is running without VNC; run vm/stop.sh, then WARPIUM_VM_VNC=1 vm/start.sh"
+    fi
     ok "VM $VM_NAME is already running ($NET_DESC)"
     return 0
   fi
   [ "$(vm_net_mode)" != "softnet" ] || require_softnet_ready
-  step "Starting VM $VM_NAME headless, network $NET_DESC (log: $VM_LOG)"
-  nohup tart run --no-graphics ${NET_ARGS[@]+"${NET_ARGS[@]}"} "$VM_NAME" >>"$VM_LOG" 2>&1 </dev/null &
+  local vnc_args=()
+  if vnc_requested; then
+    vnc_args=(--vnc-experimental)
+    # The URL tart prints for this run is the first one after this mark.
+    wc -l <"$VM_LOG" 2>/dev/null | tr -d ' ' >"$VNC_LOG_MARK_FILE" || echo 0 >"$VNC_LOG_MARK_FILE"
+  fi
+  step "Starting VM $VM_NAME headless, network $NET_DESC${vnc_args[*]:+, VNC on} (log: $VM_LOG)"
+  # --vnc-experimental: Virtualization.framework's own VNC server on the host (no
+  # guest service). With --no-graphics, tart prints "VNC server is running at
+  # vnc://..." to stdout (the log) instead of opening it, and shows no window.
+  nohup tart run --no-graphics ${vnc_args[@]+"${vnc_args[@]}"} ${NET_ARGS[@]+"${NET_ARGS[@]}"} \
+    "$VM_NAME" >>"$VM_LOG" 2>&1 </dev/null &
   disown || true
   sleep 3
   vm_running "$VM_NAME" || die "tart run exited immediately; see $VM_LOG"
+}
+
+vnc_requested() { [ "${WARPIUM_VM_VNC:-0}" = "1" ]; }
+
+# The vnc:// URL tart printed for the current run (empty if none yet).
+vnc_url() {
+  local mark=0
+  [ -s "$VNC_LOG_MARK_FILE" ] && mark="$(cat "$VNC_LOG_MARK_FILE")"
+  [ -f "$VM_LOG" ] || return 0
+  tail -n "+$((mark + 1))" "$VM_LOG" | grep -o 'vnc://[^ ]*' | tail -1 | sed 's/\.\.\.$//' || true
+}
+
+# Waits up to $1 seconds for vnc_url.
+wait_for_vnc_url() {
+  local url
+  for _ in $(seq 1 "$1"); do
+    url="$(vnc_url)"
+    if [ -n "$url" ]; then
+      echo "$url"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 # Stops the VM and waits (up to 30 s) for its `tart run` process to exit.
