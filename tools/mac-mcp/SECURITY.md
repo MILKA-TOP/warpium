@@ -1,7 +1,37 @@
 # warpium-mac-mcp: security model
 
-This server runs on the owner's real Mac and lets a remote agent (Claude Code in a
-Docker container) build, launch, observe and drive Warpium. Read this before you run it.
+This server lets a remote agent (Claude Code in a Docker container) build, launch, observe and
+drive Warpium on macOS. Read this before you run it.
+
+## Where it runs: VM (recommended) or host
+
+**VM mode (recommended, `vm/`).** The server and the Warpium under test run inside a Tart
+macOS VM. The VM boundary is the main isolation layer:
+
+- Clicks, keystrokes, focus changes and app windows happen on the VM's own virtual display.
+  Your desktop, cursor and frontmost app are untouched.
+- The guest has no access to your files, keychain or logins. No host directories are shared
+  into the VM (`tart run` is started without `--dir`), the server code is copied in with rsync,
+  and `install_artifact` uses a fine-grained, read-only GitHub token limited to
+  `MILKA-TOP/warpium` (`vm/gh-token.sh`), never your own gh login.
+- Code built or launched by the agent, including `build.rs` scripts and the app, runs as the
+  guest's `admin` user, inside the VM. `vm/reset.sh` throws the VM away and recreates it from
+  the golden copy.
+- The host reaches the guest server only through an SSH local forward that binds the **host's
+  `127.0.0.1:17654`** (`ssh -N -L 127.0.0.1:17654:127.0.0.1:17654`); the guest server itself
+  binds the guest's `127.0.0.1`. Nothing listens on the host's LAN interfaces.
+- SSH into the guest uses a dedicated key (`~/.config/warpium-mac-mcp/vm_ed25519`) and a host
+  key pinned per VM name. `vm/setup.sh` replaces the image's well-known `admin`/`admin`
+  password with a random one (stored on the host, mode 600, needed for auto-login and the
+  one-time permission step) and disables SSH password logins.
+- Limits of the boundary: the VM uses Tart's default NAT network, so the guest can reach the
+  internet and, like any device on that network, services the host exposes on its non-loopback
+  interfaces. For stricter isolation use `tart run --net-softnet` (see the Tart docs). The
+  passwordless sudo of the cirruslabs image stays enabled inside the guest.
+
+**Host mode (fallback).** The server runs on your real Mac. Then everything below applies to
+your own desktop and user account, and the input guard is what keeps input away from your
+other apps.
 
 ## The short version
 
@@ -86,11 +116,26 @@ Implemented in `src/warpium_mac_mcp/ui.py` and unit-tested with a fake platform.
   PID is not the Warpium under test, the call stops with an error and nothing more is sent.
 - Clicks and scrolls also require that the topmost on-screen window at that point belongs to
   Warpium. This is re-checked before every mouse event, including each down/up of a double
-  click. A notification banner, menu bar, Dock, another app's floating window or a transparent
-  overlay covering the point causes a refusal. Transparent windows count because they can still
-  receive clicks. If a helper app keeps an invisible full-screen overlay, clicks are refused, and
-  the error names the owning app so you can quit it. Coordinates outside the target window are
-  rejected.
+  click. Windows are walked front to back; the first one containing the point decides. Any
+  window of the Warpium under test (at any layer, including its own context menus and popups)
+  allows the click. A notification banner, the menu bar, the Dock bar, another app's floating
+  window or a transparent overlay covering the point causes a refusal. Transparent windows
+  count because they can still receive clicks. If a helper app keeps an invisible full-screen
+  overlay, clicks are refused, and the error names the owning app so you can quit it.
+  Coordinates outside the target window are rejected.
+- One exception: recent macOS keeps **full-display backdrop windows** of system UI processes
+  above normal windows. For example, the Dock owns a layer-20 window covering the whole
+  display for the desktop, Mission Control and the app launcher, and it doesn't take clicks in
+  normal use. Such a window is skipped only when **all** of these hold: the owner is one of a
+  fixed list of system UI processes (Dock, Window Server, Control Center, SystemUIServer,
+  Notification Center, Spotlight, WindowManager, Wallpaper); its executable, read from the
+  kernel, is under `/System/` or `/usr/`, so an app that merely names itself "Dock" isn't
+  exempt; its layer is above 0; and it covers at least 90% of an active display. The Dock bar
+  strip, the menu bar, menus, popovers and banners are much smaller and still block. If the
+  display list or the executable can't be read, the window blocks (fail closed). Residual
+  risk: while Mission Control or the app launcher is actually open, its backdrop would not
+  block a click. The frontmost check still applies, and the click lands at a point that is
+  inside the Warpium window.
 - Keyboard events are posted with `CGEventPostToPid(<warpium pid>)` by default. Even if focus
   changes between the check and the event, the keystroke can't land in another app. If Warpium
   ignores pid-targeted events on your macOS version, `--key-delivery hid` posts to the global
@@ -138,11 +183,17 @@ These permissions apply to everything run from that terminal, not just this serv
 rather not grant them to your main terminal, run the server from a dedicated terminal app that
 you use only for this.
 
-`uv run warpium-mac-mcp doctor` reports whether both are granted.
+`uv run warpium-mac-mcp doctor` reports whether both are granted. The running server records
+its own state at start and on every `doctor` tool call; a CLI `doctor` run from another
+context (e.g. over SSH into the VM) reports the server's state, not its own.
+
+In VM mode the grants go to Terminal.app **inside the guest** (it runs the server there), via
+the one-time `vm/grant-permissions.sh` step. Nothing is granted on your host.
 
 ## Running it
 
-- Default: run it in the foreground in a terminal; Ctrl+C stops it and cancels running jobs.
+- VM mode: `vm/start.sh` / `vm/stop.sh`; nothing starts at login on the host.
+- Host mode: run it in the foreground in a terminal; Ctrl+C stops it and cancels running jobs.
   A launchd plist example is in `launchd/`. It is optional and never installed automatically.
 - Run the server from a checkout you have reviewed, **not** from the workspace clone it manages.
   `repo_sync` rewrites that clone to whatever branch the agent asks for.

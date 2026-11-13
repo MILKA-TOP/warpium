@@ -73,6 +73,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     platform = make_platform(args.key_delivery)
     services = build_services(cfg, platform)
+    from .doctor import record_server_permissions
+
+    perms = record_server_permissions(cfg, platform)
     services.audit.write(
         "server_start",
         host=cfg.host,
@@ -94,6 +97,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(
             "  WARNING: macOS APIs unavailable; screenshot/input tools will fail", file=sys.stderr
         )
+    elif perms is not None:
+        for key, label in (
+            ("screen_recording", "Screen Recording"),
+            ("accessibility", "Accessibility"),
+        ):
+            if not perms[key]:
+                print(f"  WARNING: {label} permission not granted to this process", file=sys.stderr)
     print("  Ctrl+C to stop.", file=sys.stderr)
     try:
         uvicorn.run(
@@ -113,13 +123,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    from .doctor import format_checks, run_checks
+    from .doctor import format_checks, load_server_permissions, run_checks, summarize
     from .server import make_platform
 
     cfg = _config(args)
-    checks = run_checks(cfg, make_platform(), check_port=True)
+    checks = run_checks(
+        cfg,
+        make_platform(),
+        check_port=not args.no_port_check,
+        server_permissions=load_server_permissions(cfg),
+    )
     print(format_checks(checks))
-    return 0 if all(c.ok for c in checks if c.required) else 1
+    return 0 if summarize(checks)["all_required_ok"] else 1
 
 
 def client_config_text(
@@ -195,6 +210,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_doc = sub.add_parser("doctor", help="check prerequisites and permissions")
     _add_common(p_doc)
+    p_doc.add_argument(
+        "--no-port-check",
+        action="store_true",
+        help="skip the 'port free' check (use while the server is already running)",
+    )
     p_doc.set_defaults(func=cmd_doctor)
 
     p_cc = sub.add_parser("client-config", help="print the container-side `claude mcp add` command")

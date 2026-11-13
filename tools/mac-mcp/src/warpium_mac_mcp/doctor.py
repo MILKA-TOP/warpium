@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import platform as py_platform
 import shutil
@@ -9,7 +10,10 @@ import socket
 import stat
 import subprocess
 import sys
+import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from .config import Config
 from .warpctrl import discovery_dir
@@ -22,25 +26,131 @@ class Check:
     detail: str = ""
     fix: str = ""
     required: bool = True
+    # "core": needed to drive an installed artifact (screenshots, input, logs).
+    # "build": only needed for local builds (build, run_integration_test);
+    #          never affects all_required_ok, summarized as build_ready.
+    # "info": informational.
+    category: str = "core"
 
 
-def _run(argv: list[str], timeout: float = 20) -> tuple[int, str]:
+# Cold xcrun/protoc/rustup invocations can take well over 20 s on the first
+# call after boot (xcrun populates its cache, Gatekeeper scans the binary).
+TOOL_TIMEOUT_S = 60
+TIMEOUT_RC = -999
+RETRY_FIX = "slow first run: run doctor again (it usually succeeds once warm)"
+
+
+def _run(argv: list[str], timeout: float = TOOL_TIMEOUT_S) -> tuple[int, str]:
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
         return r.returncode, (r.stdout + r.stderr).strip()
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except subprocess.TimeoutExpired:
+        return TIMEOUT_RC, f"timed out after {timeout:.0f} s"
+    except OSError as e:
         return 127, str(e)
 
 
-def _tool(name: str, version_args: list[str], fix: str, required: bool = True) -> Check:
+def _tool(
+    name: str,
+    version_args: list[str],
+    fix: str,
+    required: bool = True,
+    category: str = "core",
+) -> Check:
     path = shutil.which(name)
     if not path:
-        return Check(name, False, "not found on PATH", fix, required)
+        return Check(name, False, "not found on PATH", fix, required, category)
     rc, out = _run([path, *version_args])
-    return Check(name, rc == 0, out.splitlines()[0] if out else path, fix if rc else "", required)
+    if rc == TIMEOUT_RC:
+        return Check(name, False, f"{path}: {out}", RETRY_FIX, required, category)
+    detail = out.splitlines()[0] if out else path
+    return Check(name, rc == 0, detail, fix if rc else "", required, category)
 
 
-def run_checks(cfg: Config, platform_impl=None, check_port: bool = False) -> list[Check]:
+def _build_tool(name: str, version_args: list[str], fix: str) -> Check:
+    return _tool(name, version_args, fix, required=False, category="build")
+
+
+def _build_command(name: str, argv: list[str], ok: Callable[[str], bool], fix: str) -> Check:
+    rc, out = _run(argv)
+    if rc == TIMEOUT_RC:
+        return Check(name, False, out, RETRY_FIX, False, "build")
+    return Check(name, rc == 0 and ok(out), out, fix, False, "build")
+
+
+def in_virtual_machine() -> bool | None:
+    """macOS sets kern.hv_vmm_present=1 inside a Virtualization.framework guest."""
+    if sys.platform != "darwin":
+        return None
+    rc, out = _run(["/usr/sbin/sysctl", "-n", "kern.hv_vmm_present"], timeout=10)
+    return out.strip() == "1" if rc == 0 else None
+
+
+def summarize(checks: list[Check]) -> dict:
+    return {
+        "all_required_ok": all(c.ok for c in checks if c.required),
+        "build_ready": all(c.ok for c in checks if c.category == "build"),
+    }
+
+
+def server_permissions_path(cfg: Config) -> Path:
+    return cfg.config_dir / "server-permissions.json"
+
+
+def record_server_permissions(cfg: Config, platform_impl) -> dict | None:
+    """Called by the server process (at start and on each doctor call): saves
+    its own TCC state, so `warpium-mac-mcp doctor` run from another context
+    (an SSH session into the VM) can report what the server actually has."""
+    if platform_impl is None:
+        return None
+    data = {
+        "pid": os.getpid(),
+        "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "screen_recording": bool(platform_impl.screen_recording_allowed()),
+        "accessibility": bool(platform_impl.accessibility_allowed()),
+    }
+    path = server_permissions_path(cfg)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # diagnostics only
+    return data
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def load_server_permissions(cfg: Config, alive: Callable[[int], bool] = _pid_alive) -> dict | None:
+    """The running server's last permission report, or None if no server that
+    wrote one is still alive."""
+    try:
+        data = json.loads(server_permissions_path(cfg).read_text())
+    except (OSError, ValueError):
+        return None
+    pid = data.get("pid") if isinstance(data, dict) else None
+    if not isinstance(pid, int) or pid == os.getpid() or not alive(pid):
+        return None
+    return data
+
+
+def run_checks(
+    cfg: Config,
+    platform_impl=None,
+    check_port: bool = False,
+    server_permissions: dict | None = None,
+) -> list[Check]:
     checks: list[Check] = []
     is_mac = sys.platform == "darwin"
     checks.append(
@@ -52,27 +162,54 @@ def run_checks(cfg: Config, platform_impl=None, check_port: bool = False) -> lis
         )
     )
     checks.append(Check("python>=3.11", sys.version_info >= (3, 11), sys.version.split()[0]))
+    vm = in_virtual_machine()
+    if vm is not None:
+        checks.append(
+            Check(
+                "environment",
+                True,
+                "macOS VM guest (isolated from your desktop)"
+                if vm
+                else "macOS host (input acts on your real desktop; the Tart VM setup is safer)",
+                required=False,
+                category="info",
+            )
+        )
 
-    # Permissions (granted to the terminal app that runs the server).
-    if is_mac and platform_impl is not None:
-        sr = platform_impl.screen_recording_allowed()
+    # Permissions belong to the app that runs the server (its terminal app).
+    # A doctor run from another context (e.g. over SSH into the VM) has other
+    # grants than the server, so a running server's own report wins.
+    if is_mac and (server_permissions is not None or platform_impl is not None):
+        if server_permissions is not None:
+            sr = server_permissions.get("screen_recording")
+            ax = server_permissions.get("accessibility")
+            source = (
+                f" (reported by the running server, pid {server_permissions.get('pid')}, "
+                f"at {server_permissions.get('checked_at')})"
+            )
+        else:
+            sr = platform_impl.screen_recording_allowed()
+            ax = platform_impl.accessibility_allowed()
+            source = ""
         checks.append(
             Check(
                 "Screen Recording permission",
                 bool(sr),
-                "granted" if sr else "not granted",
-                "System Settings > Privacy & Security > Screen Recording: "
-                "enable your terminal app, then restart it",
+                ("granted" if sr else "not granted") + source,
+                "System Settings > Privacy & Security > Screen & System Audio Recording: "
+                "enable the app that runs the server (your terminal app; in the VM run "
+                "vm/grant-permissions.sh on the host), then restart the server",
             )
         )
-        ax = platform_impl.accessibility_allowed()
         checks.append(
             Check(
                 "Accessibility permission (synthetic input)",
                 bool(ax),
-                "granted" if ax else "not granted",
-                "System Settings > Privacy & Security > Accessibility: enable your terminal app, "
-                "then restart it",
+                ("granted" if ax else "not granted") + source,
+                "System Settings > Privacy & Security > Accessibility: enable the app that "
+                "runs the server, then restart it. Still 'not granted' after enabling: run "
+                "`tccutil reset Accessibility <bundle id>` (e.g. com.apple.Terminal) and add "
+                "the app again",
             )
         )
     elif is_mac:
@@ -85,7 +222,8 @@ def run_checks(cfg: Config, platform_impl=None, check_port: bool = False) -> lis
             )
         )
 
-    # Build toolchain.
+    # git/gh: repo_sync and install_artifact. The Rust/Xcode toolchain is only
+    # needed for local builds (category "build", reported as build_ready).
     checks.append(_tool("git", ["--version"], "xcode-select --install"))
     checks.append(_tool("gh", ["--version"], "brew install gh && gh auth login", required=False))
     if shutil.which("gh"):
@@ -100,41 +238,38 @@ def run_checks(cfg: Config, platform_impl=None, check_port: bool = False) -> lis
             )
         )
     checks.append(
-        _tool(
+        _build_tool(
             "rustup",
             ["--version"],
             "curl https://sh.rustup.rs -sSf | sh (then reopen the terminal)",
         )
     )
-    checks.append(_tool("cargo", ["--version"], "install Rust via rustup"))
+    checks.append(_build_tool("cargo", ["--version"], "install Rust via rustup"))
     if (cfg.clone_dir / "rust-toolchain.toml").exists() and shutil.which("rustup"):
-        rc, out = _run(["rustup", "show", "active-toolchain"], timeout=60)
         checks.append(
-            Check(
+            _build_command(
                 "rust toolchain for the clone",
-                rc == 0 and "1.92" in out,
-                out,
+                ["rustup", "show", "active-toolchain"],
+                lambda out: "1.92" in out,
                 f"cd {cfg.clone_dir} && rustup toolchain install 1.92.0",
             )
         )
-    checks.append(_tool("protoc", ["--version"], "brew install protobuf"))
+    checks.append(_build_tool("protoc", ["--version"], "brew install protobuf"))
     if is_mac:
-        rc, out = _run(["xcode-select", "-p"])
         checks.append(
-            Check(
+            _build_command(
                 "Xcode (xcode-select -p)",
-                rc == 0 and "Xcode" in out,
-                out,
+                ["xcode-select", "-p"],
+                lambda out: "Xcode" in out,
                 "install Xcode 26 from the App Store, then "
                 "sudo xcode-select -s /Applications/Xcode.app",
             )
         )
-        rc, out = _run(["xcrun", "-f", "metal"])
         checks.append(
-            Check(
+            _build_command(
                 "Metal toolchain (xcrun -f metal)",
-                rc == 0,
-                out,
+                ["xcrun", "-f", "metal"],
+                lambda out: True,
                 "xcodebuild -downloadComponent MetalToolchain",
             )
         )
@@ -229,11 +364,28 @@ def run_checks(cfg: Config, platform_impl=None, check_port: bool = False) -> lis
 def format_checks(checks: list[Check]) -> str:
     lines = []
     for c in checks:
-        mark = "ok  " if c.ok else ("FAIL" if c.required else "warn")
+        if c.ok:
+            mark = "ok  "
+        elif c.required:
+            mark = "FAIL"
+        elif c.category == "build":
+            mark = "bld "  # missing, but only needed for local builds
+        else:
+            mark = "warn"
         line = f"[{mark}] {c.name}: {c.detail}"
         if not c.ok and c.fix:
             line += f"\n        fix: {c.fix}"
         lines.append(line)
+    s = summarize(checks)
+    lines.append("")
+    lines.append(
+        "required (artifacts, screenshots, input): "
+        + ("all ok" if s["all_required_ok"] else "MISSING, see FAIL lines")
+    )
+    lines.append(
+        "local builds (build, run_integration_test): "
+        + ("ready" if s["build_ready"] else "not ready, see 'bld' lines (fine with artifacts)")
+    )
     return "\n".join(lines)
 
 

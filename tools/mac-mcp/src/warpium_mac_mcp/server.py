@@ -18,7 +18,7 @@ from .app import AppManager
 from .audit import AuditLog, audited
 from .auth import BearerAuthMiddleware
 from .config import OSS_CHANNEL, Config
-from .doctor import checks_as_dicts, run_checks
+from .doctor import checks_as_dicts, record_server_permissions, run_checks, summarize
 from .jobs import JobManager
 from .pathjail import PathJail
 from .platform import Platform
@@ -172,12 +172,15 @@ def create_server(s: Services) -> FastMCP:
     @mcp.tool()
     @A()
     async def doctor() -> dict:
-        """Check host prerequisites (toolchain, gh, Xcode/Metal, protoc), macOS permissions
-        (Screen Recording, Accessibility), workspace and log locations. Reports what is missing."""
+        """Check prerequisites, macOS permissions (Screen Recording, Accessibility), workspace
+        and log locations. all_required_ok covers what artifacts/screenshots/input need;
+        build_ready covers the local-build toolchain (rustup, cargo, protoc, Xcode/Metal),
+        which is only needed for build and run_integration_test."""
         checks = await _thread(run_checks, cfg, s.platform)
+        await _thread(record_server_permissions, cfg, s.platform)
         return {
             "checks": checks_as_dicts(checks),
-            "all_required_ok": all(c.ok for c in checks if c.required),
+            **summarize(checks),
             "input_enabled": cfg.allow_input,
             "build_enabled": cfg.allow_build,
         }

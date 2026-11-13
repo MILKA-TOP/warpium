@@ -8,7 +8,123 @@ can't see from Linux.
 This is a fork-only tool. It doesn't touch the Rust code. **Read [SECURITY.md](SECURITY.md)
 first**: this server can build and run code from the fork, and it can type into a terminal.
 
-## Quickstart (Mac host)
+There are two ways to run it:
+
+- **In a macOS VM (recommended).** The server and Warpium run in a throwaway
+  [Tart](https://tart.run) VM on your Mac. Clicks, keystrokes and app windows stay on the VM's
+  own screen, so you can keep working while the agent tests, and the VM can't see your files,
+  keychain or GitHub login. See [VM setup](#vm-setup-recommended).
+- **Directly on your Mac (fallback).** Simpler, but the agent drives your real desktop: it
+  takes focus and moves the cursor while it works. See [Host mode](#host-mode-fallback-quickstart).
+
+## VM setup (recommended)
+
+All scripts are in `vm/`, run **on the Mac host** from `tools/mac-mcp`, are idempotent and
+print what they do. They need an Apple Silicon Mac, Homebrew and uv (`brew install uv`).
+
+**Status: written and syntax/shellcheck-tested, but not yet run on a real Mac.** Report the
+output of the failing step if something breaks.
+
+### Cost
+
+| | Default | Override |
+|---|---|---|
+| vCPU / RAM | 4 / 8 GiB, only while the VM runs | `WARPIUM_VM_CPU`, `WARPIUM_VM_MEMORY_MB` |
+| Download | ~24 GB once (`macos-tahoe-vanilla`, cached in `~/.tart/cache`) | `WARPIUM_VM_IMAGE` |
+| Disk | 50 GB sparse image using ~25-30 GB at first; plan for ~60 GB free | `WARPIUM_VM_DISK_GB` (grow only) |
+| Golden copy / resets | a few GB each: APFS clones share unchanged blocks | |
+
+The image is the cirruslabs *vanilla* macOS (macOS 26 Tahoe on a macOS 26+ host, Sequoia on
+macOS 15): auto-login, SSH and passwordless sudo, nothing else installed. The Xcode images
+(~60+ GB) aren't needed because the VM runs CI `.dmg` artifacts, not local builds.
+
+### Steps
+
+```sh
+cd ~/src/warpium-mcp/tools/mac-mcp
+vm/setup.sh               # Tart, image, VM "warpium-test", SSH key, hardening, provisioning
+vm/grant-permissions.sh   # one-time: opens the VM's screen; enable Terminal in 2 settings panes
+vm/start.sh               # headless VM + server + SSH forward on host 127.0.0.1:17654
+vm/snapshot.sh            # save the provisioned VM as "warpium-test-golden"
+vm/start.sh               # (snapshot stops the VM)
+vm/gh-token.sh            # optional, for install_artifact: fine-grained read-only token
+vm/print-client-config.sh # prints `claude mcp add ...` for the container (contains the token)
+```
+
+What each step does:
+
+1. **`setup.sh`** installs Tart (`brew install cirruslabs/cli/tart`), clones the image into
+   the VM `warpium-test` and sets CPU/RAM. It creates a dedicated key
+   `~/.config/warpium-mac-mcp/vm_ed25519` and installs it in the guest using the image's
+   default `admin`/`admin` password (once). Then it replaces that password with a random one
+   (saved to `~/.config/warpium-mac-mcp/vm_admin_password`, mode 600, and kept working for
+   auto-login), and turns SSH password logins off. Finally it runs `provision.sh`.
+2. **`provision.sh`** installs Homebrew, uv, git and gh in the guest and copies this checkout
+   of `tools/mac-mcp` into `~/warpium-mac-mcp` with rsync over SSH (nothing is cloned or
+   logged in inside the guest). It installs a launchd agent that opens the server in
+   **Terminal.app** in the guest's auto-login GUI session, so the server has a window server
+   session and the permissions belong to Terminal. **Re-run it after every `git pull`** to
+   update the guest's server.
+3. **`grant-permissions.sh`**: macOS doesn't let a script grant Screen Recording or
+   Accessibility while SIP is on, so this is one manual step. The script stops the headless
+   VM and opens its screen in a window. In the VM, enable **Terminal** under System Settings >
+   Privacy & Security > **Screen & System Audio Recording** and > **Accessibility** (the
+   script prints the admin password if macOS asks), then shut the VM down. Do this before
+   `snapshot.sh` so every reset keeps the grants. (The alternative, disabling SIP in the guest
+   and writing its TCC database, also needs a manual Recovery boot and breaks with TCC schema
+   changes, so it isn't used.)
+4. **`start.sh`** runs `tart run --no-graphics warpium-test` in the background (log:
+   `~/.config/warpium-mac-mcp/vm/warpium-test.log`), waits for `tart ip` and SSH, checks the
+   guest server answers, and starts
+   `ssh -N -L 127.0.0.1:17654:127.0.0.1:17654 admin@<vm-ip>`. The container keeps using
+   `http://host.docker.internal:17654/mcp` unchanged. It refuses if something else (e.g. the
+   host-mode server) already listens on 17654.
+5. **`gh-token.sh`** logs gh in inside the VM for `install_artifact`, with a **fine-grained
+   token** you create for it: resource owner MILKA-TOP, only the `MILKA-TOP/warpium`
+   repository, permission *Actions: Read-only*, short expiry. Your own gh login never enters
+   the VM.
+6. **`print-client-config.sh`** fetches the guest's bearer token over SSH and prints the
+   `claude mcp add` command. The token differs from the host-mode one, so remove the old entry
+   first (`claude mcp remove warpium-mac --scope user`), or keep the existing entry by
+   provisioning with the host's token: `WARPIUM_VM_REUSE_HOST_TOKEN=1 vm/provision.sh`.
+
+### Daily use
+
+```sh
+vm/start.sh      # before a session (idempotent; re-run if the forward died)
+vm/stop.sh       # shuts the VM down and closes the forward (--forward-only keeps the VM)
+vm/reset.sh --yes  # throw the VM away and recreate it from warpium-test-golden
+```
+
+`reset.sh` gives every test session a clean macOS with the server and permissions already in
+place. After `git pull`, run `vm/provision.sh` (with the VM started) and, if you like,
+`vm/snapshot.sh --force` to refresh the golden copy.
+
+### Troubleshooting
+
+- **Logs:** VM console `~/.config/warpium-mac-mcp/vm/warpium-test.log`, forward
+  `~/.config/warpium-mac-mcp/vm/forward.log`, guest server
+  `~/.config/warpium-mac-mcp/server.log` inside the VM.
+- **Shell in the guest:**
+  `ssh -i ~/.config/warpium-mac-mcp/vm_ed25519 -o UserKnownHostsFile=~/.config/warpium-mac-mcp/vm_known_hosts -o HostKeyAlias=warpium-test admin@$(tart ip warpium-test)`
+- **See the VM's screen:** `vm/stop.sh && tart run warpium-test` (opens a window), or
+  macOS Screen Sharing to `vnc://$(tart ip warpium-test)` with the saved admin password.
+- **`doctor` says a permission is not granted:** the permissions shown come from the running
+  server (it records them at start and on every `doctor` call). Re-run
+  `vm/grant-permissions.sh`; if Accessibility stays off, run
+  `tccutil reset Accessibility com.apple.Terminal` in the guest and enable it again.
+- **Host key changed** after recreating the VM from a new image: `setup.sh` forgets the old key
+  automatically; otherwise
+  `ssh-keygen -R warpium-test -f ~/.config/warpium-mac-mcp/vm_known_hosts`.
+- **"host port 17654 is taken":** stop the host-mode server (Ctrl+C) or a stale forward
+  (`vm/stop.sh --forward-only`).
+- **Start over completely:** `vm/stop.sh; tart delete warpium-test; vm/setup.sh`.
+
+## Host mode (fallback): quickstart
+
+The rest of this section runs the server directly on your Mac. Don't run it inside the
+Warpium you are testing (quitting or relaunching that app would kill the server); use
+Terminal.app or another terminal.
 
 ### 1. Install uv
 
@@ -43,15 +159,32 @@ Useful flags: `--port N`, `--workspace DIR`, `--no-input` (observe only), `--no-
 
 ### 4. Grant macOS permissions to the terminal app that runs the server
 
-- System Settings > Privacy & Security > **Screen Recording**: enable your terminal app.
-- System Settings > Privacy & Security > **Accessibility**: enable your terminal app.
+macOS gives these permissions to the **app that runs the server** (e.g. Terminal.app, Warp,
+iTerm2), not to the server itself:
+
+- System Settings > Privacy & Security > **Screen & System Audio Recording**: enable that app.
+- System Settings > Privacy & Security > **Accessibility**: enable that app.
 - Quit and reopen the terminal, then start the server again.
+
+If Accessibility still shows "not granted" in `doctor` after you enabled it, reset the entry
+and add the app again: `tccutil reset Accessibility <bundle id>` (e.g. `com.apple.Terminal`,
+`dev.warp.Warp-Stable`, `com.googlecode.iterm2`), then re-enable it and restart the terminal.
+
+Don't run the server inside the Warpium being tested: relaunching or quitting the test app
+would kill the server, and the permission would have to go to the test app.
 
 ### 5. Check prerequisites
 
 ```sh
-uv run warpium-mac-mcp doctor
+uv run warpium-mac-mcp doctor                  # --no-port-check while the server runs
 ```
+
+`doctor` separates two things. **Required** checks (`FAIL` lines, `all_required_ok`) are what
+installing artifacts, screenshots and input need. The **local-build toolchain** (rustup,
+cargo, protoc, Xcode/Metal; `bld` lines, `build_ready`) is only needed for `build` and
+`run_integration_test`, so a missing toolchain doesn't fail doctor when you use CI artifacts.
+The first `protoc`/`xcrun` call after boot can be slow; a check that takes more than 60 s is
+reported as "timed out, run doctor again" rather than missing.
 
 To build Warpium locally, the workspace needs:
 
@@ -83,14 +216,32 @@ claude mcp add --transport http --scope user warpium-mac http://host.docker.inte
 ```
 
 It also prints an equivalent `.mcp.json` snippet. If you use that snippet, keep the file out
-of git (`tools/mac-mcp/.gitignore` ignores `.mcp.json` there). Never commit the token.
+of git (`tools/mac-mcp/.gitignore` ignores `.mcp.json` there).
 
-If the container routes HTTP through a proxy (`HTTP_PROXY` is set), add the host to
-`NO_PROXY`, otherwise requests to `host.docker.internal` go to the proxy:
+**The output contains the bearer token.** Never commit it, and never paste it into a shared
+chat, issue or PR (that includes a chat with an agent whose transcript others can read). To
+rotate the token: delete `~/.config/warpium-mac-mcp/token` (or run
+`uv run warpium-mac-mcp rotate-token`), restart the server, then in the container
+`claude mcp remove warpium-mac --scope user` and add it again with the new command.
 
-```sh
-export NO_PROXY="host.docker.internal,${NO_PROXY:-}"
+**Proxy in the container.** Claude Code in the container may send HTTP through a proxy
+(`HTTP_PROXY`/`HTTPS_PROXY` set, e.g. squid). The proxy can't reach `host.docker.internal`,
+so the MCP connection fails with **`HTTP 503`** (from the proxy, not from this server).
+Exporting `NO_PROXY` in your shell is not enough, because the `claude` process doesn't get it.
+Set it in Claude Code's own settings, `~/.claude/settings.json` in the container:
+
+```json
+{
+  "env": {
+    "NO_PROXY": "host.docker.internal,localhost,127.0.0.1",
+    "no_proxy": "host.docker.internal,localhost,127.0.0.1"
+  }
+}
 ```
+
+(merge with an existing `env` block and keep any hosts already listed there), or set both
+variables under `environment:` in your docker-compose service. Restart Claude Code, then check
+that `claude mcp list` shows `warpium-mac: ... ✔ Connected`.
 
 Connectivity check from the container. `401` means you reached the server and auth works:
 
@@ -100,7 +251,11 @@ curl -s --noproxy host.docker.internal -o /dev/null -w '%{http_code}\n' -X POST 
 
 ### 7. Smoke test (ask the agent, or call the tools yourself)
 
-1. `doctor`: required checks are ok and both permissions are granted.
+The same smoke test works in VM mode; there, steps 2-3 need a local toolchain the VM doesn't
+have, so use `install_artifact(run_id)` and `app_launch(source="artifact")` instead.
+
+1. `doctor`: `all_required_ok` is true and both permissions are granted (`build_ready` only
+   matters for steps 2-3).
 2. `repo_sync(branch="master")`, then poll `job_status` until `succeeded`.
 3. `build()` (debug, features `gui,warp_control_cli`), then poll `job_status`/`job_logs`. The
    first build takes a long time.
@@ -187,6 +342,9 @@ or use `app_logs`.
 
 ## Networking
 
+In VM mode the server binds the guest's `127.0.0.1`, and `vm/start.sh` forwards the host's
+`127.0.0.1:17654` to it over SSH, so everything below applies to the forward unchanged.
+
 The default bind is `127.0.0.1`. On Docker Desktop for Mac, `host.docker.internal` resolves
 inside containers to a Docker Desktop address. Docker Desktop's host-side process forwards
 those connections to the Mac's loopback, so a server listening only on `127.0.0.1` is reachable
@@ -215,4 +373,6 @@ uv run ruff check . && uv run ruff format --check .
 Layout: `config.py` (paths, token), `auth.py` (bearer middleware), `pathjail.py`,
 `validation.py`, `jobs.py`, `workspace.py` (repo/build/artifact/tests), `app.py` (process and
 logs), `platform.py` (macOS APIs), `ui.py` (window and input guard), `warpctrl.py`
-(local-control client), `server.py` (MCP tools), `doctor.py`, `cli.py`.
+(local-control client), `server.py` (MCP tools), `doctor.py`, `cli.py`, `vmtools.py`
+(helpers for the VM scripts). `vm/` holds the Tart scripts; the tests run `bash -n` and
+shellcheck (installed as a dev dependency) on them.
