@@ -738,8 +738,12 @@ start_vm_headless() {
   local vnc_args=()
   if vnc_requested; then
     vnc_args=(--vnc-experimental)
-    # The URL tart prints for this run is the first one after this mark.
-    wc -l <"$VM_LOG" 2>/dev/null | tr -d ' ' >"$VNC_LOG_MARK_FILE" || echo 0 >"$VNC_LOG_MARK_FILE"
+    # The URL tart prints for this run comes after this byte offset of the log.
+    if [ -f "$VM_LOG" ]; then
+      wc -c <"$VM_LOG" | tr -d ' ' >"$VNC_LOG_MARK_FILE"
+    else
+      echo 0 >"$VNC_LOG_MARK_FILE"
+    fi
   fi
   step "Starting VM $VM_NAME headless, network $NET_DESC${vnc_args[*]:+, VNC on} (log: $VM_LOG)"
   # --vnc-experimental: Virtualization.framework's own VNC server on the host (no
@@ -759,7 +763,7 @@ vnc_url() {
   local mark=0
   [ -s "$VNC_LOG_MARK_FILE" ] && mark="$(cat "$VNC_LOG_MARK_FILE")"
   [ -f "$VM_LOG" ] || return 0
-  tail -n "+$((mark + 1))" "$VM_LOG" | grep -o 'vnc://[^ ]*' | tail -1 | sed 's/\.\.\.$//' || true
+  tail -c "+$((mark + 1))" "$VM_LOG" | grep -o 'vnc://[^ ]*' | tail -1 | sed 's/\.\.\.$//' || true
 }
 
 # Waits up to $1 seconds for vnc_url.

@@ -135,7 +135,7 @@ def test_click_screen_from_screenshot(vfp, tmp_path):
     ui.screenshot("screen", max_width=4000)
     ui.click(1200, 900, target="screen", from_screenshot=True)
     assert vfp.events[0] == ("mouse", "down", 600, 450, "left", 1)
-    assert vfp.activated == [UNC]  # owner of the topmost window there
+    assert vfp.activated == []  # target="screen" activates nothing
     with pytest.raises(ValidationError, match="outside the display"):
         ui.click(5000, 10, target="screen")
 
@@ -148,6 +148,60 @@ def test_keys_to_dialog_and_screen(vfp, tmp_path):
     ui.type_text("ok\n", target="screen")
     assert vfp.events[0] == ("text", "ok", None)  # None = global HID tap
     assert vfp.events[1][0] == "key" and vfp.events[1][-1] is None
+
+
+def test_click_dialog_refused_when_covered(vfp, tmp_path):
+    # Another window stays on top of the dialog even after activation.
+    vfp.wins.insert(0, WindowInfo(5, OTHER, "Other", "", 480, 380, 200, 200, 9))
+    ui = _ui(vfp, tmp_path, vm=True)
+    with pytest.raises(FocusError, match="covers it"):
+        ui.click(20, 30, window="id:9")
+    with pytest.raises(FocusError):
+        ui.scroll(20, 30, window="id:9")
+    assert vfp.events == []
+    ui.click(520, 430, target="screen")  # the explicit escape hatch clicks what is there
+    assert len(vfp.events) == 2
+
+
+def test_scroll_dialog_and_screen(vfp, tmp_path):
+    ui = _ui(vfp, tmp_path, vm=True)
+    r = ui.scroll(20, 30, dy=-5, window="id:9")
+    assert vfp.events == [("mouse", "move", 520, 430, "left", 0), ("scroll", 520, 430, 0, -5)]
+    assert r["vm_mode"]
+    ui.scroll(10, 10, target="screen")
+    assert vfp.events[-1] == ("scroll", 10, 10, 0, -3)
+
+
+def test_hid_delivery_refuses_keys_to_unactivated_dialog(vfp, tmp_path):
+    vfp.key_delivery = "hid"
+    vfp.activate = lambda pid: vfp.activated.append(pid)  # never becomes frontmost
+    ui = _ui(vfp, tmp_path, vm=True)
+    with pytest.raises(FocusError, match="HID tap"):
+        ui.type_text("secret\n", window="id:9")
+    assert vfp.events == []
+
+
+def test_pid_delivery_keys_reach_unactivated_dialog_without_repolling(vfp, tmp_path):
+    polls = []
+    front = vfp.frontmost_pid
+    vfp.frontmost_pid = lambda: polls.append(1) or front()
+    vfp.activate = lambda pid: vfp.activated.append(pid)
+    ui = _ui(vfp, tmp_path, vm=True)
+    r = ui.press_keys("tab", window="id:9")
+    first = len(polls)
+    assert r["target_frontmost"] is False and {e[-1] for e in vfp.events} == {UNC}
+    ui.press_keys("enter", window="id:9")
+    assert len(polls) - first == 1  # no second poll loop for the same pid
+
+
+def test_keys_to_non_frontmost_warpium_window_refused(vfp, tmp_path):
+    vfp.wins = [w for w in vfp.wins if w.window_id != 9]
+    vfp.wins.insert(2, WindowInfo(3, WARP, "Warpium", "second", 0, 0, 50, 50, 0))
+    ui = _ui(vfp, tmp_path, vm=True)
+    with pytest.raises(FocusError, match="not the frontmost Warpium window"):
+        ui.press_keys("cmd+w", window="id:3")
+    ui.press_keys("cmd+t", window="id:1")
+    assert vfp.events and vfp.events[0][-1] == WARP
 
 
 def test_warpium_path_stays_guarded_in_vm_mode(vfp, tmp_path):
@@ -246,7 +300,7 @@ def _tools(tmp_path, vm):
 def test_host_tool_surface_unchanged(tmp_path):
     tools = _tools(tmp_path, vm=False)
     assert "list_system_dialogs" not in tools
-    for name in ("click", "type_text", "press_keys"):
+    for name in ("click", "scroll", "type_text", "press_keys"):
         assert "target" not in tools[name].inputSchema["properties"]
     assert "window" not in tools["press_keys"].inputSchema["properties"]
     assert "never the full screen" in tools["screenshot"].description
@@ -255,7 +309,7 @@ def test_host_tool_surface_unchanged(tmp_path):
 def test_vm_tool_surface(tmp_path):
     tools = _tools(tmp_path, vm=True)
     assert "list_system_dialogs" in tools
-    for name in ("click", "type_text", "press_keys"):
+    for name in ("click", "scroll", "type_text", "press_keys"):
         props = tools[name].inputSchema["properties"]
         assert "target" in props and "window" in props
     assert "window='screen'" in tools["screenshot"].description
@@ -277,8 +331,9 @@ def test_vnc_flag_and_url(tmp_path):
     state = cfg / "vm"
     state.mkdir(parents=True)
     log = state / "warpium-test.log"
-    log.write_text("VNC server is running at vnc://:old@127.0.0.1:5901\n")
-    (state / "warpium-test.vnc-log-mark").write_text("1\n")
+    # The previous run died mid-line: no trailing newline must not leak its URL.
+    log.write_text("VNC server is running at vnc://:old@127.0.0.1:5901")
+    (state / "warpium-test.vnc-log-mark").write_text(str(log.stat().st_size))
     with log.open("a") as f:
         f.write("booting\nVNC server is running at vnc://:pw@127.0.0.1:61234\n")
     r = subprocess.run(

@@ -112,6 +112,10 @@ class MacPlatform:
         self._key_delivery = key_delivery
         import Quartz  # noqa: F401  (fail early with a clear ImportError)
 
+    @property
+    def key_delivery(self) -> str:
+        return self._key_delivery
+
     # --- focus -----------------------------------------------------------
     def frontmost_pid(self) -> int | None:
         # lsappinfo reflects the live window-server state. NSWorkspace's

@@ -182,6 +182,7 @@ class UiController:
         self._sleep = sleep
         self._delay = event_delay_s
         self._vm = vm_mode
+        self._unactivatable: set[int] = set()
         self._last_scale: dict[int, float] = {}
         self._lock = threading.Lock()  # serialize input sequences
 
@@ -292,17 +293,24 @@ class UiController:
     def _activate_for_input(self, pid: int) -> bool:
         """VM mode: best-effort activation of a system dialog's process. Agent
         processes such as UserNotificationCenter may never report as frontmost,
-        so this does not fail; the result says whether it became frontmost."""
+        so this does not fail; the result says whether it became frontmost.
+        A pid that never became frontmost is not polled again (keeps repeated
+        tab/enter presses on one alert fast)."""
         if self._p.frontmost_pid() == pid:
             return True
         self._p.activate(pid)
+        if pid in self._unactivatable:
+            return False
         for _ in range(10):
             if self._p.frontmost_pid() == pid:
                 return True
             self._sleep(0.1)
+        self._unactivatable.add(pid)
         return False
 
-    def _vm_input_target(self, window: str | int | None, target: str) -> WindowInfo | None:
+    def _vm_input_target(
+        self, window: str | int | None, target: str, keyboard: bool = False
+    ) -> WindowInfo | None:
         """The non-Warpium target of an input call: the screen pseudo-window for
         target="screen" or a system dialog for window="id:<n>" (VM mode only).
         None means the call takes the guarded Warpium path, as in host mode."""
@@ -315,7 +323,19 @@ class UiController:
         if not self._vm or window in (None, "", "frontmost-warpium"):
             return None
         win = self._resolve_vm(window)
-        return None if win.pid in self._target_pids() else win
+        if win.pid not in self._target_pids():
+            return win
+        if not keyboard:
+            return None
+        # Keys go to the focused Warpium window: refuse rather than silently
+        # typing into another window than the one asked for.
+        front = self.list_windows()
+        if front and front[0].window_id != win.window_id:
+            raise FocusError(
+                f"window id {win.window_id} is not the frontmost Warpium window "
+                f"(that is id {front[0].window_id}); keys go to the focused window"
+            )
+        return None
 
     def _to_screen_vm(
         self, win: WindowInfo, x: float, y: float, from_screenshot: bool
@@ -342,13 +362,38 @@ class UiController:
                 return w
         return None
 
+    def _vm_pointer_target(
+        self, win: WindowInfo, x: float, y: float, from_screenshot: bool
+    ) -> tuple[float, float, WindowInfo | None, bool | None]:
+        """Screen point for a VM-mode click/scroll, the window on top there and,
+        for a dialog, whether its process became frontmost. A dialog is
+        activated first and must then be the topmost window at the point (else
+        the event would land elsewhere; target="screen" clicks whatever is
+        there and activates nothing: the click itself focuses it)."""
+        sx, sy = self._to_screen_vm(win, x, y, from_screenshot)
+        frontmost = None
+        if win.window_id != SCREEN_WINDOW_ID:
+            frontmost = self._activate_for_input(win.pid)
+        hit = self._topmost_at(sx, sy)
+        if win.window_id != SCREEN_WINDOW_ID and (hit is None or hit.window_id != win.window_id):
+            raise FocusError(
+                f"refusing input: dialog {win.window_id} ({win.owner}) is not the topmost window "
+                f"at ({sx:.0f},{sy:.0f})"
+                + (f"; {hit.owner!r} (window {hit.window_id}) covers it" if hit else "")
+                + ". Take screenshot(window='screen') and use target='screen' to click there."
+            )
+        return sx, sy, hit, frontmost
+
+    @staticmethod
+    def _hit_info(hit: WindowInfo | None) -> dict | None:
+        if hit is None:
+            return None
+        return {"window_id": hit.window_id, "owner": hit.owner, "pid": hit.pid}
+
     def _vm_click(
         self, win: WindowInfo, x: float, y: float, button: str, count: int, from_screenshot: bool
     ) -> dict:
-        sx, sy = self._to_screen_vm(win, x, y, from_screenshot)
-        hit = self._topmost_at(sx, sy)
-        pid = win.pid if win.window_id != SCREEN_WINDOW_ID else (hit.pid if hit else None)
-        frontmost = self._activate_for_input(pid) if pid else None
+        sx, sy, hit, frontmost = self._vm_pointer_target(win, x, y, from_screenshot)
         for i in range(1, count + 1):
             for kind in ("down", "up"):
                 self._p.post_mouse(kind, sx, sy, button, i)
@@ -357,18 +402,28 @@ class UiController:
             "clicked": {"screen_x": sx, "screen_y": sy, "button": button, "count": count},
             "window_id": win.window_id,
             "vm_mode": True,
-            "hit_window": None
-            if hit is None
-            else {"window_id": hit.window_id, "owner": hit.owner, "pid": hit.pid},
+            "hit_window": self._hit_info(hit),
             "target_frontmost": frontmost,
         }
 
     def _vm_key_pid(self, win: WindowInfo) -> tuple[int | None, bool | None]:
         """Where VM-mode keyboard events go: the dialog's process (activated
-        first), or the global HID tap (None) for target="screen"."""
+        first), or the global HID tap (None) for target="screen".
+
+        With pid delivery the events reach the dialog's process even if it
+        never becomes frontmost. With HID delivery they go to whatever has
+        focus, so a dialog that could not be activated is refused (the keys,
+        possibly a password, would otherwise land in Warpium)."""
         if win.window_id == SCREEN_WINDOW_ID:
             return None, None
-        return win.pid, self._activate_for_input(win.pid)
+        frontmost = self._activate_for_input(win.pid)
+        if not frontmost and getattr(self._p, "key_delivery", "pid") != "pid":
+            raise FocusError(
+                f"refusing keys: {win.owner} (pid {win.pid}) did not become frontmost and the "
+                "server posts keys to the HID tap (--key-delivery hid); click the dialog first "
+                "or use target='screen' deliberately"
+            )
+        return win.pid, frontmost
 
     # --- guards ------------------------------------------------------------
     def _require_input_enabled(self) -> None:
@@ -485,12 +540,25 @@ class UiController:
         dy: int = -3,
         window: str | int = "frontmost-warpium",
         from_screenshot: bool = False,
+        target: str = "window",
     ) -> dict:
         self._require_input_enabled()
         for v in (dx, dy):
             if not isinstance(v, int) or isinstance(v, bool) or not -50 <= v <= 50:
                 raise ValidationError("dx/dy must be integers in [-50, 50] (lines)")
         with self._lock:
+            other = self._vm_input_target(window, target)
+            if other is not None:
+                sx, sy, hit, frontmost = self._vm_pointer_target(other, x, y, from_screenshot)
+                self._p.post_mouse("move", sx, sy, "left", 0)
+                self._p.post_scroll(sx, sy, dx, dy)
+                return {
+                    "scrolled": {"screen_x": sx, "screen_y": sy, "dx": dx, "dy": dy},
+                    "window_id": other.window_id,
+                    "vm_mode": True,
+                    "hit_window": self._hit_info(hit),
+                    "target_frontmost": frontmost,
+                }
             win = self.resolve_window(window)
             sx, sy = self._to_screen(win, x, y, from_screenshot)
             self._check_frontmost()
@@ -508,7 +576,7 @@ class UiController:
         mods, key = parse_key_combo(combo)
         code = KEY_CODES[key]
         with self._lock:
-            other = self._vm_input_target(window, target)
+            other = self._vm_input_target(window, target, keyboard=True)
             if other is not None:
                 kpid, frontmost = self._vm_key_pid(other)
                 self._p.post_key(code, True, mods, kpid)
@@ -538,7 +606,7 @@ class UiController:
         validate_text(text)
         sent = 0
         with self._lock:
-            other = self._vm_input_target(window, target)
+            other = self._vm_input_target(window, target, keyboard=True)
             if other is not None:
                 kpid, frontmost = self._vm_key_pid(other)
                 for piece in _split_text(text, chunk):

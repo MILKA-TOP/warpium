@@ -419,7 +419,7 @@ have, so use `install_artifact(run_id)` and `app_launch(source="artifact")` inst
 
 VM mode only (`serve --vm-mode`, set by `vm/provision.sh`): `screenshot(window="screen")`
 captures the whole display and `screenshot(window="id:<id>")` a system dialog;
-`click`, `type_text` and `press_keys` take `window="id:<id>"` (a dialog: its process is
+`click`, `scroll`, `type_text` and `press_keys` take `window="id:<id>"` (a dialog: its process is
 brought to the front, coordinates are dialog-relative) or `target="screen"` (screen points;
 keys go to whatever has keyboard focus).
 

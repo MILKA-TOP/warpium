@@ -349,7 +349,7 @@ def create_server(s: Services) -> FastMCP:
         """PNG of one Warpium window only (never the full screen), downscaled to max_width.
         window: 'frontmost-warpium', an index from list_windows, or 'id:<window_id>'.
         Returns the image plus bounds and the pixel/point scale for click coordinates."""
-        win: str | int = int(window) if window.isdigit() else window
+        win = _win_arg(window)
         shot = await _thread(s.ui.screenshot, win, max_width)
         return [Image(path=shot.path), json.dumps(shot.metadata(), indent=1)]
 
@@ -388,7 +388,7 @@ def create_server(s: Services) -> FastMCP:
             """Click at window-relative point (x, y). With from_screenshot=true, x/y are pixel
             coordinates in the last screenshot of that window. Refused unless Warpium is
             frontmost and the point is not covered by another app's window."""
-            win: str | int = int(window) if window.isdigit() else window
+            win = _win_arg(window)
             return await _thread(s.ui.click, x, y, button, count, win, from_screenshot)
 
     else:
@@ -411,23 +411,44 @@ def create_server(s: Services) -> FastMCP:
             pixels of the last screenshot(window='screen')) and the click goes to whatever is
             there. With from_screenshot=true, x/y are pixels in the last screenshot of the
             window."""
-            win: str | int = int(window) if window.isdigit() else window
+            win = _win_arg(window)
             return await _thread(s.ui.click, x, y, button, count, win, from_screenshot, target)
 
-    @mcp.tool()
-    @A()
-    async def scroll(
-        x: float,
-        y: float,
-        dy: int = -3,
-        dx: int = 0,
-        window: str = "frontmost-warpium",
-        from_screenshot: bool = False,
-    ) -> dict:
-        """Scroll by dy/dx lines (negative dy scrolls down) with the pointer at window
-        point (x, y)."""
-        win: str | int = int(window) if window.isdigit() else window
-        return await _thread(s.ui.scroll, x, y, dx, dy, win, from_screenshot)
+    if not cfg.vm_mode:
+
+        @mcp.tool()
+        @A()
+        async def scroll(
+            x: float,
+            y: float,
+            dy: int = -3,
+            dx: int = 0,
+            window: str = "frontmost-warpium",
+            from_screenshot: bool = False,
+        ) -> dict:
+            """Scroll by dy/dx lines (negative dy scrolls down) with the pointer at window
+            point (x, y)."""
+            win = _win_arg(window)
+            return await _thread(s.ui.scroll, x, y, dx, dy, win, from_screenshot)
+
+    else:
+
+        @mcp.tool()
+        @A()
+        async def scroll(
+            x: float,
+            y: float,
+            dy: int = -3,
+            dx: int = 0,
+            window: str = "frontmost-warpium",
+            from_screenshot: bool = False,
+            target: Literal["window", "screen"] = "window",
+        ) -> dict:
+            """Scroll by dy/dx lines (negative dy scrolls down) with the pointer at window
+            point (x, y) of a Warpium window or (VM mode) a system dialog (window='id:<id>'),
+            or at screen point (x, y) with target='screen'."""
+            win = _win_arg(window)
+            return await _thread(s.ui.scroll, x, y, dx, dy, win, from_screenshot, target)
 
     if not cfg.vm_mode:
 
@@ -460,7 +481,7 @@ def create_server(s: Services) -> FastMCP:
             (window='id:<id>' from list_system_dialogs) or whatever has keyboard focus
             (target='screen'). '\\n' is sent as Return, '\\t' as Tab. redact=true keeps the
             text out of the audit log."""
-            return await _thread(s.ui.type_text, text, 16, _win_arg(window), target)
+            return await _thread(s.ui.type_text, text, window=_win_arg(window), target=target)
 
         @mcp.tool()
         @A()

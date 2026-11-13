@@ -178,10 +178,17 @@ nothing of yours on it, so inside it, and only there, the server can lift the re
 - **What it allows:** `screenshot(window="screen")` (the whole main display);
   `list_system_dialogs` (windows of a fixed list of system UI processes, each with an
   executable under `/System/` or `/usr/`, read from the kernel); `screenshot`, `click`,
-  `type_text` and `press_keys` with `window="id:<id>"` of such a dialog (its process is
-  activated first; the frontmost and topmost-window checks are skipped because agent processes
-  like UserNotificationCenter never become frontmost); and `target="screen"` for input at
-  screen points (keys go to the global HID tap, i.e. whatever has focus).
+  `scroll`, `type_text` and `press_keys` with `window="id:<id>"` of such a dialog; and
+  `target="screen"` for input at screen points (mouse events go to whatever is there, keys to
+  the global HID tap, i.e. whatever has focus).
+- **Dialog input rules:** the dialog's process is activated first, but the frontmost check is
+  skipped, because agent processes like UserNotificationCenter may never become frontmost.
+  Mouse events still require the dialog to be the topmost window at the point after
+  activation; otherwise the call is refused (use `target="screen"` to click whatever is there
+  deliberately). Keys go to the dialog's pid (`CGEventPostToPid`); with `--key-delivery hid`
+  they are refused unless the dialog became frontmost, so typed text can't fall through into
+  Warpium. A `window="id:<id>"` naming a Warpium window that is not the frontmost one is
+  refused for keys, since keys go to the focused window.
 - **What stays the same:** input to Warpium windows keeps every check of the input guard,
   system shortcuts stay refused, `--no-input` still disables all input, and every call,
   including the VM-only ones, is in the audit log. Without `--vm-mode` the tool list, tool
