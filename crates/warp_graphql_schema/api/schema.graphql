@@ -4,6 +4,11 @@ schema {
   subscription: RootSubscription
 }
 
+enum GitHubCredentialMode {
+  LEGACY
+  RESTRICTED_INSTALLATION
+}
+
 """
 Directs the executor to defer this fragment when the `if` argument is true or undefined.
 """
@@ -1191,6 +1196,7 @@ enum CustomerType {
   LIGHTSPEED
   PROSUMER
   PRO_TRIAL
+  SCALE
   SELF_SERVE
   TEAM_TRIAL
   TURBO
@@ -2891,6 +2897,9 @@ enum PlatformErrorCode {
   """Principal lacks permission for the requested operation."""
   NOT_AUTHORIZED
 
+  """The operation is not supported for the current resource state."""
+  OPERATION_NOT_SUPPORTED
+
   """Referenced resource does not exist."""
   RESOURCE_NOT_FOUND
 
@@ -2918,6 +2927,7 @@ type PopulateMerkleTreeCacheOutput implements Response {
 union PopulateMerkleTreeCacheResult = PopulateMerkleTreeCacheOutput | UserFacingError
 
 input PrewarmedSandboxConfigInput {
+  githubCredentialContractVersion: Int
   sandboxId: ID!
 }
 
@@ -2928,6 +2938,7 @@ type PrewarmedSandboxConfiguration {
   expiresAt: Time!
   fingerprint: String!
   gitCredentials: [TaskGitCredential!]!
+  githubCredentialMode: GitHubCredentialMode!
   managedSecrets: [TaskSecretEntry!]!
   sandboxId: ID!
   spec: PrewarmedSandboxSpec!
@@ -4031,6 +4042,8 @@ type TaskAttachment {
 
 """A set of git credentials for a single hosting provider."""
 type TaskGitCredential {
+  expiresAt: Time
+  repositoryScope: String
   """
   The email address associated with the token, if available.
   Null for service-account (installation) tokens.
@@ -4052,6 +4065,7 @@ type TaskGitCredential {
 
 """Input for the taskGitCredentials query."""
 input TaskGitCredentialsInput {
+  githubCredentialContractVersion: Int
   """
   Whether the caller can handle a response in which one forge's credential is
   fresh and another's failed. A caller that opts in must merge the fresh
@@ -4072,6 +4086,7 @@ input TaskGitCredentialsInput {
 }
 
 type TaskGitCredentialsOutput implements Response {
+  githubCredentialMode: GitHubCredentialMode!
   """The credentials that were freshly issued this cycle, one per host."""
   credentials: [TaskGitCredential!]!
 
@@ -5206,6 +5221,7 @@ type Workspace {
   hasBillingHistory is the equivalent of the v1 hasBillingHistory field in the Team type.
   """
   hasBillingHistory: Boolean!
+  includedUsageInfo: WorkspaceIncludedUsageInfo
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]
@@ -5223,6 +5239,17 @@ type Workspace {
   teams: [Team!]!
   totalRequestsUsedSinceLastRefresh: Int!
   uid: ID!
+}
+
+"""
+A plan's shared workspace allowance for the current monthly AI cycle.
+"""
+type WorkspaceIncludedUsageInfo {
+  includedUsageCredits: Float!
+  usageCreditsUsedSinceLastRefresh: Float!
+  includedUsageCents: Float!
+  usageCentsUsedSinceLastRefresh: Float!
+  nextRefreshTime: Time!
 }
 
 type WorkspaceMember {

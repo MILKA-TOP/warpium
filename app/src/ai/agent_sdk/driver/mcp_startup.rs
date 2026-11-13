@@ -18,13 +18,14 @@ use uuid::Uuid;
 use warp_cli::mcp::MCPSpec;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
+use warp_graphql::queries::task_restricted_git_credentials::GitHubCredentialMode;
 use warp_managed_secrets::ManagedSecretValue;
 use warp_server_client::base_client::AMBIENT_WORKLOAD_TOKEN_HEADER;
 use warpui::r#async::{FutureExt as _, TimeoutError};
 use warpui::{Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
 use super::harness::ResolvedMCPServers;
-use super::{AgentDriver, AgentDriverError};
+use super::{AgentDriver, AgentDriverError, git_credentials};
 use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -343,10 +344,34 @@ pub(crate) async fn start_task_and_profile_mcp_servers(
     task_id: Option<AmbientAgentTaskId>,
     foreground: &ModelSpawner<AgentDriver>,
 ) -> Result<(), AgentDriverError> {
+    let mcp_specs = mcp_specs
+        .iter()
+        .filter(|spec| {
+            !matches!(mode, McpStartupMode::Standby)
+                || !matches!(spec, MCPSpec::WellKnown(id) if id == "github")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let resolved_mcp_specs =
-        resolve_mcp_specs(mcp_specs, managed_mcp_client, task_id, foreground).await?;
-    let existing_uuids = resolved_mcp_specs.local_uuids;
+        resolve_mcp_specs(&mcp_specs, managed_mcp_client, task_id, foreground).await?;
+    let mut existing_uuids = resolved_mcp_specs.local_uuids;
     let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
+    if matches!(mode, McpStartupMode::Standby) {
+        ephemeral_installations.retain(|installation| installation.warp_id() != Some("github"));
+        existing_uuids = foreground
+            .spawn(move |_, ctx| {
+                let manager = TemplatableMCPServerManager::as_ref(ctx);
+                existing_uuids
+                    .into_iter()
+                    .filter(|uuid| {
+                        manager
+                            .get_installed_server(uuid)
+                            .is_none_or(|installation| installation.warp_id() != Some("github"))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await?;
+    }
 
     attach_builtin_mcp_servers(
         mode,
@@ -363,9 +388,20 @@ pub(crate) async fn start_task_and_profile_mcp_servers(
         ephemeral_installations.len()
     );
     let profile_allowlist = foreground
-        .spawn(|me, ctx| {
+        .spawn(move |me, ctx| {
             let terminal_id = me.terminal_driver.as_ref(ctx).terminal_view().id();
-            BlocklistAIPermissions::as_ref(ctx).get_mcp_allowlist(ctx, Some(terminal_id))
+            let allowlist =
+                BlocklistAIPermissions::as_ref(ctx).get_mcp_allowlist(ctx, Some(terminal_id));
+            let manager = TemplatableMCPServerManager::as_ref(ctx);
+            allowlist
+                .into_iter()
+                .filter(|uuid| {
+                    !matches!(mode, McpStartupMode::Standby)
+                        || manager
+                            .get_installed_server(uuid)
+                            .is_none_or(|installation| installation.warp_id() != Some("github"))
+                })
+                .collect::<Vec<_>>()
         })
         .await?;
 
@@ -587,6 +623,32 @@ impl AgentDriver {
         foreground: &ModelSpawner<Self>,
         environment: HashMap<String, String>,
     ) -> Result<(), AgentDriverError> {
+        let retained = Self::stop_prewarmed_mcp_servers(foreground, environment).await?;
+        Self::start_retained_mcp_servers(foreground, retained).await
+    }
+
+    pub(super) async fn stop_prewarmed_mcp_servers(
+        foreground: &ModelSpawner<Self>,
+        mut environment: HashMap<String, String>,
+    ) -> Result<Vec<TemplatableMCPServerInstallation>, AgentDriverError> {
+        let protected = foreground
+            .spawn(|me, _| {
+                if me.github_credential_mode == GitHubCredentialMode::RestrictedInstallation {
+                    me.credential_store_owner
+                        .as_ref()
+                        .map(git_credentials::restricted_child_environment)
+                        .transpose()
+                } else {
+                    Ok(None)
+                }
+            })
+            .await?
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        if let Some(protected) = protected {
+            environment.extend(protected.into_iter().filter_map(|(key, value)| {
+                Some((key.into_string().ok()?, value.into_string().ok()?))
+            }));
+        }
         let (retained, stopped) = foreground
             .spawn(move |_, ctx| {
                 TemplatableMCPServerManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -605,6 +667,13 @@ impl AgentDriver {
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
+        Ok(retained)
+    }
+
+    pub(super) async fn start_retained_mcp_servers(
+        foreground: &ModelSpawner<Self>,
+        retained: Vec<TemplatableMCPServerInstallation>,
+    ) -> Result<(), AgentDriverError> {
         foreground
             .spawn(move |me, ctx| {
                 let names = retained
@@ -680,7 +749,29 @@ impl AgentDriver {
             &taken_server_names,
             &ambient_headers,
         ));
-        Self::mcp_installations_to_json(installations, secrets.as_ref())
+        let resolved = Self::mcp_installations_to_json(installations, secrets.as_ref())?;
+        if foreground.spawn(|me, _| me.github_credential_mode).await?
+            == GitHubCredentialMode::RestrictedInstallation
+        {
+            Self::require_managed_github_mcp(&resolved)?;
+        }
+        Ok(resolved)
+    }
+
+    fn require_managed_github_mcp(resolved: &ResolvedMCPServers) -> Result<(), AgentDriverError> {
+        if resolved
+            .warp_ids
+            .iter()
+            .any(|(name, warp_id)| warp_id == "github" && resolved.configs.contains_key(name))
+        {
+            Ok(())
+        } else {
+            Err(AgentDriverError::MCPStartupFailed {
+                details: vec![
+                    "Restricted GitHub mode requires the managed GitHub MCP integration".to_owned(),
+                ],
+            })
+        }
     }
 
     fn mcp_installations_to_json(
@@ -706,6 +797,9 @@ impl AgentDriver {
                     // A later server of the same name replaces the earlier one's identity too.
                     None => result.warp_ids.remove(name),
                 };
+                result
+                    .installation_ids
+                    .insert(name.clone(), installation.uuid());
             }
             result.configs.extend(servers);
         }

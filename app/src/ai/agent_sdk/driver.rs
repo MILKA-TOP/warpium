@@ -28,6 +28,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
 use warp_errors::{ErrorExt, ReportErrorLogMode, register_error, report_error, report_if_error};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_graphql::queries::task_restricted_git_credentials::GitHubCredentialMode;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::r#async::executor::Background;
 use warpui::r#async::{FutureExt, TimeoutError, Timer};
@@ -44,6 +45,7 @@ use crate::ai::agent::{
 use crate::ai::agent_sdk::driver::harness::exit_escalation::{
     ExitEscalation, ExitEscalationAction, ExitEscalationEvent, driver_result_after_harness_run,
 };
+use crate::ai::agent_sdk::driver::harness::launch_warmup::LaunchFileWarmup;
 use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
     ThirdPartyHarness, ThirdPartyHarnessTelemetryEvent, harness_env_vars, renders_natively,
@@ -118,14 +120,18 @@ pub(crate) mod harness;
 mod harness_output_monitor;
 pub(crate) mod mcp_startup;
 pub(super) mod output;
+mod preview_proxy;
 mod preview_retention;
 mod prewarmed;
+mod restored_children;
+mod setup_vars;
 mod skill_references;
 mod snapshot;
 pub(crate) mod terminal;
 mod termination;
 
 use environment::PrepareEnvironmentError;
+use git_credentials::ManagedStoreOwner;
 pub(crate) use mcp_startup::MCP_SERVER_STARTUP_TIMEOUT;
 use preview_retention::PreviewRetention;
 pub(crate) use snapshot::upload_snapshot_for_handoff;
@@ -146,16 +152,21 @@ async fn with_credential_refreshes<F, T>(
     use_factory_repositories: bool,
     bedrock_oidc_credentials: Option<(BedrockOidcCredentialsConfig, Option<RequestTeamScope>)>,
     foreground: &ModelSpawner<AgentDriver>,
-) -> T
+) -> Result<T, AgentDriverError>
 where
-    F: Future<Output = T>,
+    F: Future<Output = Result<T, AgentDriverError>>,
 {
+    let mode = foreground
+        .spawn(|me, _| me.github_credential_mode)
+        .await
+        .unwrap_or(GitHubCredentialMode::RestrictedInstallation);
     let git_refresh = async move {
         match git_task_id {
             Some(task_id) => {
-                git_credentials::refresh_loop(task_id, ai_client, use_factory_repositories).await
+                git_credentials::refresh_loop(task_id, ai_client, use_factory_repositories, mode)
+                    .await
             }
-            None => future::pending::<()>().await,
+            None => future::pending::<Result<(), TaskGitCredentialsError>>().await,
         }
     }
     .fuse();
@@ -174,7 +185,10 @@ where
     futures::pin_mut!(run_future, git_refresh, bedrock_refresh);
     futures::select! {
         result = run_future => result,
-        _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
+        result = git_refresh => {
+            result.map_err(AgentDriverError::GitCredentialsFetchFailed)?;
+            Err(AgentDriverError::InvalidRuntimeState)
+        },
         _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
     }
 }
@@ -700,6 +714,8 @@ pub struct AgentDriverOptions {
     /// Execution identity supplied by the cloud launch.
     pub execution_id: Option<String>,
     pub use_factory_repositories: bool,
+    pub github_credential_mode: GitHubCredentialMode,
+    pub(crate) credential_store_owner: Option<ManagedStoreOwner>,
     /// Server-owned experiments retained without client interpretation.
     pub experimental: Option<serde_json::Map<String, serde_json::Value>>,
     /// Parent run ID for child orchestration flows, if this task was spawned by another run.
@@ -770,6 +786,8 @@ struct RunConfiguration {
     task_id: Option<AmbientAgentTaskId>,
     execution_id: Option<String>,
     use_factory_repositories: bool,
+    github_credential_mode: GitHubCredentialMode,
+    credential_store_owner: Option<ManagedStoreOwner>,
     experimental: Option<serde_json::Map<String, serde_json::Value>>,
     parent_run_id: Option<String>,
     idle_on_complete: Option<Duration>,
@@ -809,6 +827,8 @@ fn split_run_options(
         task_id,
         execution_id,
         use_factory_repositories,
+        github_credential_mode,
+        credential_store_owner,
         experimental,
         parent_run_id,
         should_share,
@@ -883,6 +903,22 @@ fn split_run_options(
         error,
     })?;
     env_vars.extend(harness_env);
+    let credential_store_owner = credential_store_owner
+        .or_else(|| task_id.map(|id| ManagedStoreOwner::Task(id.to_string())));
+    if github_credential_mode == GitHubCredentialMode::RestrictedInstallation {
+        let owner = credential_store_owner
+            .as_ref()
+            .ok_or(AgentDriverError::InvalidRuntimeState)?;
+        git_credentials::validate_restricted_child_environment(&env_vars)
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        env_vars.extend(
+            git_credentials::restricted_child_environment(owner)
+                .map_err(AgentDriverError::ConfigBuildFailed)?,
+        );
+    }
+    if github_credential_mode == GitHubCredentialMode::Legacy {
+        env_vars.insert("WARP_GITHUB_CREDENTIAL_MODE".into(), "legacy".into());
+    }
     let preparation_file = environment_preparation::launch_environment(
         workspace.preparation_policy.as_ref(),
         task_id.map(|id| id.to_string()).as_deref(),
@@ -910,6 +946,11 @@ fn split_run_options(
         tracing::Span::current().record("is_sandbox", true);
     }
 
+    env_vars.insert(
+        OsString::from("WARP_VARS_FILE"),
+        setup_vars::file_path(&working_dir, &env_vars).into_os_string(),
+    );
+
     let skill_dirs = workspace
         .factory_skill_dirs
         .clone()
@@ -935,6 +976,8 @@ fn split_run_options(
             task_id,
             execution_id,
             use_factory_repositories,
+            github_credential_mode,
+            credential_store_owner,
             experimental,
             parent_run_id,
             idle_on_complete,
@@ -1000,6 +1043,7 @@ pub struct AgentDriver {
     /// without re-deriving precedence.
     resolved_env_vars: Arc<HashMap<OsString, OsString>>,
     _preparation_file: Option<environment_preparation::PreparationFile>,
+    setup_vars: Option<setup_vars::SetupVars>,
     harness_config_dir: Option<TempDir>,
 
     output_format: OutputFormat,
@@ -1007,7 +1051,10 @@ pub struct AgentDriver {
     // The associated task ID for this agent run, if any.
     task_id: Option<AmbientAgentTaskId>,
     execution_id: Option<String>,
+    preview_proxy: Option<preview_proxy::Manager>,
     use_factory_repositories: bool,
+    github_credential_mode: GitHubCredentialMode,
+    credential_store_owner: Option<ManagedStoreOwner>,
     #[allow(
         dead_code,
         reason = "the driver retains server-owned experiments without interpreting them"
@@ -1159,6 +1206,37 @@ pub enum AgentRunPrompt {
     },
 }
 
+/// The stage of bringing up a third-party harness over ACP at which setup failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HarnessSetupStage {
+    Manifest,
+    Validate,
+    BridgeSpawn,
+    BridgeAccept,
+    Initialize,
+    SessionOpen,
+    ModelConfig,
+    ExternalConversation,
+    BeginTurn,
+}
+
+impl HarnessSetupStage {
+    /// The stage's snake_case label, as recorded on failure metrics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manifest => "manifest",
+            Self::Validate => "validate",
+            Self::BridgeSpawn => "bridge_spawn",
+            Self::BridgeAccept => "bridge_accept",
+            Self::Initialize => "initialize",
+            Self::SessionOpen => "session_open",
+            Self::ModelConfig => "model_config",
+            Self::ExternalConversation => "external_conversation",
+            Self::BeginTurn => "begin_turn",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentDriverError {
     #[error("Terminal session is not available.")]
@@ -1292,7 +1370,13 @@ pub enum AgentDriverError {
         output: Option<String>,
     },
     #[error("Harness '{harness}' setup failed: {reason}")]
-    HarnessSetupFailed { harness: String, reason: String },
+    HarnessSetupFailed {
+        harness: String,
+        /// Set when the failure belongs to one stage of ACP setup; `None` for failures of
+        /// harness setup that is not stage-specific.
+        stage: Option<HarnessSetupStage>,
+        reason: String,
+    },
     #[error("Harness '{harness}' config setup failed")]
     HarnessConfigSetupFailed {
         harness: String,
@@ -1522,11 +1606,15 @@ impl AgentDriver {
             secrets: Arc::new(HashMap::new()),
             resolved_env_vars: Arc::new(HashMap::new()),
             _preparation_file: None,
+            setup_vars: None,
             harness_config_dir: None,
             output_format: OutputFormat::default(),
             task_id: None,
             execution_id: None,
+            preview_proxy: None,
             use_factory_repositories: false,
+            github_credential_mode: GitHubCredentialMode::Legacy,
+            credential_store_owner: None,
             experimental: None,
             team_scope: None,
             bedrock_oidc_credentials: None,
@@ -1578,6 +1666,8 @@ impl AgentDriver {
             task_id,
             execution_id,
             use_factory_repositories,
+            github_credential_mode,
+            credential_store_owner,
             experimental,
             parent_run_id,
             idle_on_complete,
@@ -1608,7 +1698,23 @@ impl AgentDriver {
         self.secrets = Arc::new(secrets);
         self.task_id = task_id;
         self.execution_id = execution_id;
+        self.preview_proxy = None;
+        if FeatureFlag::PreviewUrlsMcp.is_enabled()
+            && std::env::var("WARP_PREVIEW_PROXY_ENABLED").as_deref() == Ok("1")
+            && let Some(task_id) = task_id
+        {
+            match preview_proxy::Manager::start(
+                task_id,
+                self.execution_id.as_deref(),
+                ServerApiProvider::as_ref(ctx).get_ai_client(),
+            ) {
+                Ok(manager) => self.preview_proxy = Some(manager),
+                Err(error) => log::error!("Preview proxy runtime failed to start: {error:#}"),
+            }
+        }
         self.use_factory_repositories = use_factory_repositories;
+        self.github_credential_mode = github_credential_mode;
+        self.credential_store_owner = credential_store_owner;
         self.factory_repository_contract = use_factory_repositories;
         self.experimental = experimental;
         self.parent_run_id = parent_run_id;
@@ -1930,6 +2036,11 @@ impl AgentDriver {
                     match Self::run_until_end(task, &foreground, &background).await {
                         Ok(outcome) => outcome,
                         Err(error) => {
+                            if let Some(task_id) = task_id {
+                                report_if_error!(git_credentials::close_restricted_credentials(
+                                    &task_id.to_string()
+                                ));
+                            }
                             let _ = foreground.spawn(|me, _| me.harness_config_dir.take()).await;
                             if tx.send(Err(error)).is_err() {
                                 report_error!("Caller did not wait for agent driver to finish");
@@ -1937,6 +2048,11 @@ impl AgentDriver {
                             return;
                         }
                     };
+                if let Some(task_id) = task_id {
+                    report_if_error!(git_credentials::close_restricted_credentials(
+                        &task_id.to_string()
+                    ));
+                }
                 match cause {
                     RunEndCause::SandboxDeadline => {
                         tracing::info!(tags.cloud_agent = true, "sandbox deadline approaching");
@@ -1996,6 +2112,10 @@ impl AgentDriver {
                             .await;
                         }
                         let result = finished.unwrap_or(Err(AgentDriverError::InvalidRuntimeState));
+                        if let Err(AgentDriverError::HarnessExitTimedOut { harness }) = &result {
+                            Self::send_harness_exit_telemetry(harness, "timed_out", &foreground)
+                                .await;
+                        }
                         let result = driver_result_after_harness_run(result);
                         let _ = foreground.spawn(|me, _| me.harness_config_dir.take()).await;
                         if tx.send(result).is_err() {
@@ -2311,6 +2431,13 @@ impl AgentDriver {
                     )
                 }
                 WorkspaceState::Pending(mut workspace) => {
+                    let launch_file_warmup = match &task.harness {
+                        HarnessKind::ThirdParty(harness) => {
+                            LaunchFileWarmup::start(harness.launch_file_roots(), &setup_events)
+                        }
+                        HarnessKind::Oz | HarnessKind::Unsupported(_) => None,
+                    };
+                    Self::initialize_setup_vars(&foreground, true).await?;
                     let global_skill_resolution =
                         agent_setup::prepare_global_skills(&foreground, &setup_events).await?;
                     // The Factory definition checkout is run-scoped: the dispatch decides
@@ -2368,6 +2495,17 @@ impl AgentDriver {
                             return Err(error);
                         }
                     };
+                    // The harness launch is next, and an unfinished warm-up would compete with
+                    // it for the same storage.
+                    if let Some(warmup) = &launch_file_warmup {
+                        warmup.stop();
+                    }
+                    Self::read_setup_vars(
+                        &foreground,
+                        true,
+                        matches!(&task.harness, HarnessKind::Oz),
+                    )
+                    .await?;
                     let harness_working_dir = prepared.harness_working_dir.clone();
                     foreground
                         .spawn(move |me, _| me.harness_working_dir = harness_working_dir)
@@ -2445,7 +2583,9 @@ impl AgentDriver {
                 bedrock_config_for_refresh,
             ) = foreground
                 .spawn(|me, ctx| {
-                    let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled() {
+                    let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled()
+                        || me.github_credential_mode == GitHubCredentialMode::RestrictedInstallation
+                    {
                         me.task_id.map(|id| id.to_string())
                     } else {
                         None
@@ -2502,6 +2642,7 @@ impl AgentDriver {
                 )
                 .await?;
 
+                Self::prepare_local_subtree(&foreground).await?;
                 let status_rx = foreground
                     .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
                     .await?;
@@ -2536,6 +2677,14 @@ impl AgentDriver {
                 conversation_status.into_result()
             }
             HarnessKind::ThirdParty(harness) => {
+                // Harnesses that render through the native conversation are driven over ACP;
+                // the rest run their interactive CLI in the terminal.
+                let transport = if harness.drives_cli_agent_session() {
+                    HarnessTransport::Pty
+                } else {
+                    HarnessTransport::Acp
+                };
+                let setup_events = setup_events.with_transport(transport);
                 let harness_setup_events = setup_events.clone();
                 let (harness_exit_rx, runner) = setup_events
                     .record_result(SetupStep::ThirdPartyHarnessPreparation, async {
@@ -2553,7 +2702,12 @@ impl AgentDriver {
                         )
                         .await?;
 
-                        Self::run_preflight_checks(harness.as_ref(), &foreground).await?;
+                        Self::run_preflight_checks(
+                            harness.as_ref(),
+                            &foreground,
+                            &harness_setup_events,
+                        )
+                        .await?;
                         Self::show_transport_fallback_notice(harness.harness(), &foreground).await;
                         Ok::<_, AgentDriverError>((harness_exit_rx, runner))
                     })
@@ -2580,6 +2734,7 @@ impl AgentDriver {
             }
             HarnessKind::Unsupported(harness) => Err(AgentDriverError::HarnessSetupFailed {
                 harness: harness.to_string(),
+                stage: None,
                 reason: format!(
                     "The {harness} harness is only supported for local child agent launches."
                 ),
@@ -2866,12 +3021,22 @@ impl AgentDriver {
     async fn run_preflight_checks(
         harness: &dyn ThirdPartyHarness,
         foreground: &ModelSpawner<Self>,
+        events: &SetupClientEventReporter,
     ) -> Result<(), AgentDriverError> {
         let harness_name = harness.cli_agent().command_prefix().to_owned();
 
         if let Some(cmd) = harness.auth_check_command() {
             log::info!("Running auth check for {harness_name}: {cmd}");
-            Self::run_single_preflight(&cmd, &harness_name, foreground).await?;
+            if harness.drives_cli_agent_session() {
+                Self::run_single_preflight(&cmd, &harness_name, foreground).await?;
+            } else {
+                events
+                    .record_result(
+                        SetupStep::AcpAuthPreflight,
+                        Self::run_single_preflight(&cmd, &harness_name, foreground),
+                    )
+                    .await?;
+            }
         }
 
         Ok(())
@@ -3179,6 +3344,7 @@ impl AgentDriver {
     ) -> AgentDriverError {
         AgentDriverError::HarnessSetupFailed {
             harness: harness.to_owned(),
+            stage: None,
             reason: reason.into(),
         }
     }
@@ -3726,9 +3892,9 @@ impl AgentDriver {
 
     /// Emits a telemetry event for one attempt in the harness exit
     /// escalation ladder (`method` is `"exit"`, `"exit_followup"`, or
-    /// `"force_kill"`), so how often graceful exit succeeds vs. requires
-    /// escalation is measurable in production instead of only
-    /// reconstructable from logs.
+    /// `"force_kill"`), or for the ladder running out (`"timed_out"`), so
+    /// how often graceful exit succeeds vs. requires escalation is
+    /// measurable in production instead of only reconstructable from logs.
     async fn send_harness_exit_telemetry(
         harness_name: &str,
         method: &'static str,
@@ -4033,6 +4199,12 @@ impl AgentDriver {
                         return;
                     }
                     let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+                    let bound_conversation_id = me.run_conversation_id
+                        .or(restored_conversation_id)
+                        .or_else(|| history_model.active_conversation_id(terminal_id));
+                    if bound_conversation_id != Some(*conversation_id) {
+                        return;
+                    }
                     let Some(conversation) = history_model.conversation(conversation_id) else {
                         log::warn!("No active conversation for terminal view {conversation_terminal_id} with id {conversation_id}");
                         return;

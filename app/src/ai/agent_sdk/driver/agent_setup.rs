@@ -24,6 +24,8 @@ use super::environment::{
     FACTORY_REPO_CLONE_URL_ENV_VAR, FACTORY_REPO_DIR_ENV_VAR,
     prepend_factory_definition_clone_for_values,
 };
+use super::harness::acp::sidecar_launch_file_roots;
+use super::harness::launch_warmup::LaunchFileWarmup;
 use super::{
     AgentDriver, AgentDriverError, StandbyWorkspace, WorkspaceState, environment, mcp_startup,
 };
@@ -60,7 +62,13 @@ impl AgentDriver {
             .await?
             .ok_or(AgentDriverError::InvalidRuntimeState)?;
         let prepared_configuration = workspace.clone();
+        Self::replace_prewarmed_mcp_environment(foreground, Default::default()).await?;
         bootstrap_terminal(foreground, setup_events).await?;
+        // A standby has no launch to yield to, so the warm-up is left to finish.
+        if harness != Harness::Oz {
+            LaunchFileWarmup::start(sidecar_launch_file_roots(harness), setup_events);
+        }
+        Self::initialize_setup_vars(foreground, false).await?;
         setup_events
             .record_result(
                 SetupStep::CloudProviderSetup,
@@ -108,6 +116,7 @@ impl AgentDriver {
             snapshot_reporter,
         )
         .await?;
+        Self::read_setup_vars(foreground, false, harness == Harness::Oz).await?;
         let working_dir = prepared.harness_working_dir.clone();
         let repositories = prepared.repositories.clone();
         foreground
