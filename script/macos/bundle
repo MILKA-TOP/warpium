@@ -215,6 +215,9 @@ DMG_NAME_SUFFIX=""
 # By default we build dev bundles.
 RELEASE_CHANNEL="dev"
 FEATURES="release_bundle,cocoa_sentry,extern_plist"
+# Features passed via --features; appended after the channel-specific setup so
+# channels that replace the base feature set (e.g. oss) still get them.
+EXTRA_FEATURES=""
 REGISTER_SERVICES=true
 DEBUG=false
 ARTIFACT="app"
@@ -329,7 +332,7 @@ while (( "$#" )); do
     --features)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
         echo "Adding Cargo features: $2"
-        FEATURES="$FEATURES,$2"
+        EXTRA_FEATURES="${EXTRA_FEATURES:+$EXTRA_FEATURES,}$2"
         shift 2
       else
         echo "Error: Argument for $1 is missing" >&2
@@ -441,6 +444,9 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
     # (which would otherwise pull in the Sentry framework dependency).
     FEATURES="release_bundle,extern_plist"
+fi
+if [[ -n "$EXTRA_FEATURES" ]]; then
+  FEATURES="$FEATURES,$EXTRA_FEATURES"
 fi
 
 OUT_DIR="target/$TARGET_PROFILE_DIR/bundle/osx"
@@ -1095,6 +1101,10 @@ if [ "${GITHUB_ACTIONS}" == "true" ]; then
     echo "dmg_name=$FINAL_DMG_NAME" >> "$GITHUB_OUTPUT"
     echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
     echo "dsym_folder_path=$OUT_DIR" >> "$GITHUB_OUTPUT"
+  fi
+
+  if [[ -n "${WARPCTRL_COMMAND_NAME:-}" ]]; then
+    echo "warpctrl_command_name=$WARPCTRL_COMMAND_NAME" >> "$GITHUB_OUTPUT"
   fi
 
   if [[ -n "$BUNDLED_RESOURCES_DIR" ]]; then

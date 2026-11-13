@@ -19,7 +19,8 @@ on:
       - '**/*.md'
       - 'specs/**'
   pull_request:
-    branches: [master]
+    # `claude/**` lets PRs stacked on an unmerged fork branch build too.
+    branches: [master, 'claude/**']
     paths-ignore:
       - '**/*.md'
       - 'specs/**'
@@ -148,15 +149,24 @@ jobs:
           # The Intel host can't run the arm64 binary to dump the settings
           # schema, so the bundle ships without settings_schema.json.
           SKIP_SETTINGS_SCHEMA: '1'
+        # warp_control_cli enables Warp's local-control API and bundles the
+        # `warpctrl-oss` wrapper, so test harnesses can drive the app without focus
+        # or synthetic input. The control server binds no port or socket and
+        # publishes no discovery record until the user enables local control in
+        # Settings > Scripting (LocalControlMode defaults to Disabled on oss); the
+        # Scripting page, install-warpctrl commands and bundled warpctrl agent skill
+        # are visible regardless.
         run: |
           df -h "$GITHUB_WORKSPACE"
           ./script/bundle --channel oss --arch aarch64 --selfsign \
+            --features warp_control_cli \
             --dmg-name-suffix "$WARPIUM_VERSION_TAG-arm64"
 
-      - name: Verify bundle version and icon
+      - name: Verify bundle version, icon and warpctrl
         env:
           DMG_PATH: ${{ steps.bundle.outputs.dmg_path }}
           EXPECTED_PLIST_VERSION: ${{ needs.preflight.outputs.plist_version }}
+          WARPCTRL_COMMAND_NAME: ${{ steps.bundle.outputs.warpctrl_command_name }}
         run: |
           APP_PATH="$(dirname "$DMG_PATH")/Warpium.app"
           actual="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
@@ -173,6 +183,20 @@ jobs:
             echo "::error::App icon $icon_path is missing"
             exit 1
           fi
+          # Check the wrapper inside the shipped .dmg, not just the staging copy.
+          if [[ -z "$WARPCTRL_COMMAND_NAME" ]]; then
+            echo "::error::script/bundle did not report a warpctrl wrapper; was warp_control_cli enabled?"
+            exit 1
+          fi
+          mount_dir="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "$DMG_PATH" >/dev/null
+          trap 'hdiutil detach "$mount_dir" >/dev/null || true' EXIT
+          warpctrl_path="$mount_dir/Warpium.app/Contents/Resources/bin/$WARPCTRL_COMMAND_NAME"
+          if [[ ! -x "$warpctrl_path" ]]; then
+            echo "::error::warpctrl wrapper $WARPCTRL_COMMAND_NAME is missing from the .dmg"
+            exit 1
+          fi
+          echo "warpctrl wrapper in .dmg: Warpium.app/Contents/Resources/bin/$WARPCTRL_COMMAND_NAME"
 
       - name: Report disk usage
         if: always()
