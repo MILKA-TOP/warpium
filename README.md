@@ -1,110 +1,75 @@
-<a href="https://www.warp.dev">
-    <img width="1024" alt="Warp Agentic Development Environment product preview" src="https://github.com/user-attachments/assets/9976b2da-2edd-4604-a36c-8fd53719c6d4" />
-</a>
-&nbsp;
 <p align="center">
-  <a href="https://warp.dev/factories"><img height="20" alt="Built with Warp" src="https://raw.githubusercontent.com/warpdotdev/brand-assets/main/Github/Built-With-Warp-Export@2x.png" /></a>
+  <img width="880" alt="Warpium: a lightweight IDE for AI-driven mobile development, built on Warp" src="docs/images/warpium-banner.png" />
 </p>
 
 <p align="center">
-  <a href="https://www.warp.dev">Website</a>
-  ·
-  <a href="https://www.warp.dev/code">Code</a>
-  ·
-  <a href="https://www.warp.dev/agents">Agents</a>
-  ·
-  <a href="https://www.warp.dev/terminal">Terminal</a>
-  ·
-  <a href="https://www.warp.dev/drive">Drive</a>
-  ·
-  <a href="https://docs.warp.dev">Docs</a>
-  ·
-  <a href="https://www.warp.dev/blog/how-warp-works">How Warp Works</a>
+  <b>A lightweight IDE for AI-driven mobile development, built on Warp.</b><br />
+  <sub>Легковесная IDE для AI-мобильной разработки на базе Warp</sub>
 </p>
 
-> [!NOTE]
-> OpenAI is the founding sponsor of the new, open-source Warp repository, and the new agentic management workflows are powered by GPT models.
+<p align="center">
+  <a href="https://github.com/MILKA-TOP/warpium/actions/workflows/warpium-build.yml"><img alt="Warpium Build" src="https://github.com/MILKA-TOP/warpium/actions/workflows/warpium-build.yml/badge.svg" /></a>
+  <a href="https://github.com/MILKA-TOP/warpium/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/MILKA-TOP/warpium?include_prereleases&label=release" /></a>
+  <a href="LICENSE-AGPL"><img alt="License: AGPL v3 / MIT" src="https://img.shields.io/badge/license-AGPL--3.0%20%2F%20MIT-blue" /></a>
+</p>
 
-<h1></h1>
+<p align="center">
+  <img width="1024" alt="Warpium product preview: an agent conversation next to a code review diff" src="docs/images/warpium-preview.png" />
+</p>
 
 ## About
 
-[Warp](https://www.warp.dev) is an agentic development environment, born out of the terminal. Use Warp's built-in coding agent, or bring your own CLI agent (Claude Code, Codex, Gemini CLI, and others).
+Warpium is a lightweight IDE for AI-driven mobile development, built on [Warp](https://github.com/warpdotdev/warp), the open-source agentic development environment born out of the terminal. It is Warp's open-source build under its own name and icon, with features for Android/Kotlin development with AI agents added on top. All credit for Warp goes to its original authors.
 
-## Installation
+> [!NOTE]
+> Warpium is an unofficial, personal project. It is not affiliated with, endorsed by, or supported by Warp (Denver Technologies, Inc). Please do not report Warpium issues to the Warp team.
 
-You can [download Warp](https://www.warp.dev/download) and [read our docs](https://docs.warp.dev/) for platform-specific instructions.
+## Install (macOS, Apple silicon)
 
-## Warp Contributions Overview Dashboard
+<img align="right" width="96" alt="Warpium app icon" src="docs/images/warpium-icon.png" />
 
-Explore [build.warp.dev](https://build.warp.dev) to:
-- Watch thousands of [Warp Factory](warp.dev/factories) agents triage issues, write specs, implement changes, and review PRs
-- View top contributors and in-flight features
-- Track your own issues with GitHub sign-in
-- Click into active agent sessions in a web-compiled Warp terminal
+1. **Download** the latest `Warpium-…-arm64.dmg` from [Releases](https://github.com/MILKA-TOP/warpium/releases). Until the first release is published, or for the newest development build, open [Actions](https://github.com/MILKA-TOP/warpium/actions/workflows/warpium-build.yml), pick the latest successful run on `master` and download its artifact: a `.zip` that contains the `.dmg`. Downloading from Actions needs a GitHub sign-in, and artifacts expire after 30 days.
+2. **Open the `.dmg`** and drag **Warpium** to **Applications**.
+3. **Allow it to launch.** Warpium is not notarized by Apple, so macOS blocks it at first. Either run this in Terminal:
 
-## Automate development with Warp Factories
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Warpium.app
+   ```
 
-This repository is driven by [Warp Factories](https://warp.dev/factories): open, flexible infrastructure for teams to build cloud software factories of their own.
+   or right-click Warpium in Applications and choose **Open**. On recent macOS versions, try to open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
+4. **Launch Warpium** from Applications or Spotlight. On first launch, sign in or skip, then open a folder or a terminal tab.
 
-Warp Factories are defined in code and easy to deploy on any model or harness, with evals, benchmarks, and self-improvement built in. [Get early access](https://warp.dev/factories) or [book a demo](https://warp.dev/get-started) for a tailored walk-through of the platform. Eligible teams can receive up to $10,000 in free factory usage.
+**Good to know**
 
-## Licensing
+- Only Apple silicon (arm64) Macs are supported for now.
+- Downloaded builds don't include the built-in `modify-settings` agent skill yet; builds from source do.
+- Warpium can be installed next to the official Warp app; their app data and preferences are separate.
+- It shares `~/.warp-oss` (settings, themes, skills) with upstream Warp's open-source build.
+- Don't install it next to an upstream `WarpOss.app`: both handle `warposs://` links, so sign-in may open the wrong app.
 
-Warp's UI framework (the `warpui_core` and `warpui` crates) are licensed under the [MIT license](LICENSE-MIT).
+## Build from source
 
-The rest of the code in this repository is licensed under the [AGPL v3](LICENSE-AGPL).
-
-## Open Source & Contributing
-
-Warp's client codebase is open source and lives in this repository. We welcome community contributions and have designed a lightweight workflow to help new contributors get started. For the full contribution flow, read our [CONTRIBUTING.md](CONTRIBUTING.md) guide.
-
-> [!TIP]
-> **Chat with contributors and the Warp team** in the [`#oss-contributors`](https://warpcommunity.slack.com/archives/C0B0LM8N4DB) Slack channel — a good place for ad-hoc questions, design discussion, and pairing with maintainers. New here? [Join the Warp Slack community](https://go.warp.dev/join-preview) first, then jump into `#oss-contributors`.
-
-### Issue to PR
-
-Before filing, [search existing issues](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+sort%3Areactions-%2B1-desc) for your bug or feature request. If nothing exists, [file an issue](https://github.com/warpdotdev/warp/issues/new/choose) using our templates. Security vulnerabilities should be reported privately as described in [CONTRIBUTING.md](CONTRIBUTING.md#reporting-security-issues).
-
-Once filed, a Warp maintainer reviews the issue and may apply a readiness label: [`ready-to-spec`](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+label%3Aready-to-spec) signals the design is open for contributors to spec out, and [`ready-to-implement`](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+label%3Aready-to-implement) signals the design is settled and code PRs are welcome. Anyone can pick up a labeled issue — mention **@oss-maintainers** on an issue if you'd like it considered for a readiness label.
-
-### Building the Repo Locally
-
-To build and run Warp from source:
+You need macOS with Xcode 26, Homebrew and `rustup`.
 
 ```bash
-./script/bootstrap   # platform-specific setup
-./script/run         # build and run Warp
-./script/presubmit   # fmt, clippy, and tests
+./script/bootstrap   # install the toolchain and dependencies
+./script/run         # build and run a debug Warpium.app
 ```
 
-See [AGENTS.md](AGENTS.md) for the full engineering guide, including coding style, testing, and platform-specific notes.
+To build a release `.dmg` like the published ones, see the [developer guide](WARPIUM.md#local-release-build).
 
-## Joining the Team
+## Planned features
 
-Interested in joining the team? See our [open roles](https://www.warp.dev/careers).
+- **Open in new tab, fixed.** "Open in new tab" in the file tree opens the folder you selected instead of your home folder.
+- **Smarter search.** Project search can respect `.gitignore` and take include and exclude filters such as `*build*`.
+- **Git log.** A JetBrains-style git log and graph with branches, commits and sorting.
+- **Upstream updates.** A notification when a new Warp version is available, so it can be merged into Warpium.
+- **Images for agents in Docker.** Paste images into CLI agents such as Claude Code that run inside Docker containers.
+- **Kotlin and code navigation.** Kotlin support and IDE-like navigation, as if the project were indexed. The goal is to replace Android Studio for everyday work.
+- **Run configurations.** Build and run Android Studio and IntelliJ IDEA projects from their run configurations, and possibly show Compose Preview. This is still being researched, with a focus on performance.
 
-## Support and Questions
+## License and trademarks
 
-1. See our [docs](https://docs.warp.dev/) for a comprehensive guide to Warp's features.
-2. Join our [Slack Community](https://go.warp.dev/join-preview) to connect with other users and get help from the Warp team — contributors hang out in [`#oss-contributors`](https://warpcommunity.slack.com/archives/C0B0LM8N4DB).
-3. Try our [Preview build](https://www.warp.dev/download-preview) to test the latest experimental features.
-4. Mention **@oss-maintainers** on any issue to escalate to the team — for example, if you encounter problems with the automated agents.
+Warpium keeps Warp's licensing: the UI framework crates (`warpui_core` and `warpui`) are under the [MIT license](LICENSE-MIT), and the rest of the code is under the [GNU AGPL v3](LICENSE-AGPL). The complete source of every Warpium build is in this repository.
 
-## Code of Conduct
-
-We ask everyone to be respectful and empathetic. Warp follows the [Code of Conduct](CODE_OF_CONDUCT.md). To report violations, email warp-coc at warp.dev.
-
-## Open Source Dependencies
-
-We'd like to call out a few of the [open source dependencies](https://docs.warp.dev/help/licenses) that have helped Warp to get off the ground:
-
-- [Tokio](https://github.com/tokio-rs/tokio)
-- [NuShell](https://github.com/nushell/nushell)
-- [Fig Completion Specs](https://github.com/withfig/autocomplete)
-- [Warp Server Framework](https://github.com/seanmonstar/warp)
-- [Alacritty](https://github.com/alacritty/alacritty)
-- [Hyper HTTP library](https://github.com/hyperium/hyper)
-- [FontKit](https://github.com/servo/font-kit)
-- [Core-foundation](https://github.com/servo/core-foundation-rs)
-- [Smol](https://github.com/smol-rs/smol)
+"Warp" and the Warp logo are trademarks of their respective owner. Warpium uses the name only to say where it comes from. It is not an official Warp product and is not affiliated with Warp, and its logo is not derived from Warp's.

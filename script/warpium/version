@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+#
+# Prints the Warpium version derived from WARPIUM_VERSION at the repo root.
+#
+# Usage: script/warpium/version [--tag | --plist | --upstream-tag]
+#   --tag           (default) release tag and GIT_RELEASE_TAG, e.g. v0.2026.06.03.09.49.stable_00.1
+#   --plist         numeric CFBundleShortVersionString, e.g. 0.2026.06.03.09.49.00.1
+#   --upstream-tag  upstream Warp release tag the fork is based on, e.g. v0.2026.06.03.09.49.stable_00
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+VERSION_FILE="${WARPIUM_VERSION_FILE:-$REPO_ROOT/WARPIUM_VERSION}"
+
+read_key() {
+  local key="$1" value
+  # Tolerate CRLF line endings and trailing whitespace from editors.
+  value="$(sed -n "s/^${key}=//p" "$VERSION_FILE" | tr -d '\r' | sed 's/[[:space:]]*$//')"
+  if [[ -z "$value" || "$value" == *$'\n'* ]]; then
+    echo "error: $VERSION_FILE must define $key exactly once" >&2
+    exit 1
+  fi
+  printf '%s' "$value"
+}
+
+UPSTREAM_TAG="$(read_key UPSTREAM_TAG)"
+FORK_COUNTER="$(read_key FORK_COUNTER)"
+
+# Same shape script/update_plist accepts for upstream tags: vN.YYYY.MM.DD.HH.MM.channel_NN.
+UPSTREAM_TAG_RE='^v([0-9]+)\.([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.[a-z]+_([0-9]{2})$'
+if [[ ! "$UPSTREAM_TAG" =~ $UPSTREAM_TAG_RE ]]; then
+  echo "error: UPSTREAM_TAG '$UPSTREAM_TAG' is not an upstream Warp release tag (vN.YYYY.MM.DD.HH.MM.channel_NN)" >&2
+  exit 1
+fi
+PLIST_BASE="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}.${BASH_REMATCH[4]}.${BASH_REMATCH[5]}.${BASH_REMATCH[6]}.${BASH_REMATCH[7]}"
+
+if [[ ! "$FORK_COUNTER" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: FORK_COUNTER '$FORK_COUNTER' must be a positive integer" >&2
+  exit 1
+fi
+
+case "${1:---tag}" in
+  --tag) echo "$UPSTREAM_TAG.$FORK_COUNTER" ;;
+  --plist) echo "$PLIST_BASE.$FORK_COUNTER" ;;
+  --upstream-tag) echo "$UPSTREAM_TAG" ;;
+  *)
+    echo "usage: $0 [--tag | --plist | --upstream-tag]" >&2
+    exit 1
+    ;;
+esac

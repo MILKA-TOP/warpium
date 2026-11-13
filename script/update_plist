@@ -19,13 +19,20 @@ fi
 if [[ -n "$GIT_RELEASE_TAG" ]]; then
   echo "Updating plist Warp version to $GIT_RELEASE_TAG"
   plutil -insert WarpVersion -string "$GIT_RELEASE_TAG" "$WARP_PLIST_PATH"
+fi
 
+# Warpium fork builds pass their version as WARPIUM_VERSION_TAG instead of GIT_RELEASE_TAG
+# (see WARPIUM_VERSION), so it only sets the bundle version below.
+BUNDLE_VERSION_TAG="${GIT_RELEASE_TAG:-${WARPIUM_VERSION_TAG:-}}"
+if [[ -n "$BUNDLE_VERSION_TAG" ]]; then
   # We convert our version format to be period-separated integers only to align better with
   # Apple's guidance on values for `CFBundleVersion` / `CFBundleShortVersionString`.
   # (They technically only allow [major].[minor].[patch], but it's not enforced.)
   # This allows IT admins to work with a more stable version of our internal versioning scheme.
   # A tag like `v0.2025.01.07.08.02.stable_02` would be converted to `0.2025.01.07.08.02.02`.
-  if [[ $GIT_RELEASE_TAG =~ ^v([0-9]+)\.([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.[a-z]+_([0-9]{2})$ ]]; then
+  # Warpium fork versions append a fork counter (see WARPIUM_VERSION), which is kept as a final
+  # component: `v0.2025.01.07.08.02.stable_02.3` becomes `0.2025.01.07.08.02.02.3`.
+  if [[ $BUNDLE_VERSION_TAG =~ ^v([0-9]+)\.([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.[a-z]+_([0-9]{2})(\.[1-9][0-9]*)?$ ]]; then
     MAJOR="${BASH_REMATCH[1]}"
     YEAR="${BASH_REMATCH[2]}"
     MONTH="${BASH_REMATCH[3]}"
@@ -33,14 +40,15 @@ if [[ -n "$GIT_RELEASE_TAG" ]]; then
     HOUR="${BASH_REMATCH[5]}"
     MINUTE="${BASH_REMATCH[6]}"
     BUILD="${BASH_REMATCH[7]}"
+    FORK_SUFFIX="${BASH_REMATCH[8]}"
     
-    FORMATTED_VERSION="${MAJOR}.${YEAR}.${MONTH}.${DAY}.${HOUR}.${MINUTE}.${BUILD}"
+    FORMATTED_VERSION="${MAJOR}.${YEAR}.${MONTH}.${DAY}.${HOUR}.${MINUTE}.${BUILD}${FORK_SUFFIX}"
     
     echo "Updating plist version to $FORMATTED_VERSION"
     plutil -replace CFBundleShortVersionString -string "$FORMATTED_VERSION" "$WARP_PLIST_PATH"
     plutil -replace CFBundleVersion -string "$FORMATTED_VERSION" "$WARP_PLIST_PATH"
   else
-    echo "Warning: GIT_RELEASE_TAG '$GIT_RELEASE_TAG' does not match expected format vN.YYYY.MM.DD.HH.MM.channel_NN"
+    echo "Warning: version tag '$BUNDLE_VERSION_TAG' does not match expected format vN.YYYY.MM.DD.HH.MM.channel_NN[.FORK_COUNTER]"
   fi
 fi
 

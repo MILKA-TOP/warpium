@@ -15,6 +15,7 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use crate::channel::{Channel, ChannelState};
 use crate::coding_entrypoints::clone_repo_view::{CloneRepoEvent, CloneRepoView};
 use crate::coding_entrypoints::create_project_view::{CreateProjectEvent, CreateProjectView};
 use crate::coding_entrypoints::project_buttons::{ProjectButtons, ProjectButtonsEvent};
@@ -208,22 +209,30 @@ impl GetStartedView {
             }
         }
 
+        let channel = ChannelState::channel();
+        let logo_path = match channel {
+            Channel::Oss => "bundled/svg/warpium-mark-neutral.svg",
+            Channel::Stable
+            | Channel::Preview
+            | Channel::Dev
+            | Channel::Local
+            | Channel::Integration => "bundled/svg/warp-logo-neutral.svg",
+        };
+
         Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_children([
                 Container::new(
-                    ConstrainedBox::new(
-                        Icon::new("bundled/svg/warp-logo-neutral.svg", theme.foreground()).finish(),
-                    )
-                    .with_height(40.)
-                    .with_width(40.)
-                    .finish(),
+                    ConstrainedBox::new(Icon::new(logo_path, theme.foreground()).finish())
+                        .with_height(40.)
+                        .with_width(40.)
+                        .finish(),
                 )
                 .with_margin_bottom(12.)
                 .finish(),
                 appearance
                     .ui_builder()
-                    .paragraph("Welcome to Warp")
+                    .paragraph(format!("Welcome to {}", channel.app_display_name()))
                     .with_style(UiComponentStyles {
                         font_size: Some(20.),
                         ..Default::default()

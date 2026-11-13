@@ -1044,12 +1044,20 @@ acp_harness = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"
-copyright = "© 2025, Denver Technologies, Inc"
-identifier = "dev.warp.WarpOss"
-name = "WarpOss"
+copyright = "Warpium © 2026 MILKA-TOP. Based on Warp © Denver Technologies, Inc"
+identifier = "dev.milka.Warpium"
+name = "Warpium"
 resources = ["assets/onboarding"]
-icon = ["channels/oss/icon/no-padding/512x512.png", "channels/oss/icon/no-padding/icon.ico"]
-short_description = "The open-source, cloud-backed terminal for individuals and teams."
+# cargo-bundle copies the .icns as-is on macOS (Apple's icon grid, @2x sizes included). On
+# Xcode 26 script/compile_icon then switches the bundle to the Liquid Glass AppIcon.icon, and the
+# .icns remains the fallback and the .dmg volume icon. All are generated from branding/ by
+# script/warpium/render_icons.py.
+icon = [
+  "channels/oss/icon/Warpium.icns",
+  "channels/oss/icon/no-padding/512x512.png",
+  "channels/oss/icon/no-padding/icon.ico",
+]
+short_description = "Warpium: a lightweight IDE for AI-driven mobile development, built on Warp."
 
 [package.metadata.bundle.bin.stable]
 category = "public.app-category.developer-tools"

@@ -164,7 +164,7 @@ unsafe extern "C" {
 
 struct StandardMenuItemProperties {
     /// The menu item title.
-    title: &'static NSString,
+    title: MenuString,
     /// The selector to invoke.
     action: Sel,
     /// The key equivalent string, or empty for none.
@@ -172,12 +172,12 @@ struct StandardMenuItemProperties {
     modifiers: NSEventModifierFlags,
 }
 
-enum KeyEquivalent {
+enum MenuString {
     Static(&'static NSString),
     Dynamic(Retained<NSString>),
 }
 
-impl KeyEquivalent {
+impl MenuString {
     fn as_nsstring(&self) -> &NSString {
         match self {
             Self::Static(value) => value,
@@ -186,8 +186,9 @@ impl KeyEquivalent {
     }
 }
 
-// Get properties from a standard action.
-fn resolve_standard_action(action: StandardAction) -> StandardMenuItemProperties {
+/// Get properties from a standard action. `app_name` names the app in "Hide …"/"Quit …"; it is
+/// the title of the top-level menu holding the item, which for the app menu is the app's name.
+fn resolve_standard_action(action: StandardAction, app_name: &str) -> StandardMenuItemProperties {
     let cmd = NSEventModifierFlags::Command;
     let option = NSEventModifierFlags::Option;
     let ctrl = NSEventModifierFlags::Control;
@@ -200,7 +201,7 @@ fn resolve_standard_action(action: StandardAction) -> StandardMenuItemProperties
         shortcut: &'static NSString,
     ) -> StandardMenuItemProperties {
         StandardMenuItemProperties {
-            title,
+            title: MenuString::Static(title),
             action,
             shortcut,
             modifiers,
@@ -214,13 +215,18 @@ fn resolve_standard_action(action: StandardAction) -> StandardMenuItemProperties
             none,
             ns_string!(""),
         ),
-        StandardAction::Quit => make(
-            ns_string!("Quit Warp"),
-            sel!(terminate:),
-            cmd,
-            ns_string!("q"),
-        ),
-        StandardAction::Hide => make(ns_string!("Hide Warp"), sel!(hide:), cmd, ns_string!("h")),
+        StandardAction::Quit => StandardMenuItemProperties {
+            title: MenuString::Dynamic(NSString::from_str(&format!("Quit {app_name}"))),
+            action: sel!(terminate:),
+            shortcut: ns_string!("q"),
+            modifiers: cmd,
+        },
+        StandardAction::Hide => StandardMenuItemProperties {
+            title: MenuString::Dynamic(NSString::from_str(&format!("Hide {app_name}"))),
+            action: sel!(hide:),
+            shortcut: ns_string!("h"),
+            modifiers: cmd,
+        },
         StandardAction::HideOtherApps => make(
             ns_string!("Hide Others"),
             sel!(hideOtherApplications:),
@@ -257,17 +263,17 @@ fn resolve_standard_action(action: StandardAction) -> StandardMenuItemProperties
 }
 
 /// Determine the key equivalent for the given keystroke
-fn resolve_key_equivalent(keystroke: Option<&Keystroke>) -> (KeyEquivalent, NSEventModifierFlags) {
+fn resolve_key_equivalent(keystroke: Option<&Keystroke>) -> (MenuString, NSEventModifierFlags) {
     let mut flags = NSEventModifierFlags::empty();
 
     let keystroke = match keystroke {
         Some(value) => value,
-        None => return (KeyEquivalent::Static(ns_string!("")), flags),
+        None => return (MenuString::Static(ns_string!("")), flags),
     };
 
     let key_equivalent = match MENU_KEY_EQUIVALENTS.get(keystroke.key.as_str()) {
-        Some(c) => KeyEquivalent::Dynamic(NSString::from_str(&String::from(*c))),
-        None => KeyEquivalent::Dynamic(NSString::from_str(&keystroke.key)),
+        Some(c) => MenuString::Dynamic(NSString::from_str(&String::from(*c))),
+        None => MenuString::Dynamic(NSString::from_str(&keystroke.key)),
     };
 
     for (is_set, flag) in [
@@ -331,6 +337,13 @@ unsafe fn make_submenu(menu_items: Vec<MenuItem>) -> id {
 }
 
 unsafe fn make_menu_item(menu_item: MenuItem) -> id {
+    unsafe { make_menu_item_in_menu(menu_item, DEFAULT_APP_NAME) }
+}
+
+/// Fallback app name for standard items built outside a top-level menu.
+const DEFAULT_APP_NAME: &str = "Warp";
+
+unsafe fn make_menu_item_in_menu(menu_item: MenuItem, menu_title: &str) -> id {
     unsafe {
         match menu_item {
             MenuItem::Custom(custom_menu_item) => {
@@ -353,10 +366,10 @@ unsafe fn make_menu_item(menu_item: MenuItem) -> id {
             }
             MenuItem::Standard(standard_action) => {
                 let mtm = MainThreadMarker::new_unchecked();
-                let properties = resolve_standard_action(standard_action);
+                let properties = resolve_standard_action(standard_action, menu_title);
                 let nsmenu_item = NSMenuItem::initWithTitle_action_keyEquivalent(
                     mtm.alloc(),
-                    properties.title,
+                    properties.title.as_nsstring(),
                     Some(properties.action),
                     properties.shortcut,
                 );
@@ -387,7 +400,7 @@ unsafe fn make_top_level_menu_item(menu: Menu) -> id {
         }
 
         for menu_item in menu.menu_items {
-            nsmenu.addItem(&*make_menu_item(menu_item).cast::<NSMenuItem>());
+            nsmenu.addItem(&*make_menu_item_in_menu(menu_item, &menu.title).cast::<NSMenuItem>());
         }
 
         let menuitem = NSMenuItem::new(mtm);
