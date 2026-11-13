@@ -1,5 +1,5 @@
 use pathfinder_color::ColorU;
-use warp_core::channel::ChannelState;
+use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::builder::UiBuilder;
@@ -118,10 +118,26 @@ where
 }
 
 pub fn render_square_logo(appearance: &Appearance) -> Box<dyn Element> {
-    let image_path = if appearance.theme().inferred_color_scheme() == ColorScheme::LightOnDark {
-        "bundled/svg/warp-logo-light.svg"
-    } else {
-        "bundled/svg/warp-logo-dark.svg"
+    let is_dark = appearance.theme().inferred_color_scheme() == ColorScheme::LightOnDark;
+    let image_path = match ChannelState::channel() {
+        Channel::Oss => {
+            if is_dark {
+                "bundled/svg/warpium-mark-on-dark.svg"
+            } else {
+                "bundled/svg/warpium-mark.svg"
+            }
+        }
+        Channel::Stable
+        | Channel::Preview
+        | Channel::Dev
+        | Channel::Local
+        | Channel::Integration => {
+            if is_dark {
+                "bundled/svg/warp-logo-light.svg"
+            } else {
+                "bundled/svg/warp-logo-dark.svg"
+            }
+        }
     };
 
     ConstrainedBox::new(

@@ -1,0 +1,8 @@
+# Warpium version source of truth; read by script/warpium/version.
+#
+# UPSTREAM_TAG: the newest upstream Warp release tag (github.com/warpdotdev/warp) that is an
+#   ancestor of this fork's master. Update it after merging upstream.
+# FORK_COUNTER: Warpium release number on top of UPSTREAM_TAG. Bump it for every Warpium
+#   release; reset it to 1 whenever UPSTREAM_TAG changes.
+UPSTREAM_TAG=v0.2026.06.03.09.49.stable_00
+FORK_COUNTER=1

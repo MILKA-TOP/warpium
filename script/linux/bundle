@@ -198,6 +198,7 @@ mkdir -p "$OUT_DIR"
 #
 # WARP_BIN is the name of the binary produced by cargo;
 # BINARY_NAME is the desired name of the binary in the final package.
+BUNDLE_ID_PREFIX="dev.warp"
 if [[ $RELEASE_CHANNEL = "local" ]]; then
   WARP_BIN="warp"
   BINARY_NAME="warp-local"
@@ -226,7 +227,8 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
   WARP_BIN="warp-oss"
   BINARY_NAME="warp-oss"
-  APP_NAME="WarpOss"
+  APP_NAME="Warpium"
+  BUNDLE_ID_PREFIX="dev.milka"
   # The OSS channel does not ship Sentry, so drop the crash_reporting feature
   # (which would otherwise pull in the Sentry SDK as a dependency).
   FEATURES="release_bundle"
@@ -280,7 +282,7 @@ if [[ -n "$EXTRA_FEATURES" ]]; then
   fi
 fi
 
-BUNDLE_ID="dev.warp.$APP_NAME"
+BUNDLE_ID="$BUNDLE_ID_PREFIX.$APP_NAME"
 EXECUTABLE_PATH="$CARGO_TARGET_OUTPUT_DIR/$WARP_BIN"
 DEBUG_EXECUTABLE_PATH="$EXECUTABLE_PATH.debug"
 

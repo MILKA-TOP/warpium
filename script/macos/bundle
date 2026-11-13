@@ -215,6 +215,9 @@ DMG_NAME_SUFFIX=""
 # By default we build dev bundles.
 RELEASE_CHANNEL="dev"
 FEATURES="release_bundle,cocoa_sentry,extern_plist"
+# Features passed via --features; appended after the channel-specific setup so
+# channels that replace the base feature set (e.g. oss) still get them.
+EXTRA_FEATURES=""
 REGISTER_SERVICES=true
 DEBUG=false
 ARTIFACT="app"
@@ -329,7 +332,7 @@ while (( "$#" )); do
     --features)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
         echo "Adding Cargo features: $2"
-        FEATURES="$FEATURES,$2"
+        EXTRA_FEATURES="${EXTRA_FEATURES:+$EXTRA_FEATURES,}$2"
         shift 2
       else
         echo "Error: Argument for $1 is missing" >&2
@@ -387,6 +390,9 @@ if [[ "$CARGO_PROFILE" == "dev" ]]; then
   TARGET_PROFILE_DIR="debug"
 fi
 
+DMG_VOLUME_NAME="Warp"
+DMG_BACKGROUND="app/assets/resources/mac/warp_install_image.png"
+DMG_VOLUME_ICON=""
 if [[ $RELEASE_CHANNEL = "local" ]]; then
     WARP_BIN="warp"
     BUNDLE_ID="dev.warp.Warp-Local"
@@ -429,12 +435,18 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     WARP_BIN="warp-oss"
-    BUNDLE_ID="dev.warp.WarpOss"
-    WARP_APP_NAME="WarpOss"
+    BUNDLE_ID="dev.milka.Warpium"
+    WARP_APP_NAME="Warpium"
     WARP_SCHEME_NAME="warposs"
+    DMG_VOLUME_NAME="Warpium"
+    DMG_BACKGROUND="app/assets/resources/mac/warpium_install_image.png"
+    DMG_VOLUME_ICON="app/channels/oss/icon/Warpium.icns"
     # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
     # (which would otherwise pull in the Sentry framework dependency).
     FEATURES="release_bundle,extern_plist"
+fi
+if [[ -n "$EXTRA_FEATURES" ]]; then
+  FEATURES="$FEATURES,$EXTRA_FEATURES"
 fi
 
 OUT_DIR="target/$TARGET_PROFILE_DIR/bundle/osx"
@@ -962,10 +974,10 @@ if [[ "$ARTIFACT" = app ]]; then
     local source_folder="$1"
 
     local args=(
-      --volname Warp
+      --volname "$DMG_VOLUME_NAME"
       # For --no-internet-enable, see https://github.com/create-dmg/create-dmg/issues/179
       --no-internet-enable
-      --background app/assets/resources/mac/warp_install_image.png
+      --background "$DMG_BACKGROUND"
       --icon-size 128
       --window-size 700 500
       --format UDZO
@@ -983,6 +995,10 @@ if [[ "$ARTIFACT" = app ]]; then
     # See https://github.com/create-dmg/create-dmg/issues/72
     if [[ "${RUNNER_NAME:-}" == nsc-* ]]; then
       args+=(--skip-jenkins)
+    fi
+
+    if [[ -n "$DMG_VOLUME_ICON" ]]; then
+      args+=(--volicon "$DMG_VOLUME_ICON")
     fi
 
     args+=("$DMG_DIR/$DMG_NAME" "$source_folder")
@@ -1085,6 +1101,10 @@ if [ "${GITHUB_ACTIONS}" == "true" ]; then
     echo "dmg_name=$FINAL_DMG_NAME" >> "$GITHUB_OUTPUT"
     echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
     echo "dsym_folder_path=$OUT_DIR" >> "$GITHUB_OUTPUT"
+  fi
+
+  if [[ -n "${WARPCTRL_COMMAND_NAME:-}" ]]; then
+    echo "warpctrl_command_name=$WARPCTRL_COMMAND_NAME" >> "$GITHUB_OUTPUT"
   fi
 
   if [[ -n "$BUNDLED_RESOURCES_DIR" ]]; then

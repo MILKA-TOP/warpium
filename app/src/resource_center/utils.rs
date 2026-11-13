@@ -3,6 +3,7 @@
 
 use warpui::keymap::Keystroke;
 
+use crate::channel::ChannelState;
 use crate::util::bindings::CommandBinding;
 
 pub const BLOCKS_KEYBINDINGS: &[&str] = &[
@@ -116,10 +117,11 @@ pub const FUNDAMENTALS_KEYBINDINGS: &[&str] = &[
 /// Returns hard-coded keybindings that are shown in the mac menus but not saved/accessible
 /// anywhere else in the code.
 pub fn get_additional_keybindings() -> Vec<CommandBinding> {
+    let app_name = ChannelState::channel().app_display_name();
     vec![
         CommandBinding::new(
             "workspace:hide_warp".into(),
-            "Hide Warp".into(),
+            format!("Hide {app_name}"),
             Some(Keystroke::parse("cmd-h").expect("Valid keystroke")),
         ),
         CommandBinding::new(
@@ -129,7 +131,7 @@ pub fn get_additional_keybindings() -> Vec<CommandBinding> {
         ),
         CommandBinding::new(
             "workspace:quit_warp".into(),
-            "Quit Warp".into(),
+            format!("Quit {app_name}"),
             Some(Keystroke::parse("cmd-q").expect("Valid keystroke")),
         ),
         CommandBinding::new(

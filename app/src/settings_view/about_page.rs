@@ -12,7 +12,7 @@ use super::settings_page::{
     SettingsWidget,
 };
 use crate::appearance::Appearance;
-use crate::channel::ChannelState;
+use crate::channel::{Channel, ChannelState};
 use crate::themes::theme::ColorScheme;
 use crate::workspace::WorkspaceAction;
 
@@ -54,7 +54,14 @@ impl SettingsWidget for AboutPageWidget {
     type View = AboutPageView;
 
     fn search_terms(&self) -> &str {
-        "about warp version"
+        match ChannelState::channel() {
+            Channel::Oss => "about warpium warp version",
+            Channel::Stable
+            | Channel::Preview
+            | Channel::Dev
+            | Channel::Local
+            | Channel::Integration => "about warp version",
+        }
     }
 
     fn render(
@@ -66,13 +73,31 @@ impl SettingsWidget for AboutPageWidget {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder();
 
-        let image_path = if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
-            "bundled/svg/warp-logo-with-light-title.svg"
-        } else {
-            "bundled/svg/warp-logo-with-dark-title.svg"
+        let is_dark = theme.inferred_color_scheme() == ColorScheme::LightOnDark;
+        let (image_path, copyright) = match ChannelState::channel() {
+            Channel::Oss => (
+                if is_dark {
+                    "bundled/svg/warpium-logo-with-light-title.svg"
+                } else {
+                    "bundled/svg/warpium-logo-with-dark-title.svg"
+                },
+                "Based on Warp. Copyright 2026 Warp",
+            ),
+            Channel::Stable
+            | Channel::Preview
+            | Channel::Dev
+            | Channel::Local
+            | Channel::Integration => (
+                if is_dark {
+                    "bundled/svg/warp-logo-with-light-title.svg"
+                } else {
+                    "bundled/svg/warp-logo-with-dark-title.svg"
+                },
+                "Copyright 2026 Warp",
+            ),
         };
 
-        let version = ChannelState::app_version().unwrap_or("v#.##.###");
+        let version = ChannelState::display_version().unwrap_or("v#.##.###");
 
         let version_text = ui_builder
             .span(version.to_string())
@@ -118,7 +143,7 @@ impl SettingsWidget for AboutPageWidget {
                 .with_child(version_row.finish())
                 .with_child(
                     ui_builder
-                        .span("Copyright 2026 Warp")
+                        .span(copyright)
                         .build()
                         .with_margin_top(16.)
                         .finish(),
