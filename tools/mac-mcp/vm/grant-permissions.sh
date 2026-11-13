@@ -4,6 +4,8 @@
 # way to grant these without a click while SIP is on, so this opens the VM's
 # screen in a window on your desktop for a minute. Do it before
 # vm/snapshot.sh, so the golden copy and every reset keep the grants.
+# The window is Tart's own display of the VM (Virtualization.framework), not
+# Screen Sharing, so it works with Screen Sharing turned off by setup.sh.
 source "$(dirname "$0")/common.sh"
 
 require_macos_arm64
@@ -15,8 +17,9 @@ if vm_running "$VM_NAME"; then
   stop_vm
 fi
 
-pw="(see $ADMIN_PASSWORD_FILE)"
-[ -f "$ADMIN_PASSWORD_FILE" ] && pw="$(cat "$ADMIN_PASSWORD_FILE")"
+# The image's admin/admin stays unless setup.sh ran with WARPIUM_VM_CHANGE_PASSWORD=1.
+pw="admin"
+[ -s "$ADMIN_PASSWORD_FILE" ] && pw="$(head -1 "$ADMIN_PASSWORD_FILE")"
 
 cat <<EOF
 ${_B}A window with the VM's screen opens now.${_N} The VM logs in automatically, and the server

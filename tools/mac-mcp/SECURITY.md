@@ -21,9 +21,20 @@ macOS VM. The VM boundary is the main isolation layer:
   `127.0.0.1:17654`** (`ssh -N -L 127.0.0.1:17654:127.0.0.1:17654`); the guest server itself
   binds the guest's `127.0.0.1`. Nothing listens on the host's LAN interfaces.
 - SSH into the guest uses a dedicated key (`~/.config/warpium-mac-mcp/vm_ed25519`) and a host
-  key pinned per VM name. `vm/setup.sh` replaces the image's well-known `admin`/`admin`
-  password with a random one (stored on the host, mode 600, needed for auto-login and the
-  one-time permission step) and disables SSH password logins.
+  key pinned per VM name. `vm/setup.sh` makes SSH key-only (no password, keyboard-interactive
+  or root logins, `AllowUsers admin`) and turns Screen Sharing / Remote Management off, then
+  checks from the host that port 5900 is closed and SSH refuses passwords.
+- The guest keeps the image's well-known `admin`/`admin` password: auto-login
+  (`/etc/kcpassword`) and the login keychain depend on it, and a changed password leads to
+  keychain dialogs that block UI tests. After hardening no network service accepts it; it
+  works at the VM's own screen (the `tart run` window) and nowhere else. Trade-off: anything
+  that re-enables a password login in the guest (Screen Sharing in System Settings, or code
+  running as `admin`, which is root through passwordless sudo anyway) exposes a known
+  password. Until hardening finishes on a fresh image, SSH and Screen Sharing accept
+  `admin`/`admin`; in bridged mode that is reachable from the LAN for a minute or two
+  (`setup.sh` asks first). `WARPIUM_VM_CHANGE_PASSWORD=1` replaces the password with a
+  random one (kcpassword and keychain updated, stored on the host with mode 600 after the
+  change succeeded).
 - Limits of the boundary: the VM uses Tart's default NAT network, so the guest can reach the
   internet and, like any device on that network, services the host exposes on its non-loopback
   interfaces. For stricter isolation use `tart run --net-softnet` (see the Tart docs; it needs

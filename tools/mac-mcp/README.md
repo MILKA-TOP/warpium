@@ -62,9 +62,14 @@ What each step does:
    dependency), checks that `tart --version` runs, clones the image into the VM
    `warpium-test` and sets CPU/RAM. It creates a dedicated key
    `~/.config/warpium-mac-mcp/vm_ed25519` and installs it in the guest using the image's
-   default `admin`/`admin` password (once). Then it replaces that password with a random one
-   (saved to `~/.config/warpium-mac-mcp/vm_admin_password`, mode 600, and kept working for
-   auto-login), and turns SSH password logins off. Finally it runs `provision.sh`.
+   default `admin`/`admin` password (once). Then it hardens the guest's network logins: SSH
+   becomes key-only for `admin` (no password, keyboard-interactive or root logins; checked
+   with `sshd -T`), Screen Sharing and Remote Management are turned off, and it checks from
+   the host that port 5900 is closed and that SSH refuses the password. The `admin`/`admin`
+   password itself stays, because auto-login and the guest's login keychain depend on it; it
+   then only works at the VM's own screen (see "Network modes" for the trade-off and
+   `WARPIUM_VM_CHANGE_PASSWORD=1`). Finally it runs `provision.sh`. Every step is re-checked
+   on each run, so after a failure just run `vm/setup.sh` again.
 2. **`provision.sh`** installs Homebrew, uv, git and gh in the guest and copies this checkout
    of `tools/mac-mcp` into `~/warpium-mac-mcp` with rsync over SSH (nothing is cloned or
    logged in inside the guest). It installs a launchd agent that opens the server in
@@ -75,7 +80,7 @@ What each step does:
    Accessibility while SIP is on, so this is one manual step. The script stops the headless
    VM and opens its screen in a window. In the VM, enable **Terminal** under System Settings >
    Privacy & Security > **Screen & System Audio Recording** and > **Accessibility** (the
-   script prints the admin password if macOS asks), then shut the VM down. Do this before
+   password is `admin` if macOS asks), then shut the VM down. Do this before
    `snapshot.sh` so every reset keeps the grants. (The alternative, disabling SIP in the guest
    and writing its TCC database, also needs a manual Recovery boot and breaks with TCC schema
    changes, so it isn't used.)
@@ -113,12 +118,15 @@ place. After `git pull`, run `vm/provision.sh` (with the VM started) and, if you
   `~/.config/warpium-mac-mcp/server.log` inside the VM.
 - **Shell in the guest:**
   `ssh -i ~/.config/warpium-mac-mcp/vm_ed25519 -o UserKnownHostsFile=~/.config/warpium-mac-mcp/vm_known_hosts -o HostKeyAlias=warpium-test admin@$(tart ip warpium-test)`
-- **See the VM's screen:** `vm/stop.sh && tart run warpium-test` (opens a window), or
-  macOS Screen Sharing to `vnc://$(tart ip warpium-test)` with the saved admin password.
+- **See the VM's screen:** `vm/stop.sh && tart run warpium-test` (opens a window; add
+  `--net-bridged=<if>` in bridged mode). Screen Sharing (VNC) is turned off in the guest.
 - **`doctor` says a permission is not granted:** the permissions shown come from the running
   server (it records them at start and on every `doctor` call). Re-run
   `vm/grant-permissions.sh`; if Accessibility stays off, run
   `tccutil reset Accessibility com.apple.Terminal` in the guest and enable it again.
+- **"Hardening guest logins" failed** (for example `eDSAuthFailed` from an older
+  `setup.sh` that tried to change the password): re-run `vm/setup.sh`. It continues where it
+  stopped, and removes a `vm_admin_password` file whose password the guest never took.
 - **Host key changed** after recreating the VM from a new image: `setup.sh` forgets the old key
   automatically; otherwise
   `ssh-keygen -R warpium-test -f ~/.config/warpium-mac-mcp/vm_known_hosts`.
@@ -175,20 +183,33 @@ and the other scripts reuse the saved values. A running VM keeps its mode until
 **Security of bridged mode.** The guest is a separate machine on your LAN, reachable by
 anyone on that network:
 
-- **SSH:** `setup.sh` installs the dedicated key, replaces the image's `admin/admin`
-  password with a random one (stored in `~/.config/warpium-mac-mcp/vm_admin_password`,
-  mode 600) and turns off SSH password and keyboard-interactive logins. It then checks
-  `sshd -T`.
-- **Screen Sharing:** the image has Screen Sharing (VNC) on. It accepts the same admin
-  password, which is the random one after setup.
+- **SSH:** `setup.sh` installs the dedicated key and makes SSH key-only:
+  `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin no`,
+  `AllowUsers admin`, checked with `sshd -T` in the guest and with a password login attempt
+  from the host, which must be refused.
+- **Screen Sharing:** the image has Screen Sharing (VNC, port 5900) on, accepting
+  `admin/admin`. `setup.sh` disables it (`launchctl disable` + `bootout` of
+  `com.apple.screensharing`, `kickstart -deactivate -stop` for Remote Management) and checks
+  from the host that ports 5900 and 3283 are closed while SSH still answers. `tart run` windows (`grant-permissions.sh`) use
+  Tart's own display, not Screen Sharing, and keep working.
+- **The admin password stays `admin/admin`.** Changing it breaks auto-login unless
+  `/etc/kcpassword` is rewritten, leaves the login keychain on the old password (keychain
+  dialogs that block UI tests) and touches the SecureToken. With SSH key-only and Screen
+  Sharing off, no network service takes the password, so it only works at the VM's own
+  screen and for `sudo`, which is passwordless for `admin` anyway. The trade-off: if a
+  network login is turned back on inside the guest (for example Screen Sharing in System
+  Settings, or by code the agent runs as `admin`, which has root through sudo), it accepts
+  a well-known password. `WARPIUM_VM_CHANGE_PASSWORD=1 vm/setup.sh` also replaces it with
+  a random one, updating `/etc/kcpassword` and the login keychain; the password is saved to
+  `~/.config/warpium-mac-mcp/vm_admin_password` (mode 600) only after the guest uses it.
 - **MCP server:** it binds the guest's `127.0.0.1` only (`serve --host 127.0.0.1`; the
   server refuses wildcard binds). It is reached only through the host's SSH forward, which
   listens on the host's `127.0.0.1`. It also requires the bearer token.
 - **Exposure window:** on a fresh image, the guest is on the LAN with `admin/admin` for SSH
-  and Screen Sharing from boot until `setup.sh` finishes its hardening step, usually a minute
-  or two. `setup.sh` warns and asks before it boots a VM bridged that it hasn't hardened
-  yet. `WARPIUM_VM_BRIDGED_FRESH_OK=1` skips the question. Run the first setup on a network
-  you trust, or in `nat` mode where it works.
+  and Screen Sharing from boot until `setup.sh` has made SSH key-only and turned Screen
+  Sharing off, usually a minute or two. `setup.sh` warns and asks before it boots a VM
+  bridged that it hasn't hardened yet. `WARPIUM_VM_BRIDGED_FRESH_OK=1` skips the question.
+  Run the first setup on a network you trust, or in `nat` mode where it works.
 - **Finding the address:** Tart reads the VM's address from the host's ARP table. Tart's
   docs say this normally works for macOS guests. If `setup.sh` stops with "no IP", check
   the router's DHCP client list or `arp -a`.

@@ -4,7 +4,7 @@
 prints the base64 of the matching ``/etc/kcpassword`` file, which macOS uses
 for automatic login. The guest needs auto-login so the MCP server has a GUI
 (window server) session; when setup.sh replaces the image's default password
-it has to rewrite this file too.
+(opt-in, WARPIUM_VM_CHANGE_PASSWORD=1) it has to rewrite this file too.
 """
 
 from __future__ import annotations
