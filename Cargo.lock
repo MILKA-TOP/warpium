@@ -15671,6 +15671,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp_config_import"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "toml_edit 0.25.6+spec-1.1.0",
+]
+
+[[package]]
 name = "warp_core"
 version = "0.0.0"
 dependencies = [
