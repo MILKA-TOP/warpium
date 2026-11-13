@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -40,7 +41,14 @@ TIMEOUT_RC = -999
 RETRY_FIX = "slow first run: run doctor again (it usually succeeds once warm)"
 
 
-def _run(argv: list[str], timeout: float = TOOL_TIMEOUT_S) -> tuple[int, str]:
+# run_checks(tool_timeout_s=...) overrides the default for one run (the MCP
+# doctor tool uses a shorter one so a call stays well inside client timeouts).
+_timeout: ContextVar[float] = ContextVar("doctor_tool_timeout", default=TOOL_TIMEOUT_S)
+
+
+def _run(argv: list[str], timeout: float | None = None) -> tuple[int, str]:
+    if timeout is None:
+        timeout = _timeout.get()
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
         return r.returncode, (r.stdout + r.stderr).strip()
@@ -103,11 +111,19 @@ def record_server_permissions(cfg: Config, platform_impl) -> dict | None:
     (an SSH session into the VM) can report what the server actually has."""
     if platform_impl is None:
         return None
+    from .app import executable_path
+
+    def tri(v: bool | None) -> bool | None:
+        return None if v is None else bool(v)
+
     data = {
         "pid": os.getpid(),
+        # With the pid, identifies this process even after pid reuse.
+        "exe": executable_path(os.getpid()),
         "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "screen_recording": bool(platform_impl.screen_recording_allowed()),
-        "accessibility": bool(platform_impl.accessibility_allowed()),
+        # None = macOS didn't say (API unavailable), not "denied".
+        "screen_recording": tri(platform_impl.screen_recording_allowed()),
+        "accessibility": tri(platform_impl.accessibility_allowed()),
     }
     path = server_permissions_path(cfg)
     try:
@@ -122,25 +138,40 @@ def record_server_permissions(cfg: Config, platform_impl) -> dict | None:
     return data
 
 
-def _pid_alive(pid: int) -> bool:
+def clear_server_permissions(cfg: Config) -> None:
+    """Called by the server on shutdown: removes its own record."""
+    path = server_permissions_path(cfg)
+    try:
+        if json.loads(path.read_text()).get("pid") == os.getpid():
+            path.unlink()
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def _same_process(pid: int, exe: str | None) -> bool:
+    """True if ``pid`` is alive and still runs ``exe`` (guards against pid reuse)."""
+    from .app import executable_path
+
     try:
         os.kill(pid, 0)
-        return True
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        pass
+    return exe is not None and executable_path(pid) == exe
 
 
-def load_server_permissions(cfg: Config, alive: Callable[[int], bool] = _pid_alive) -> dict | None:
-    """The running server's last permission report, or None if no server that
-    wrote one is still alive."""
+def load_server_permissions(
+    cfg: Config, alive: Callable[[int, str | None], bool] = _same_process
+) -> dict | None:
+    """The running server's last permission report, or None if the server that
+    wrote it is gone."""
     try:
         data = json.loads(server_permissions_path(cfg).read_text())
     except (OSError, ValueError):
         return None
     pid = data.get("pid") if isinstance(data, dict) else None
-    if not isinstance(pid, int) or pid == os.getpid() or not alive(pid):
+    if not isinstance(pid, int) or pid == os.getpid() or not alive(pid, data.get("exe")):
         return None
     return data
 
@@ -150,6 +181,20 @@ def run_checks(
     platform_impl=None,
     check_port: bool = False,
     server_permissions: dict | None = None,
+    tool_timeout_s: float = TOOL_TIMEOUT_S,
+) -> list[Check]:
+    token = _timeout.set(tool_timeout_s)
+    try:
+        return _run_checks(cfg, platform_impl, check_port, server_permissions)
+    finally:
+        _timeout.reset(token)
+
+
+def _run_checks(
+    cfg: Config,
+    platform_impl,
+    check_port: bool,
+    server_permissions: dict | None,
 ) -> list[Check]:
     checks: list[Check] = []
     is_mac = sys.platform == "darwin"
@@ -191,11 +236,19 @@ def run_checks(
             sr = platform_impl.screen_recording_allowed()
             ax = platform_impl.accessibility_allowed()
             source = ""
+
+        def state(v: bool | None) -> str:
+            return (
+                "unknown (macOS did not report it)"
+                if v is None
+                else ("granted" if v else "not granted")
+            )
+
         checks.append(
             Check(
                 "Screen Recording permission",
                 bool(sr),
-                ("granted" if sr else "not granted") + source,
+                state(sr) + source,
                 "System Settings > Privacy & Security > Screen & System Audio Recording: "
                 "enable the app that runs the server (your terminal app; in the VM run "
                 "vm/grant-permissions.sh on the host), then restart the server",
@@ -205,7 +258,7 @@ def run_checks(
             Check(
                 "Accessibility permission (synthetic input)",
                 bool(ax),
-                ("granted" if ax else "not granted") + source,
+                state(ax) + source,
                 "System Settings > Privacy & Security > Accessibility: enable the app that "
                 "runs the server, then restart it. Still 'not granted' after enabling: run "
                 "`tccutil reset Accessibility <bundle id>` (e.g. com.apple.Terminal) and add "

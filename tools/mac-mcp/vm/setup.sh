@@ -62,16 +62,18 @@ step "Waiting for the VM's IP address"
 IP="$(vm_ip 180)" || die "no IP after 180 s; see $VM_LOG and 'tart list'"
 ok "$VM_NAME is at $IP"
 
+step "Waiting for SSH on $IP:22"
+for _ in $(seq 1 60); do
+  nc -z -G 2 "$IP" 22 >/dev/null 2>&1 && break
+  sleep 2
+done
+nc -z -G 2 "$IP" 22 >/dev/null 2>&1 || die "sshd in the VM is not reachable after 120 s; see $VM_LOG, then re-run setup.sh"
+
 step "Checking key-based SSH"
-if wait_for_key_ssh "$IP" 5; then
+if wait_for_key_ssh "$IP" 20; then
   ok "key login works"
 else
   echo "    installing the key with the image's default password (first run only)"
-  # Wait for sshd to come up before trying the password.
-  for _ in $(seq 1 45); do
-    nc -z -G 2 "$IP" 22 >/dev/null 2>&1 && break
-    sleep 2
-  done
   askpass="$(mktemp "$STATE_DIR/askpass.XXXXXX")"
   trap 'rm -f "$askpass"' EXIT
   printf '#!/bin/sh\necho %s\n' "$GUEST_DEFAULT_PASSWORD" >"$askpass"
@@ -83,7 +85,7 @@ else
     -o NumberOfPasswordPrompts=1 "$GUEST_USER@$IP" \
     'umask 077; mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys; k="$(cat)"; grep -qxF "$k" ~/.ssh/authorized_keys || echo "$k" >> ~/.ssh/authorized_keys' \
     <"$SSH_KEY.pub"; then
-    die "could not log in with the key or with admin/admin. If this VM was set up with another key, restore $SSH_KEY or recreate the VM: tart delete $VM_NAME && vm/setup.sh"
+    die "could not log in with the key or with admin/admin. If the guest was still booting, just re-run setup.sh. If this VM was set up with another key, restore $SSH_KEY; as a last resort recreate the VM: tart delete $VM_NAME && vm/setup.sh"
   fi
   rm -f "$askpass"
   wait_for_key_ssh "$IP" 10 || die "key installed but key login still fails"
@@ -91,15 +93,25 @@ else
 fi
 
 step "Hardening guest logins"
-if guest_ssh "$IP" 'test -f ~/.warpium-hardened'; then
+hardened="$(guest_ssh "$IP" 'if test -f ~/.warpium-hardened; then echo yes; else echo no; fi')" ||
+  die "SSH to the guest failed while checking the hardening state; re-run setup.sh"
+if [ "$hardened" = "yes" ]; then
   ok "already done (password replaced, SSH password logins off)"
 else
-  NEW_PASSWORD="$(openssl rand -hex 16)"
+  # Reuse a password saved by an earlier, interrupted run: the guest may
+  # already use it, and generating a new one would lose it.
+  if [ -s "$ADMIN_PASSWORD_FILE" ]; then
+    NEW_PASSWORD="$(head -1 "$ADMIN_PASSWORD_FILE")"
+    echo "    resuming with the password saved in $ADMIN_PASSWORD_FILE"
+  else
+    NEW_PASSWORD="$(openssl rand -hex 16)"
+    # Save first: if anything below fails you can still log in at the VM's screen.
+    (umask 077 && printf '%s\n' "$NEW_PASSWORD" >"$ADMIN_PASSWORD_FILE")
+  fi
   KC_B64="$(printf '%s\n' "$NEW_PASSWORD" | uv run --quiet --project "$MCP_DIR" python -m warpium_mac_mcp.vmtools kcpassword)" ||
     die "could not encode the auto-login password (is uv installed on the host?)"
-  # Save first: if anything below fails you can still log in at the VM's screen.
-  (umask 077 && printf '%s\n' "$NEW_PASSWORD" >"$ADMIN_PASSWORD_FILE")
-  # Values travel on stdin, not in any process's argv.
+  # The values reach the guest on stdin, not on the host's command lines.
+  # Inside the throwaway guest, dscl/security get them as arguments briefly.
   {
     printf 'OLD=%q\nNEW=%q\nKC=%q\n' "$GUEST_DEFAULT_PASSWORD" "$NEW_PASSWORD" "$KC_B64"
     cat <<'GUEST'
@@ -108,15 +120,35 @@ set -euo pipefail
 sudo -n true || { echo "passwordless sudo is not available in the guest" >&2; exit 1; }
 sudo dscl . -passwd "/Users/$USER" "$NEW"
 # Keep the login keychain unlockable at auto-login (no "update keychain" dialogs).
-security set-keychain-password -o "$OLD" -p "$NEW" "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true
+# After an interrupted earlier run it may already use NEW, which is fine.
+KC_DB="$HOME/Library/Keychains/login.keychain-db"
+if [ -f "$KC_DB" ]; then
+  if ! security set-keychain-password -o "$OLD" -p "$NEW" "$KC_DB" 2>/dev/null; then
+    if security unlock-keychain -p "$NEW" "$KC_DB" 2>/dev/null; then
+      echo "    login keychain already uses the new password"
+    else
+      echo "warning: could not update the login keychain password; if a keychain dialog" >&2
+      echo "         appears at login, delete ~/Library/Keychains/login.keychain-db in the guest" >&2
+    fi
+  fi
+fi
 # Auto-login reads the password from /etc/kcpassword: rewrite it for the new one.
 printf '%s' "$KC" | base64 -D | sudo tee /etc/kcpassword >/dev/null
 sudo chmod 600 /etc/kcpassword
 sudo chown root:wheel /etc/kcpassword
 sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser "$USER"
-# Key-only SSH from now on.
+# Key-only SSH from now on. sshd keeps the first value it reads, so the file
+# must sort before macOS's own 100-macos.conf.
 printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin no\n' |
-  sudo tee /etc/ssh/sshd_config.d/100-warpium.conf >/dev/null
+  sudo tee /etc/ssh/sshd_config.d/000-warpium.conf >/dev/null
+sudo rm -f /etc/ssh/sshd_config.d/100-warpium.conf
+eff="$(sudo /usr/sbin/sshd -T 2>/dev/null | tr 'A-Z' 'a-z')"
+for opt in "passwordauthentication no" "kbdinteractiveauthentication no"; do
+  if ! printf '%s\n' "$eff" | grep -qx "$opt"; then
+    echo "error: sshd's effective config doesn't have '$opt'; check /etc/ssh/sshd_config(.d)" >&2
+    exit 1
+  fi
+done
 touch ~/.warpium-hardened
 GUEST
   } | guest_ssh "$IP" 'bash -s' || die "guest hardening failed (password saved in $ADMIN_PASSWORD_FILE)"

@@ -109,9 +109,22 @@ if [ "$console_user" != "$USER" ]; then
   echo "       provide one; reboot the VM (vm/stop.sh && vm/start.sh) and re-run." >&2
   exit 1
 fi
+# bootout is asynchronous: wait until the old job is gone before bootstrapping.
+# Bootstrapping starts the agent once (RunAtLoad); serve.command stops an old server.
 launchctl bootout "gui/$uid/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$uid" "$PLIST"
-launchctl kickstart -k "gui/$uid/$LABEL"
+for _ in $(seq 1 20); do
+  launchctl print "gui/$uid/$LABEL" >/dev/null 2>&1 || break
+  sleep 0.5
+done
+loaded=0
+for _ in 1 2 3; do
+  if launchctl bootstrap "gui/$uid" "$PLIST"; then
+    loaded=1
+    break
+  fi
+  sleep 2
+done
+[ "$loaded" = 1 ] || { echo "error: launchctl bootstrap of $PLIST failed" >&2; exit 1; }
 
 for i in $(seq 1 90); do
   code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" || true)"

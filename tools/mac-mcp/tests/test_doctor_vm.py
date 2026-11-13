@@ -94,10 +94,52 @@ def test_server_permissions_roundtrip(cfg):
     assert load_server_permissions(cfg) is None
     data["pid"] = 999999
     path.write_text(json.dumps(data))
-    assert load_server_permissions(cfg, alive=lambda pid: True)["screen_recording"] is True
-    assert load_server_permissions(cfg, alive=lambda pid: False) is None
+    seen = []
+    assert (
+        load_server_permissions(cfg, alive=lambda pid, exe: seen.append((pid, exe)) or True)[
+            "screen_recording"
+        ]
+        is True
+    )
+    assert seen == [(999999, data["exe"])]
+    assert load_server_permissions(cfg, alive=lambda pid, exe: False) is None
+    # Default check: a dead pid (or a reused one running another executable) is ignored.
+    assert load_server_permissions(cfg) is None
     path.write_text("not json")
     assert load_server_permissions(cfg) is None
+
+
+def test_clear_server_permissions_only_own_record(cfg):
+    record_server_permissions(cfg, FakePerms(True, True))
+    path = doctor.server_permissions_path(cfg)
+    other = json.loads(path.read_text()) | {"pid": 999999}
+    path.write_text(json.dumps(other))
+    doctor.clear_server_permissions(cfg)
+    assert path.exists()  # another server's record is left alone
+    record_server_permissions(cfg, FakePerms(True, True))
+    doctor.clear_server_permissions(cfg)
+    assert not path.exists()
+
+
+def test_unknown_permission_state_kept(cfg):
+    data = record_server_permissions(cfg, FakePerms(None, True))
+    assert data["screen_recording"] is None
+
+
+def test_tool_timeout_override(cfg, monkeypatch):
+    seen = []
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_run(argv, **k):
+        seen.append(k.get("timeout"))
+        return subprocess.CompletedProcess(argv, 0, "v1\n", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    run_checks(cfg, tool_timeout_s=7)
+    assert seen and set(seen) == {7}
+    seen.clear()
+    run_checks(cfg)
+    assert set(seen) == {doctor.TOOL_TIMEOUT_S}
 
 
 def test_server_report_wins_over_own_process(cfg, monkeypatch):

@@ -135,7 +135,6 @@ class UiController:
         self._sleep = sleep
         self._delay = event_delay_s
         self._last_scale: dict[int, float] = {}
-        self._exe_cache: dict[tuple[int, str], str | None] = {}
         self._lock = threading.Lock()  # serialize input sequences
 
     # --- observation -------------------------------------------------------
@@ -211,12 +210,6 @@ class UiController:
             )
         return front
 
-    def _exe_path(self, w: WindowInfo) -> str | None:
-        key = (w.pid, w.owner)
-        if key not in self._exe_cache:
-            self._exe_cache[key] = self._p.process_path(w.pid)
-        return self._exe_cache[key]
-
     def _check_point(self, sx: float, sy: float) -> None:
         pids = self._target_pids()
         displays: list[Rect] | None = None
@@ -231,7 +224,9 @@ class UiController:
             if w.owner in SYSTEM_UI_OWNERS:
                 if displays is None:
                     displays = self._p.displays()
-                if is_system_backdrop(w, displays, self._exe_path(w)):
+                # Not cached: a pid can be reused by another process, and the
+                # lookup is one proc_pidpath call.
+                if is_system_backdrop(w, displays, self._p.process_path(w.pid)):
                     continue
             raise FocusError(
                 f"refusing input: point ({sx:.0f},{sy:.0f}) is covered by a window of "

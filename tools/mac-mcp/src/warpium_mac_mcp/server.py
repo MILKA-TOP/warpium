@@ -37,6 +37,8 @@ from .workspace import Workspace
 
 log = logging.getLogger(__name__)
 
+DOCTOR_TOOL_TIMEOUT_S = 20
+
 INSTRUCTIONS = """\
 Drives a Warpium (Warp OSS fork) build on the owner's Mac.
 Typical loop: repo_sync(branch) -> build() -> job_status/job_logs until done ->
@@ -176,7 +178,11 @@ def create_server(s: Services) -> FastMCP:
         and log locations. all_required_ok covers what artifacts/screenshots/input need;
         build_ready covers the local-build toolchain (rustup, cargo, protoc, Xcode/Metal),
         which is only needed for build and run_integration_test."""
-        checks = await _thread(run_checks, cfg, s.platform)
+        # Shorter per-command timeout than the CLI (60 s), so one call stays
+        # bounded; a slow first xcrun/protoc shows up as "timed out, run again".
+        checks = await _thread(
+            functools.partial(run_checks, cfg, s.platform, tool_timeout_s=DOCTOR_TOOL_TIMEOUT_S)
+        )
         await _thread(record_server_permissions, cfg, s.platform)
         return {
             "checks": checks_as_dicts(checks),

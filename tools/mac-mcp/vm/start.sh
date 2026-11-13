@@ -36,7 +36,10 @@ fi
 ok "guest server answers"
 
 step "SSH forward 127.0.0.1:$MCP_PORT -> $VM_NAME:127.0.0.1:$MCP_PORT"
-if [ -f "$FORWARD_PID_FILE" ] && ps -p "$(cat "$FORWARD_PID_FILE")" -o command= 2>/dev/null | grep -q "$IP"; then
+forward_cmd=""
+[ -f "$FORWARD_PID_FILE" ] && forward_cmd="$(ps -p "$(cat "$FORWARD_PID_FILE")" -o command= 2>/dev/null || true)"
+# Reuse only a forward to exactly this IP (the destination is the last argument).
+if [ -n "$forward_cmd" ] && [ "${forward_cmd##* }" = "$GUEST_USER@$IP" ]; then
   ok "already running (pid $(cat "$FORWARD_PID_FILE"))"
 else
   stop_forward

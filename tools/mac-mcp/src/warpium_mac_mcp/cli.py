@@ -67,13 +67,25 @@ def cmd_serve(args: argparse.Namespace) -> int:
     )
     token = load_or_create_token(cfg.token_path)
 
+    import socket
+
     import uvicorn
 
     from .server import build_asgi_app, build_services, make_platform
 
+    # Fail before touching any state if another server already has the port
+    # (it would otherwise overwrite that server's permission record and exit).
+    with socket.socket(socket.AF_INET6 if ":" in cfg.host else socket.AF_INET) as s:
+        try:
+            s.bind((cfg.host, cfg.port))
+        except OSError as e:
+            raise SystemExit(
+                f"cannot bind {cfg.host}:{cfg.port}: {e} (is a server already running?)"
+            ) from None
+
     platform = make_platform(args.key_delivery)
     services = build_services(cfg, platform)
-    from .doctor import record_server_permissions
+    from .doctor import clear_server_permissions, record_server_permissions
 
     perms = record_server_permissions(cfg, platform)
     services.audit.write(
@@ -102,7 +114,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             ("screen_recording", "Screen Recording"),
             ("accessibility", "Accessibility"),
         ):
-            if not perms[key]:
+            if perms[key] is False:
                 print(f"  WARNING: {label} permission not granted to this process", file=sys.stderr)
     print("  Ctrl+C to stop.", file=sys.stderr)
     try:
@@ -118,6 +130,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         )
     finally:
         services.jobs.cancel_all()
+        clear_server_permissions(cfg)
         services.audit.write("server_stop")
     return 0
 
