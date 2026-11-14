@@ -15545,6 +15545,7 @@ dependencies = [
  "warp_channel_config",
  "warp_cli",
  "warp_completer",
+ "warp_config_import",
  "warp_core",
  "warp_editor",
  "warp_errors",
@@ -15707,6 +15708,18 @@ dependencies = [
  "warp_core",
  "warp_util",
  "warpui_core",
+]
+
+[[package]]
+name = "warp_config_import"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "toml_edit 0.25.6+spec-1.1.0",
 ]
 
 [[package]]

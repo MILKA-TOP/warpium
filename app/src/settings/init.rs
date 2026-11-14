@@ -108,6 +108,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     EmacsBindingsSettings::register(ctx);
     SameLinePromptBlockSettings::register(ctx);
     SemanticSelection::register(ctx);
+    crate::warpium::sync_settings::WarpiumSettings::register(ctx);
     if FeatureFlag::WarpControlCli.is_enabled() {
         LocalControlSettings::register(ctx);
     }
