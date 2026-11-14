@@ -13,6 +13,12 @@ use crate::channel::{Channel, ChannelState};
 use crate::server::server_api::ServerApi;
 
 pub async fn get_current_changelog(server_api: Arc<ServerApi>) -> Result<Option<Changelog>> {
+    // Warpium: the open-source channel has no changelog in Warp's channel versions, and fetching
+    // them would contact Warp's update servers.
+    if ChannelState::channel() == Channel::Oss {
+        return Ok(None);
+    }
+
     let rand: String = {
         let mut rng = thread_rng();
         iter::repeat(())

@@ -20,12 +20,60 @@ pub fn update_to_offer<'a>(
     (is_newer && !is_skipped).then_some(latest)
 }
 
-pub fn banner_heading(current: &WarpiumVersion, release: &Release) -> String {
-    format!("Warpium {} is available (you have {current}).", release.tag)
+// Banner headings are kept short and lead with what happened: the workspace banner elides its
+// text from the end to make room for its actions, and full release tags are about 30 characters.
+
+pub const OFFER_HEADING: &str = "Warpium update available";
+pub const PREPARING_HEADING: &str = "Preparing update…";
+pub const READY_HEADING: &str = "Update ready";
+pub const FAILED_HEADING: &str = "Couldn't update Warpium";
+
+pub fn offer_description(current: &WarpiumVersion, release: &Release) -> String {
+    let new = release_name(Some(current), release);
+    let current = if new == release.tag {
+        current.tag().to_owned()
+    } else {
+        current.short_name()
+    };
+    format!(
+        "Version {new} (you have {current}). Update now downloads it in the background; you \
+         choose when to restart."
+    )
 }
 
-pub fn banner_description() -> &'static str {
-    "Update now downloads and checks it in the background; you choose when to restart."
+pub fn downloading_heading(percent: Option<u8>) -> String {
+    match percent {
+        Some(percent) => format!("Downloading update… {percent}%"),
+        None => "Downloading update…".to_owned(),
+    }
+}
+
+/// The description while the update downloads or is prepared.
+pub fn in_progress_description(current: Option<&WarpiumVersion>, release: &Release) -> String {
+    format!(
+        "Warpium {}. Keep working; you choose when to restart.",
+        release_name(current, release)
+    )
+}
+
+pub fn ready_description(current: Option<&WarpiumVersion>, release: &Release) -> String {
+    format!(
+        "Restart now to switch to Warpium {}, or it's installed when you quit.",
+        release_name(current, release)
+    )
+}
+
+/// The release's short name, or its tag when that isn't a Warpium version or its short name is
+/// the running version's (they leave out the upstream channel).
+pub fn release_name(current: Option<&WarpiumVersion>, release: &Release) -> String {
+    match release.version() {
+        Some(version)
+            if current.is_none_or(|current| current.short_name() != version.short_name()) =>
+        {
+            version.short_name()
+        }
+        Some(_) | None => release.tag.clone(),
+    }
 }
 
 /// The result of a manual check, phrased for a toast.

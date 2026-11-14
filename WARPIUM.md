@@ -106,13 +106,17 @@ summary). Opt out by setting the repository variable `WARPIUM_UPSTREAM_ISSUE` to
 ## Warpium self-update
 
 Warpium offers and installs new **Warpium** releases from the fork's GitHub Releases. It never
-offers, fetches or installs official Warp builds: Warp's own updater stays off for the OSS channel
-(`autoupdate_config: None` in `app/src/bin/oss.rs`, and `app/src/autoupdate/mod.rs` bails for
-`Channel::Oss`). `crates/warpium_self_update/src/oss_autoupdate_guard_tests.rs` fails if either
-changes, and `self_update::init` debug-asserts it at runtime. Fork-only code lives in
-`crates/warpium_self_update` (protoc-free, unit-tested with `cargo test -p warpium_self_update`) and
-`app/src/warpium/self_update.rs`. OSS channel on Apple silicon Macs only (releases ship arm64
-disk images).
+offers, fetches or installs official Warp builds, and never contacts Warp's update servers: Warp's
+own updater stays off for the OSS channel. `app/src/bin/oss.rs` sets `autoupdate_config: None`, and
+for `Channel::Oss` `app/src/autoupdate/` doesn't start its polling loop (so update checks never
+run), refuses to fetch channel versions from Warp's servers or build release asset URLs, and returns
+no changelog (the OSS channel has none in Warp's channel versions). Warp's **Check for updates**
+(command palette and Settings) runs the Warpium update check instead.
+`crates/warpium_self_update/src/oss_autoupdate_guard_tests.rs` fails if any of the guards in
+`app/src/autoupdate/` change, and `self_update::init` debug-asserts the config at runtime.
+Fork-only code lives in `crates/warpium_self_update` (protoc-free, unit-tested with
+`cargo test -p warpium_self_update`) and `app/src/warpium/self_update.rs`. OSS channel on Apple
+silicon Macs only (releases ship arm64 disk images).
 
 - **Current version.** `WARPIUM_VERSION_TAG`, baked in by CI (see [Versioning](#versioning)).
   Builds without it (local `./script/run` builds) never offer updates.
@@ -125,12 +129,18 @@ disk images).
   channel build) and then the fork counter, so `….stable_00.10` > `….stable_00.2`. State, including
   the latest release and the skipped tag, is kept in private preferences under
   `WarpiumSelfUpdateState`.
-- **Offer.** A workspace banner, "Warpium <new> is available (you have <current>).", with **Update
-  now**, **Release notes**, **Skip this version** (never offered again; a newer release is) and a
-  close button (hides it until the next launch). It takes priority over the upstream-commits
-  banner, which is informational and about source code. **Check for Warpium updates** in the
-  command palette always reports a result in a toast and brings back a skipped or closed offer;
-  **Enable/Disable Warpium update checks** toggles `warpium.update_check`.
+- **Offer.** A workspace banner, "Warpium update available", with **Update now**, **Release
+  notes**, **Skip this version** (never offered again; a newer release is) and a close button
+  (hides it until the next launch). It takes priority over the upstream-commits banner, which is
+  informational and about source code. **Check for Warpium updates** in the command palette always
+  reports a result in a toast and brings back a skipped or closed offer; **Enable/Disable Warpium
+  update checks** toggles `warpium.update_check`.
+- **Banner text.** The banner elides its text from the end to make room for its actions, and a full
+  tag is about 30 characters, so headings are short ("Warpium update available", "Downloading
+  update… 42%", "Update ready", "Couldn't update Warpium") and versions go in the description by
+  their short name, the upstream release date and time and the fork counter (`2026.06.03.0949.2`
+  for `v0.2026.06.03.09.49.stable_00.2`). It leaves out the upstream channel, so when the release's
+  short name is the running version's, full tags are shown. Toasts show full tags.
 - **Install.** Warp's macOS updater can't be reused: it downloads only from Warp's release servers
   and requires Warp's Apple team id in the code signature, which ad-hoc signed Warpium builds can't
   have. Warpium has its own path, modelled on it:
@@ -146,7 +156,7 @@ disk images).
   6. `ditto` the app to a hidden sibling, `.Warpium-update-<pid>.app`, check it again,
      `codesign --verify --deep` (integrity of the ad-hoc signature) and clear
      `com.apple.quarantine` so Gatekeeper doesn't block it; detach the image. The running app is
-     untouched so far, and the banner says the new version is ready with **Restart now**: Warpium
+     untouched so far, and the banner says "Update ready" with **Restart now**: Warpium
      never restarts by itself;
   7. the swap happens while the app terminates, after any quit confirmation, so the running app
      never uses a replaced bundle. **Restart now** quits (cancellable, like any quit) and relaunches;
@@ -156,6 +166,9 @@ disk images).
      then runs `open -n` on the bundle, as Warp's updater does;
   8. the first launch of the new version deletes the backup (retried on later launches if that
      fails). Every launch also removes downloads and staged copies left by processes that are gone.
+     Releases older than the updater (`v0.2026.06.03.09.49.stable_00.1` and earlier) don't do this,
+     so installing one this way (for example while trying the updater with the override below)
+     leaves `.Warpium-previous.app` next to `Warpium.app`; delete it by hand.
 
   Any failure leaves the running app untouched and shows the error with **Download manually** (the
   release page) and **Try again**, which reuses a verified download; when the app can't be replaced

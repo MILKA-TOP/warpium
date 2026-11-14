@@ -72,6 +72,17 @@ impl WarpiumVersion {
         )
     }
 
+    /// A compact name for space-constrained UI: the upstream release date and time and the fork
+    /// counter, e.g. `2026.06.03.0949.1`. It orders like the version except for the upstream
+    /// channel, which it leaves out, so two versions can share it.
+    pub fn short_name(&self) -> String {
+        let [year, month, day, hour, minute] = self.timestamp;
+        format!(
+            "{year:04}.{month:02}.{day:02}.{hour:02}{minute:02}.{}",
+            self.fork_counter
+        )
+    }
+
     fn sort_key(&self) -> (u32, [u32; 5], &str, u32, u32) {
         (
             self.major,

@@ -138,6 +138,11 @@ impl AutoupdateState {
         if self.polling_started {
             return;
         }
+        // Warpium: OSS builds never update from Warp's servers, so don't contact them at all.
+        if ChannelState::channel() == Channel::Oss {
+            log::info!("Not starting autoupdate polling loop: Warp autoupdate is off for OSS");
+            return;
+        }
         if FeatureFlag::Autoupdate.is_enabled() && AppExecutionMode::as_ref(ctx).can_autoupdate() {
             log::info!("Starting autoupdate polling loop");
             self.polling_started = true;
