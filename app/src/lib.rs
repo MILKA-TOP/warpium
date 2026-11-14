@@ -1555,6 +1555,9 @@ pub(crate) fn initialize_app(
     // Warpium: notify when upstream Warp has commits this build lacks.
     #[cfg(not(target_family = "wasm"))]
     warpium::upstream_check::init(matches!(launch_mode, LaunchMode::App { .. }), ctx);
+    // Warpium: offer and install new Warpium releases from GitHub (never official Warp builds).
+    #[cfg(not(target_family = "wasm"))]
+    warpium::self_update::init(matches!(launch_mode, LaunchMode::App { .. }), ctx);
 
     if FeatureFlag::UIZoom.is_enabled() {
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
@@ -2823,6 +2826,8 @@ pub(crate) fn app_callbacks(
             // attempting to enforce our single-instance policy on Linux.
             app_services::teardown(ctx);
             autoupdate::spawn_child_if_necessary(ctx);
+            #[cfg(not(target_family = "wasm"))]
+            warpium::self_update::spawn_relaunch_if_requested();
 
             // Tear down any application profilers that are running, writing
             // results to disk.
@@ -3070,6 +3075,8 @@ fn focus_running_window_and_show_native_modal(
 
 fn on_close_app_cancelled(open_navigation_palette: bool, ctx: &mut AppContext) {
     autoupdate::cancel_relaunch(ctx);
+    #[cfg(not(target_family = "wasm"))]
+    warpium::self_update::cancel_relaunch();
 
     send_telemetry_from_app_ctx!(
         TelemetryEvent::QuitModalCancel {

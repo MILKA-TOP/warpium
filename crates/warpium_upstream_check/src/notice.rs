@@ -29,8 +29,10 @@ pub fn banner_heading(status: &UpstreamStatus) -> String {
 
 pub fn banner_description(status: &UpstreamStatus) -> String {
     match date_part(&status.head_date) {
-        Some(date) => format!("Latest upstream commit: {date}. Merge them into the fork."),
-        None => "Merge them into the fork.".to_owned(),
+        Some(date) => format!(
+            "Latest upstream commit: {date}. Source changes for the fork to merge; nothing to install."
+        ),
+        None => "Source changes for the fork to merge; nothing to install.".to_owned(),
     }
 }
 

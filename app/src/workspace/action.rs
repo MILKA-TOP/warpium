@@ -882,6 +882,22 @@ pub enum WorkspaceAction {
     ViewUpstreamWarpChanges,
     /// Warpium: opens the fork on GitHub, where its "Sync fork" button is.
     OpenWarpiumForkOnGitHub,
+    /// Warpium: checks GitHub for a new Warpium release now and reports the result.
+    CheckForWarpiumUpdates,
+    /// Warpium: toggles the automatic check for new Warpium releases.
+    ToggleWarpiumUpdateCheck,
+    /// Warpium: downloads and installs the offered Warpium release, then relaunches.
+    InstallWarpiumUpdate,
+    /// Warpium: opens the release notes of the offered or installing Warpium release.
+    OpenWarpiumReleaseNotes,
+    /// Warpium: stops offering the offered Warpium release.
+    SkipWarpiumUpdate,
+    /// Warpium: quits and starts the installed Warpium update.
+    RestartForWarpiumUpdate,
+    /// Warpium: shows the downloaded Warpium disk image in Finder after an update failed.
+    RevealWarpiumUpdateDmg,
+    /// Warpium: opens the release page to download a Warpium update by hand.
+    DownloadWarpiumUpdateManually,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1221,6 +1237,14 @@ impl WorkspaceAction {
             | ToggleUpstreamCheck
             | ViewUpstreamWarpChanges
             | OpenWarpiumForkOnGitHub
+            | CheckForWarpiumUpdates
+            | ToggleWarpiumUpdateCheck
+            | InstallWarpiumUpdate
+            | OpenWarpiumReleaseNotes
+            | SkipWarpiumUpdate
+            | RestartForWarpiumUpdate
+            | RevealWarpiumUpdateDmg
+            | DownloadWarpiumUpdateManually
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }

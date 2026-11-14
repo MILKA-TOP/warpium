@@ -8,6 +8,9 @@ pub(crate) const SYNC_FROM_WARP_CONTEXT_FLAG: &str = "WarpiumSyncFromWarp";
 /// Keymap context flag present while [`WarpiumSettings::upstream_check`] is on.
 pub(crate) const UPSTREAM_CHECK_CONTEXT_FLAG: &str = "WarpiumUpstreamCheck";
 
+/// Keymap context flag present while [`WarpiumSettings::update_check`] is on.
+pub(crate) const UPDATE_CHECK_CONTEXT_FLAG: &str = "WarpiumUpdateCheck";
+
 define_settings_group!(WarpiumSettings, settings: [
     sync_from_warp: SyncFromWarp {
         type: bool,
@@ -48,5 +51,25 @@ define_settings_group!(WarpiumSettings, settings: [
         private: false,
         toml_path: "warpium.upstream_check_min_commits",
         description: "How many new upstream Warp commits it takes to show the notification.",
+    },
+    update_check: UpdateCheck {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::MAC,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: ::settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "warpium.update_check",
+        description: "Whether Warpium checks GitHub for new Warpium releases and offers to install them. Official Warp updates are never offered.",
+    },
+    update_check_interval_hours: UpdateCheckIntervalHours {
+        type: u64,
+        default: 6,
+        supported_platforms: SupportedPlatforms::MAC,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: ::settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "warpium.update_check_interval_hours",
+        description: "Hours between automatic checks for new Warpium releases (1 to 168).",
     },
 ]);

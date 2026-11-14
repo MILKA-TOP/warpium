@@ -777,6 +777,10 @@ pub enum WorkspaceBanner {
     InvalidSettings,
     /// Warpium: to display when upstream Warp has commits this build lacks
     UpstreamWarpUpdate,
+    /// Warpium: to display when a newer Warpium release can be installed
+    WarpiumUpdateAvailable,
+    /// Warpium: to display the progress or result of installing a Warpium release
+    WarpiumUpdateStatus,
 }
 
 impl WorkspaceBanner {
@@ -794,6 +798,32 @@ impl WorkspaceBanner {
             Self::WaylandCrashRecovery => true,
             Self::InvalidSettings => true,
             Self::UpstreamWarpUpdate => true,
+            Self::WarpiumUpdateAvailable => true,
+            Self::WarpiumUpdateStatus => true,
+        }
+    }
+
+    /// An action shown before the banner's secondary and primary buttons, for the banners that
+    /// need three.
+    fn extra_button(&self) -> Option<WorkspaceBannerButtonDetails> {
+        match self {
+            Self::WarpiumUpdateAvailable => Some(WorkspaceBannerButtonDetails {
+                text: "Skip this version".to_owned(),
+                action: WorkspaceAction::SkipWarpiumUpdate,
+                variant: BannerButtonVariant::Naked,
+                icon: None,
+                more_info_button_action: None,
+            }),
+            Self::UnableToUpdateToNewVersion
+            | Self::UnableToLaunchNewVersion
+            | Self::VersionDeprecated
+            | Self::AnonymousUserAuth
+            | Self::Reauth
+            | Self::InvalidSettings
+            | Self::UpstreamWarpUpdate
+            | Self::WarpiumUpdateStatus => None,
+            #[cfg(target_os = "linux")]
+            Self::WaylandCrashRecovery => None,
         }
     }
 }
@@ -2997,6 +3027,13 @@ impl Workspace {
         if ctx.has_singleton_model::<crate::warpium::upstream_check::UpstreamChecker>() {
             ctx.observe(
                 &crate::warpium::upstream_check::UpstreamChecker::handle(ctx),
+                |_, _, ctx| ctx.notify(),
+            );
+        }
+        #[cfg(not(target_family = "wasm"))]
+        if ctx.has_singleton_model::<crate::warpium::self_update::SelfUpdater>() {
+            ctx.observe(
+                &crate::warpium::self_update::SelfUpdater::handle(ctx),
                 |_, _, ctx| ctx.notify(),
             );
         }
@@ -22475,8 +22512,12 @@ impl Workspace {
             .or_else(|| self.render_settings_error_banner(app))
             .or_else(|| self.render_autoupdate_banner_element(app));
 
+        // Warpium: an installable Warpium release outranks the informational upstream-commits
+        // banner, which is about the fork's source code rather than anything to install.
         #[cfg(not(target_family = "wasm"))]
-        let banner_fields = banner_fields.or_else(|| Self::upstream_warp_update_banner(app));
+        let banner_fields = banner_fields
+            .or_else(|| Self::warpium_update_banner(app))
+            .or_else(|| Self::upstream_warp_update_banner(app));
 
         #[cfg(enable_crash_recovery)]
         let banner_fields = banner_fields.or_else(|| crash_recovery::banner_metadata(app));
@@ -22516,6 +22557,96 @@ impl Workspace {
                 more_info_button_action: None,
             }),
         })
+    }
+
+    /// Warpium: offers, and reports on installing, a newer Warpium release.
+    #[cfg(not(target_family = "wasm"))]
+    fn warpium_update_banner(app: &AppContext) -> Option<WorkspaceBannerFields> {
+        use crate::warpium::self_update::{SelfUpdater, UpdateBannerKind};
+
+        if !app.has_singleton_model::<SelfUpdater>() {
+            return None;
+        }
+        let banner = SelfUpdater::as_ref(app).banner(app)?;
+        let button = |text: &str, action, variant| WorkspaceBannerButtonDetails {
+            text: text.to_owned(),
+            action,
+            variant,
+            icon: None,
+            more_info_button_action: None,
+        };
+        let (banner_type, severity, secondary_button, button) = match banner.kind {
+            UpdateBannerKind::Available => (
+                WorkspaceBanner::WarpiumUpdateAvailable,
+                BannerSeverity::Warning,
+                Some(button(
+                    "Release notes",
+                    WorkspaceAction::OpenWarpiumReleaseNotes,
+                    BannerButtonVariant::Naked,
+                )),
+                Some(button(
+                    "Update now",
+                    WorkspaceAction::InstallWarpiumUpdate,
+                    BannerButtonVariant::Outlined,
+                )),
+            ),
+            UpdateBannerKind::InProgress => (
+                WorkspaceBanner::WarpiumUpdateStatus,
+                BannerSeverity::Warning,
+                None,
+                None,
+            ),
+            UpdateBannerKind::Installed => (
+                WorkspaceBanner::WarpiumUpdateStatus,
+                BannerSeverity::Warning,
+                None,
+                Some(button(
+                    "Restart now",
+                    WorkspaceAction::RestartForWarpiumUpdate,
+                    BannerButtonVariant::Outlined,
+                )),
+            ),
+            UpdateBannerKind::Failed { can_reveal_dmg } => (
+                WorkspaceBanner::WarpiumUpdateStatus,
+                BannerSeverity::Error,
+                can_reveal_dmg.then(|| {
+                    button(
+                        "Reveal DMG",
+                        WorkspaceAction::RevealWarpiumUpdateDmg,
+                        BannerButtonVariant::Naked,
+                    )
+                }),
+                Some(button(
+                    "Download manually",
+                    WorkspaceAction::DownloadWarpiumUpdateManually,
+                    BannerButtonVariant::Outlined,
+                )),
+            ),
+        };
+        Some(WorkspaceBannerFields {
+            banner_type,
+            severity,
+            heading: Some(banner.heading),
+            description: banner.description,
+            secondary_button,
+            button,
+        })
+    }
+
+    /// Warpium: runs `update` on the Warpium self-updater, if it is registered.
+    #[cfg(not(target_family = "wasm"))]
+    fn update_self_updater(
+        ctx: &mut ViewContext<Self>,
+        update: impl FnOnce(
+            &mut crate::warpium::self_update::SelfUpdater,
+            &mut warpui::ModelContext<crate::warpium::self_update::SelfUpdater>,
+        ),
+    ) {
+        use crate::warpium::self_update::SelfUpdater;
+
+        if ctx.has_singleton_model::<SelfUpdater>() {
+            SelfUpdater::handle(ctx).update(ctx, update);
+        }
     }
 
     /// Warpium: offers to sync the fork when upstream Warp has new commits.
@@ -22741,6 +22872,19 @@ impl Workspace {
             // otherwise overflow.
             .with_child(Expanded::new(1., text.finish()).finish());
 
+        if let Some(extra_button) = fields.banner_type.extra_button() {
+            banner.add_child(
+                Container::new(self.render_banner_action_button(
+                    extra_button,
+                    self.mouse_states.banner_extra_button.clone(),
+                    text_color,
+                    appearance,
+                ))
+                .with_margin_left(4.)
+                .finish(),
+            );
+        }
+
         if let Some(secondary_button) = fields.secondary_button {
             banner.add_child(
                 Container::new(self.render_banner_action_button(
@@ -22934,6 +23078,14 @@ impl Workspace {
                     crate::warpium::upstream_check::UpstreamChecker::handle(ctx)
                         .update(ctx, |checker, ctx| checker.dismiss(ctx));
                 }
+            }
+            WorkspaceBanner::WarpiumUpdateAvailable => {
+                #[cfg(not(target_family = "wasm"))]
+                Self::update_self_updater(ctx, |updater, ctx| updater.dismiss_offer(ctx));
+            }
+            WorkspaceBanner::WarpiumUpdateStatus => {
+                #[cfg(not(target_family = "wasm"))]
+                Self::update_self_updater(ctx, |updater, ctx| updater.dismiss_status(ctx));
             }
         }
         ctx.notify();
@@ -24650,6 +24802,43 @@ impl TypedActionView for Workspace {
                 }
             }
             OpenWarpiumForkOnGitHub => ctx.open_url(warpium_upstream_check::FORK_URL),
+            CheckForWarpiumUpdates => {
+                #[cfg(not(target_family = "wasm"))]
+                Self::update_self_updater(ctx, |updater, ctx| updater.check_now(ctx));
+            }
+            ToggleWarpiumUpdateCheck => {
+                crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.update_check.toggle_and_save_value(ctx));
+                    },
+                );
+                ctx.notify();
+            }
+            InstallWarpiumUpdate => {
+                #[cfg(not(target_family = "wasm"))]
+                Self::update_self_updater(ctx, |updater, ctx| updater.start_update(ctx));
+            }
+            OpenWarpiumReleaseNotes => {
+                #[cfg(not(target_family = "wasm"))]
+                Self::update_self_updater(ctx, |updater, ctx| updater.open_release_notes(ctx));
+            }
+            SkipWarpiumUpdate => {
+                #[cfg(not(target_family = "wasm"))]
+                Self::update_self_updater(ctx, |updater, ctx| updater.skip_offered(ctx));
+            }
+            RestartForWarpiumUpdate => {
+                #[cfg(not(target_family = "wasm"))]
+                Self::update_self_updater(ctx, |updater, ctx| updater.restart(ctx));
+            }
+            RevealWarpiumUpdateDmg => {
+                #[cfg(not(target_family = "wasm"))]
+                Self::update_self_updater(ctx, |updater, _| updater.reveal_dmg());
+            }
+            DownloadWarpiumUpdateManually => {
+                #[cfg(not(target_family = "wasm"))]
+                Self::update_self_updater(ctx, |updater, ctx| updater.download_manually(ctx));
+            }
             OpenLocalToCloudHandoffPane {
                 launch,
                 environment_id,
@@ -26952,6 +27141,11 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::UPSTREAM_CHECK_CONTEXT_FLAG);
+        }
+        if *crate::warpium::sync_settings::WarpiumSettings::as_ref(app).update_check {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::UPDATE_CHECK_CONTEXT_FLAG);
         }
 
         if self.team_uid(app).is_some() {

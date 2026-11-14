@@ -97,6 +97,70 @@ While the fork's `master` lacks upstream commits it opens, or updates, a single 
 in sync. It needs issues enabled on the repository (otherwise it only writes the count to the run
 summary). Opt out by setting the repository variable `WARPIUM_UPSTREAM_ISSUE` to `false`.
 
+## Warpium self-update
+
+Warpium offers and installs new **Warpium** releases from the fork's GitHub Releases. It never
+offers, fetches or installs official Warp builds: Warp's own updater stays off for the OSS channel
+(`autoupdate_config: None` in `app/src/bin/oss.rs`, and `app/src/autoupdate/mod.rs` bails for
+`Channel::Oss`). `crates/warpium_self_update/src/oss_autoupdate_guard_tests.rs` fails if either
+changes, and `self_update::init` debug-asserts it at runtime. Fork-only code lives in
+`crates/warpium_self_update` (protoc-free, unit-tested with `cargo test -p warpium_self_update`) and
+`app/src/warpium/self_update.rs`. OSS channel only.
+
+- **Current version.** `WARPIUM_VERSION_TAG`, baked in by CI (see [Versioning](#versioning)).
+  Builds without it (local `./script/run` builds) never offer updates.
+- **Check.** On launch and then every `warpium.update_check_interval_hours` (default 6, 1–168),
+  counted across launches, while `warpium.update_check` is on (default):
+  `GET /repos/MILKA-TOP/warpium/releases/latest`, unauthenticated, revalidated with its `ETag`.
+  Back-off, rate-limit handling and the HTTP plumbing are shared with the
+  [upstream check](#upstream-warp-update-notification). Drafts, prereleases and tags that aren't
+  Warpium versions are ignored. Versions compare numerically, upstream part first (date, then
+  channel build) and then the fork counter, so `….stable_00.10` > `….stable_00.2`. State, including
+  the latest release and the skipped tag, is kept in private preferences under
+  `WarpiumSelfUpdateState`.
+- **Offer.** A workspace banner, "Warpium <new> is available (you have <current>).", with **Update
+  now**, **Release notes**, **Skip this version** (never offered again; a newer release is) and a
+  close button (hides it until the next launch). It takes priority over the upstream-commits
+  banner, which is informational and about source code. **Check for Warpium updates** in the
+  command palette always reports a result in a toast and brings back a skipped or closed offer;
+  **Enable/Disable Warpium update checks** toggles `warpium.update_check`.
+- **Install.** Warp's macOS updater can't be reused: it downloads only from Warp's release servers
+  and requires Warp's Apple team id in the code signature, which ad-hoc signed Warpium builds can't
+  have. Warpium has its own path, modelled on it:
+  1. download `Warpium-<tag>-arm64.dmg` and its `.sha256` into `warpium-update/<tag>/` in the app's cache directory,
+     with progress in the banner. Download URLs are built from the tag, so they always point at
+     this repository's releases;
+  2. refuse unless the SHA-256 (and the size GitHub reports) matches;
+  3. check that the app can be replaced where it is: a writable folder, not App Translocation;
+  4. `hdiutil attach -nobrowse -noautoopen -readonly` at a private mountpoint;
+  5. require `CFBundleIdentifier` `dev.milka.Warpium` and `CFBundleShortVersionString` equal to the
+     release's plist version;
+  6. `ditto` the app to a hidden sibling, `.Warpium-update.app`, check it again,
+     `codesign --verify --deep` (integrity of the ad-hoc signature) and clear
+     `com.apple.quarantine` so Gatekeeper doesn't block it;
+  7. swap it with the running bundle atomically (`renamex_np(RENAME_SWAP)`, as Warp does) and keep
+     the old bundle as `.Warpium-previous.app`; detach the image;
+  8. quit (cancellable, like any quit) and relaunch: a shell waits for the old process to exit,
+     then `open -n` the bundle, as Warp's updater does. The first launch of the new version
+     deletes the backup and the downloads.
+
+  Any failure before the swap leaves the running app untouched and shows the error with
+  **Download manually** (the release page); when the app can't be replaced where it is, the banner
+  also offers **Reveal DMG** for the verified download. To roll back by hand, quit Warpium and put
+  `.Warpium-previous.app` back (it is next to `Warpium.app` until the new version has launched).
+- **Trying it:** make a build pretend to be older, so it is offered the latest release.
+  `WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE` set at runtime overrides the embedded version:
+
+  ```bash
+  WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE=v0.2026.05.01.00.00.stable_00.1 \
+    /Applications/Warpium.app/Contents/MacOS/warp-oss
+  ```
+
+  **Update now** then installs the latest release over the app
+  it was started from (so test on a copy, or in the `warpium-mac` VM). The installed release must
+  match the release's plist version, so the override only changes what is offered, not what is
+  accepted.
+
 ## Versioning
 
 A Warpium version is the upstream Warp release it is based on plus a fork counter as one

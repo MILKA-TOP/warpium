@@ -15,7 +15,7 @@ pub use check::{
 };
 pub use github::{
     FORK_REPO, FORK_URL, UPSTREAM_BRANCH, UPSTREAM_REPO, compare_web_url, parse_commit_sha,
-    resolve_base,
+    rate_limit_until, resolve_base,
 };
 pub use notice::{
     banner_description, banner_heading, check_interval, manual_report, should_notify,

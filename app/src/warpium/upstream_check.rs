@@ -69,7 +69,9 @@ pub(crate) fn init(poll: bool, ctx: &mut AppContext) {
                     ctx.notify();
                 }
                 WarpiumSettingsChangedEvent::UpstreamCheckMinCommits { .. } => ctx.notify(),
-                WarpiumSettingsChangedEvent::SyncFromWarp { .. } => {}
+                WarpiumSettingsChangedEvent::SyncFromWarp { .. }
+                | WarpiumSettingsChangedEvent::UpdateCheck { .. }
+                | WarpiumSettingsChangedEvent::UpdateCheckIntervalHours { .. } => {}
             },
         );
         UpstreamChecker::new(poll, ctx)
