@@ -1,4 +1,5 @@
 use ui_components::{Component as _, Options as _, button};
+use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::{
@@ -18,6 +19,7 @@ use warpui_core::{
 use super::OnboardingSlide;
 use super::toggle_card::{ChipSpec, ToggleCardSpec, render_toggle_card};
 use crate::OnboardingIntention;
+use crate::branding;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel, UICustomizationSettings};
 use crate::slides::{bottom_nav, layout, slide_content};
 
@@ -145,7 +147,7 @@ impl CustomizeUISlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph("Customize your Warp")
+            .paragraph(branding::customize_title(ChannelState::channel()))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),

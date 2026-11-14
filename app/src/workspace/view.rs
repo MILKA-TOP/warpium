@@ -8960,13 +8960,19 @@ impl Workspace {
     }
 
     fn open_directory_in_new_tab(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
-        let options = NewTerminalOptions::default().with_initial_directory(path);
+        let options = NewTerminalOptions::default().with_initial_directory(path.clone());
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(options)),
             Arc::new(HashMap::new()),
             None,
             ctx,
         );
+        let pane_group = self.active_tab_pane_group().clone();
+        pane_group.update(ctx, |pane_group, _| {
+            pane_group.set_pinned_explorer_root(path)
+        });
+        // Activating the tab may already have computed its roots without the pin.
+        self.refresh_working_directories_for_pane_group(&pane_group, ctx);
     }
 
     #[cfg(feature = "local_fs")]
@@ -15539,12 +15545,15 @@ impl Workspace {
             .active_session_view(ctx)
             .map(|terminal_view| terminal_view.id());
 
+        let pinned_explorer_root = pane_group.as_ref(ctx).pinned_explorer_root().cloned();
+
         self.working_directories_model.update(ctx, |model, ctx| {
             model.refresh_working_directories_for_pane_group(
                 pane_group_id,
                 terminal_cwds,
                 local_paths,
                 focused_terminal_id,
+                pinned_explorer_root,
                 ctx,
             );
         });

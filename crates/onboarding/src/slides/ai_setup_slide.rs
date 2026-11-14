@@ -1,4 +1,5 @@
 use ui_components::{Component as _, Options as _, button};
+use warp_core::channel::ChannelState;
 use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
@@ -20,6 +21,7 @@ use warpui_core::{
 };
 
 use super::OnboardingSlide;
+use crate::branding;
 use crate::model::{AiSetupChoice, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 
@@ -99,10 +101,11 @@ impl AiSetupSlide {
         let theme = appearance.theme();
 
         let logo_fill = internal_colors::fg_overlay_4(theme);
-        let logo = ConstrainedBox::new(Icon::WarpLogoLight.to_warpui_icon(logo_fill).finish())
-            .with_width(64.)
-            .with_height(64.)
-            .finish();
+        let logo =
+            ConstrainedBox::new(branding::logo_mark(ChannelState::channel(), logo_fill).finish())
+                .with_width(64.)
+                .with_height(64.)
+                .finish();
 
         let title = appearance
             .ui_builder()

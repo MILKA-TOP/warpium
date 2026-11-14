@@ -1,6 +1,7 @@
 // Onboarding library crate
 
 mod agent_onboarding_view;
+mod branding;
 pub mod callout;
 mod model;
 pub mod slides;

@@ -61,8 +61,7 @@ To build a release `.dmg` like the published ones, see the [developer guide](WAR
 
 ## Planned features
 
-- **Open in new tab, fixed.** "Open in new tab" in the file tree opens the folder you selected instead of your home folder.
-- **Smarter search.** Project search can respect `.gitignore` and take include and exclude filters such as `*build*`.
+- **Toolbar with custom command buttons.** Your own icons at the top of the window that run commands you choose, like the toolbar in JetBrains IDEs.
 - **Git log.** A JetBrains-style git log and graph with branches, commits and sorting.
 - **Upstream updates.** A notification when a new Warp version is available, so it can be merged into Warpium.
 - **Images for agents in Docker.** Paste images into CLI agents such as Claude Code that run inside Docker containers.
