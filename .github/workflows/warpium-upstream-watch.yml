@@ -1,0 +1,76 @@
+# Fork-only: keeps one issue, "Upstream Warp has new commits", open while this fork's master lacks
+# commits from warpdotdev/warp master, and closes it once the fork is synced.
+#
+# Opt out by setting the repository variable WARPIUM_UPSTREAM_ISSUE to `false`
+# (Settings → Secrets and variables → Actions → Variables).
+name: Warpium Upstream Watch
+
+on:
+  schedule:
+    # Daily at 06:17 UTC (off the hour, when GitHub's scheduler is less busy).
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: warpium-upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Check upstream Warp
+    if: vars.WARPIUM_UPSTREAM_ISSUE != 'false' && github.repository == 'MILKA-TOP/warpium'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: Upstream Warp has new commits
+    steps:
+      - name: Open, update or close the upstream issue
+        run: |
+          set -euo pipefail
+          # Scheduled runs have no repository in their event payload, so ask the API.
+          fork_branch="$(gh api "repos/$GH_REPO" --jq '.default_branch')"
+          # Page 2 skips the changed-files list, which only page 1 carries; every page has the
+          # counts. behind_by is the number of upstream commits the fork lacks.
+          compare="$(gh api "repos/warpdotdev/warp/compare/master...${GH_REPO%%/*}:${GH_REPO##*/}:$fork_branch?per_page=1&page=2")"
+          behind="$(jq -r '.behind_by' <<<"$compare")"
+          base="$(jq -r '.merge_base_commit.sha' <<<"$compare")"
+          if ! [[ "$behind" =~ ^[0-9]+$ && "$base" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Unexpected compare response"
+            exit 1
+          fi
+          echo "Upstream commits missing from \`$fork_branch\`: $behind ([view](https://github.com/warpdotdev/warp/compare/$base...master))" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$(gh api "repos/$GH_REPO" --jq '.has_issues')" != "true" ]]; then
+            echo "::notice::Issues are disabled in $GH_REPO; enable them to get the upstream issue. Upstream commits missing: $behind"
+            exit 0
+          fi
+          issue="$(gh issue list --state open --limit 200 --json number,title |
+            jq -r --arg title "$TITLE" '[.[] | select(.title == $title)][0].number // empty')"
+          echo "Upstream commits missing from $fork_branch: $behind (merge base $base); open issue: ${issue:-none}"
+
+          if [[ "$behind" == "0" ]]; then
+            if [[ -n "$issue" ]]; then
+              gh issue close "$issue" --comment "The fork is in sync with upstream Warp (merge base \`$base\`)."
+            fi
+            exit 0
+          fi
+
+          head_date="$(gh api repos/warpdotdev/warp/branches/master --jq '.commit.commit.committer.date')"
+          body="$(cat <<EOF
+          Upstream [warpdotdev/warp](https://github.com/warpdotdev/warp) \`master\` has **$behind** commit(s) that this fork's \`$fork_branch\` doesn't have. The latest upstream commit is from $head_date.
+
+          - [View the new upstream commits](https://github.com/warpdotdev/warp/compare/$base...master)
+          - Sync with the **Sync fork** button on [the repository page](https://github.com/$GH_REPO), or run \`gh repo sync $GH_REPO\`, or merge \`warpdotdev/warp\` \`master\` in a pull request. See WARPIUM.md, "After merging upstream Warp".
+
+          This issue is updated daily by the Warpium Upstream Watch workflow and closed once the fork is in sync.
+          EOF
+          )"
+          if [[ -n "$issue" ]]; then
+            gh issue edit "$issue" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi

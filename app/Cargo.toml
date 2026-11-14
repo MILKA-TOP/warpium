@@ -272,6 +272,7 @@ warp_multi_agent_client.workspace = true
 local_control.workspace = true
 hashbrown.workspace = true
 rustc-hash.workspace = true
+warpium_upstream_check.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block.workspace = true

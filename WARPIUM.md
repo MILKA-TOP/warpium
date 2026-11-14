@@ -47,6 +47,56 @@ lives in `crates/warp_config_import` (protoc-free, unit-tested with
 `cargo test -p warp_config_import`) and `app/src/warpium/`. The category table and sync rules are
 in [docs/warpium/warp-config-import.md](docs/warpium/warp-config-import.md).
 
+## Upstream Warp update notification
+
+Warpium tells you when upstream `warpdotdev/warp` `master` has commits the running build lacks, so
+you can sync the fork. Fork-only code lives in `crates/warpium_upstream_check` (protoc-free,
+unit-tested with `cargo test -p warpium_upstream_check`) and `app/src/warpium/upstream_check.rs`.
+
+- **Base commit.** Each build embeds `WARPIUM_UPSTREAM_BASE`, the merge base of the build commit
+  with upstream `master` (the newest upstream commit it contains). The preflight job of Warpium
+  Build computes it with [`script/warpium/upstream_base`](script/warpium/upstream_base) through the
+  GitHub compare API. Builds without it (a failed lookup, or a local build that didn't export it)
+  never check. Commits are compared rather than tags because upstream stopped publishing public
+  release tags after June 2026.
+- **Check.** Every `warpium.upstream_check_interval_hours` (default 6, 1–168), counted across
+  launches, and at launch when the build's base has no saved result; unauthenticated:
+  `GET /repos/warpdotdev/warp/branches/master` revalidated with its `ETag`, then, only when the
+  head moved, `GET /repos/warpdotdev/warp/compare/<base>...<head>` (page 2, which
+  leaves out the changed-files list) for the commit count. Errors back off from 15 minutes,
+  doubling up to the interval; GitHub's rate-limit headers are honored. State, including the
+  last result (so the banner survives a relaunch) and the dismissed head, is kept in private
+  preferences under `WarpiumUpstreamCheckState`.
+- **Notification.** A workspace banner, "Upstream Warp has N new commits since this build", with
+  **View changes** (the GitHub compare page from the base), **Sync fork** (opens the fork's GitHub
+  page, which has GitHub's **Sync fork** button) and a close button that hides it until upstream
+  moves again. It appears once upstream is `warpium.upstream_check_min_commits` (default 1)
+  commits ahead.
+- **Command palette:** "Check for upstream Warp updates" checks now and reports the result in a
+  toast even when nothing is new; "Enable/Disable upstream Warp update notifications" toggles
+  `warpium.upstream_check` (default on). OSS channel only.
+- **Syncing from the CLI:** `gh repo sync MILKA-TOP/warpium` does what the **Sync fork** button
+  does: it updates the fork's `master` on GitHub from upstream (a fast-forward, or a merge commit
+  when the fork has its own commits and there are no conflicts). Both write to `master` directly,
+  so they are for the owner, not agents. On conflicts, merge `warpdotdev/warp` `master` in a branch
+  and a pull request instead. Either way, then follow [After merging upstream
+  Warp](#after-merging-upstream-warp).
+- **Trying it:** run a build with an older upstream commit as its base.
+  `WARPIUM_UPSTREAM_BASE_OVERRIDE` set at runtime overrides the embedded one; a base with no saved
+  result is checked at launch:
+
+  ```bash
+  WARPIUM_UPSTREAM_BASE_OVERRIDE=<older upstream sha> /Applications/Warpium.app/Contents/MacOS/warp-oss
+  ```
+
+### Upstream issue (GitHub Actions)
+
+`.github/workflows/warpium-upstream-watch.yml` ("Warpium Upstream Watch") runs daily and on demand.
+While the fork's `master` lacks upstream commits it opens, or updates, a single issue titled
+"Upstream Warp has new commits" with the count and the compare link, and closes it once the fork is
+in sync. It needs issues enabled on the repository (otherwise it only writes the count to the run
+summary). Opt out by setting the repository variable `WARPIUM_UPSTREAM_ISSUE` to `false`.
+
 ## Versioning
 
 A Warpium version is the upstream Warp release it is based on plus a fork counter as one
@@ -140,7 +190,9 @@ gated to `warpdotdev` and don't run here. Don't change whether workflows are ena
   writing: pushes to `master`, pull requests into `master` or into `claude/**` (stacked PRs),
   Warpium tags, manual runs, and calls from Warpium Release. Changes to `**/*.md`, `specs/**` and `tools/**` alone don't
   trigger a build, so a PR that only touches tooling such as `tools/mac-mcp` gets no macOS build.
-- **Jobs:** a cheap `ubuntu-latest` preflight computes the version and the artifact name, then
+- **Jobs:** a cheap `ubuntu-latest` preflight computes the version, the artifact name and the
+  upstream base commit (`WARPIUM_UPSTREAM_BASE`, see
+  [Upstream Warp update notification](#upstream-warp-update-notification)), then
   the macOS job builds on `macos-15-intel` and cross-compiles arm64 with `--selfsign`
   (about 1.5 h). It checks the plist version and the app icon in the built bundle.
 - **Cross-compile caveat:** the Intel runner can't run the arm64 binary that generates
@@ -162,6 +214,8 @@ brew install create-dmg
 ./script/install_cargo_bundle
 ./script/install_cargo_release_deps --no-build-deps
 export WARPIUM_VERSION_TAG="$(script/warpium/version)"
+# Optional: enables the upstream Warp update notification (needs the commit pushed to GitHub).
+export WARPIUM_UPSTREAM_BASE="$(script/warpium/upstream_base)"
 ./script/bundle --channel oss --arch aarch64 --selfsign --dmg-name-suffix "$WARPIUM_VERSION_TAG-arm64"
 ```
 

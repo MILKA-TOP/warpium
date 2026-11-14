@@ -71,6 +71,8 @@ jobs:
       artifact_name: ${{ steps.version.outputs.artifact_name }}
       # The tag to publish a release for; empty for branch and PR builds.
       release_tag: ${{ steps.version.outputs.release_tag }}
+      # The upstream Warp commit the build is based on; empty if it couldn't be determined.
+      upstream_base: ${{ steps.upstream_base.outputs.upstream_base }}
     steps:
       - name: Report runner
         run: |
@@ -112,6 +114,36 @@ jobs:
             echo "release_tag=$release_tag"
           } >> "$GITHUB_OUTPUT"
           echo "Warpium $version (CFBundleShortVersionString $plist_version), artifact $artifact_name" >> "$GITHUB_STEP_SUMMARY"
+
+      # Embedded as WARPIUM_UPSTREAM_BASE so the app can notify when upstream Warp has commits
+      # this build lacks. A failed lookup only turns that notification off.
+      - name: Compute upstream Warp base commit
+        id: upstream_base
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # A PR builds its merge ref, which the API can't look up, so take the newer of the bases
+          # of the PR head and of the target branch: the merge contains both.
+          SHA: ${{ github.event.pull_request.head.sha || '' }}
+          TARGET_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        run: |
+          sha="${SHA:-$(git rev-parse HEAD)}"
+          if base="$(script/warpium/upstream_base --sha "$sha")"; then
+            if [[ -n "$TARGET_SHA" ]] && target_base="$(script/warpium/upstream_base --sha "$TARGET_SHA")" &&
+              [[ "$target_base" != "$base" ]]; then
+              # Both bases are on upstream master, so one contains the other.
+              status="$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/warpdotdev/warp/compare/$base...$target_base?per_page=1&page=2" |
+                jq -r '.status')" || status=""
+              if [[ "$status" == "ahead" ]]; then
+                base="$target_base"
+              fi
+            fi
+            echo "Upstream Warp base: $base" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Could not determine the upstream Warp base of $sha; the upstream update notification is off in this build."
+            base=""
+          fi
+          echo "upstream_base=$base" >> "$GITHUB_OUTPUT"
 
   macos-arm64:
     name: Build macOS (arm64)
@@ -168,6 +200,8 @@ jobs:
           # Deliberately not GIT_RELEASE_TAG, which would make the app behave like an
           # official Warp release (remote-server version handshake, changelogs, updates).
           WARPIUM_VERSION_TAG: ${{ needs.preflight.outputs.version }}
+          # Baked into the app for the upstream Warp update notification (app/src/warpium).
+          WARPIUM_UPSTREAM_BASE: ${{ needs.preflight.outputs.upstream_base }}
           # The Intel host can't run the arm64 binary to dump the settings
           # schema, so the bundle ships without settings_schema.json.
           SKIP_SETTINGS_SCHEMA: '1'
