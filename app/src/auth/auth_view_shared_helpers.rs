@@ -118,15 +118,10 @@ where
 }
 
 pub fn render_square_logo(appearance: &Appearance) -> Box<dyn Element> {
-    let is_dark = appearance.theme().inferred_color_scheme() == ColorScheme::LightOnDark;
+    let color_scheme = appearance.theme().inferred_color_scheme();
+    let is_dark = color_scheme == ColorScheme::LightOnDark;
     let image_path = match ChannelState::channel() {
-        Channel::Oss => {
-            if is_dark {
-                "bundled/svg/warpium-mark-on-dark.svg"
-            } else {
-                "bundled/svg/warpium-mark.svg"
-            }
-        }
+        Channel::Oss => onboarding::warpium_mark_path(color_scheme),
         Channel::Stable
         | Channel::Preview
         | Channel::Dev

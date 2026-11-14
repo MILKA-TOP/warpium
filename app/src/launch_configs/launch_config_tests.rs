@@ -23,6 +23,7 @@ fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                pinned_explorer_root: None,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -391,6 +392,7 @@ fn test_config_with_active_tab_index() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                pinned_explorer_root: None,
             };
             3
         ],
@@ -427,6 +429,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                pinned_explorer_root: None,
             },
             TabSnapshot {
                 custom_title: None,
@@ -458,6 +461,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                pinned_explorer_root: None,
             },
         ],
     );
@@ -501,6 +505,7 @@ fn test_config_with_active_tab_being_filtered() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                pinned_explorer_root: None,
             },
             TabSnapshot {
                 custom_title: None,
@@ -524,6 +529,7 @@ fn test_config_with_active_tab_being_filtered() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                pinned_explorer_root: None,
             },
         ],
     );
@@ -561,6 +567,7 @@ fn terminal_tab(cwd: &str, group_id: Option<TabGroupId>) -> TabSnapshot {
         right_panel: None,
         group_id,
         pinned: false,
+        pinned_explorer_root: None,
     }
 }
 
@@ -583,6 +590,7 @@ fn unsaveable_tab(group_id: Option<TabGroupId>) -> TabSnapshot {
         right_panel: None,
         group_id,
         pinned: false,
+        pinned_explorer_root: None,
     }
 }
 

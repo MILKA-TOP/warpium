@@ -1,4 +1,5 @@
 use ui_components::{Component as _, Options as _, button};
+use warp_core::channel::ChannelState;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
@@ -22,6 +23,7 @@ use warpui_core::{
 
 use super::OnboardingSlide;
 use super::upgrade_auth_prompt::render_upgrade_auth_prompt_bar;
+use crate::branding;
 use crate::model::OnboardingStateModel;
 use crate::slides::{layout, slide_content};
 use crate::telemetry::OnboardingEvent;
@@ -351,7 +353,9 @@ impl OfferSlide {
         let get_warping = self.get_warping_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Get Warping".into()),
+                content: button::Content::Label(
+                    branding::get_started_label(ChannelState::channel()).into(),
+                ),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),

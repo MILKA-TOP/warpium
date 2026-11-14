@@ -62,11 +62,11 @@ fn check_interval_is_clamped() {
 fn banner_heading_counts_commits() {
     assert_eq!(
         banner_heading(&status(1, "")),
-        "Upstream Warp has 1 new commit since this build."
+        "1 new upstream Warp commit."
     );
     assert_eq!(
         banner_heading(&status(29, "")),
-        "Upstream Warp has 29 new commits since this build."
+        "29 new upstream Warp commits."
     );
 }
 
@@ -74,7 +74,7 @@ fn banner_heading_counts_commits() {
 fn banner_description_shows_the_latest_commit_date() {
     assert_eq!(
         banner_description(&status(2, "2026-11-14T07:36:23Z")),
-        "Latest upstream commit: 2026-11-14. Source changes for the fork to merge; nothing to install."
+        "Latest: 2026-11-14. Source changes to merge; nothing to install."
     );
 }
 
@@ -82,7 +82,7 @@ fn banner_description_shows_the_latest_commit_date() {
 fn banner_description_omits_a_malformed_date() {
     assert_eq!(
         banner_description(&status(2, "yesterday")),
-        "Source changes for the fork to merge; nothing to install."
+        "Source changes to merge; nothing to install."
     );
 }
 
@@ -98,7 +98,7 @@ fn manual_report_says_up_to_date() {
 fn manual_report_counts_new_commits() {
     assert_eq!(
         manual_report(&CheckOutcome::Checked(status(7, "")), 0),
-        "Upstream Warp has 7 new commits since this build."
+        "7 new upstream Warp commits since this build."
     );
 }
 

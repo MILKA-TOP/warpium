@@ -6,6 +6,9 @@ use ai::workspace::WorkspaceMetadata;
 use chrono::{Local, Utc};
 use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
+use diesel::migration::{Migration, MigrationSource};
+use diesel::sqlite::Sqlite;
+use diesel_migrations::MigrationHarness;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::features::FeatureFlag;
@@ -402,6 +405,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
             right_panel: None,
             group_id: None,
             pinned: false,
+            pinned_explorer_root: None,
         }],
         active_tab_index: 0,
         team_uid: None,
@@ -453,6 +457,71 @@ fn test_sqlite_round_trips_vertical_tabs_panel_open() {
             .collect::<Vec<_>>(),
         vec![false, true]
     );
+}
+
+#[test]
+fn test_sqlite_round_trips_pinned_explorer_root() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let mut pinned_window = test_terminal_window_snapshot(false);
+    pinned_window.tabs[0].pinned_explorer_root = Some(PathBuf::from("/tmp/repo/app"));
+    let app_state = AppState {
+        windows: vec![pinned_window, test_terminal_window_snapshot(true)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(
+        restored.windows[0].tabs[0].pinned_explorer_root,
+        Some(PathBuf::from("/tmp/repo/app"))
+    );
+    assert_eq!(restored.windows[1].tabs[0].pinned_explorer_root, None);
+}
+
+/// A session saved before the `pinned_explorer_root` column existed still restores, unpinned.
+#[test]
+fn test_sqlite_restores_tabs_saved_before_pinned_explorer_root() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let app_state = AppState {
+        windows: vec![test_terminal_window_snapshot(false)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    let migrations = MigrationSource::<Sqlite>::migrations(&::persistence::MIGRATIONS)
+        .expect("embedded migrations should load");
+    let pinned_root_migration = migrations
+        .iter()
+        .find(|migration| {
+            migration
+                .name()
+                .to_string()
+                .ends_with("_add_pinned_explorer_root_to_tabs")
+        })
+        .expect("the pinned explorer root migration should be embedded");
+    conn.revert_migration(pinned_root_migration.as_ref())
+        .expect("the migration should revert");
+
+    setup_database(&database_path).expect("database should migrate again");
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.windows.len(), 1);
+    assert_eq!(restored.windows[0].tabs.len(), 1);
+    assert_eq!(restored.windows[0].tabs[0].pinned_explorer_root, None);
 }
 
 #[test]
@@ -517,6 +586,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                pinned_explorer_root: None,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -596,6 +666,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
                 right_panel: None,
                 group_id: None,
                 pinned: false,
+                pinned_explorer_root: None,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -683,6 +754,7 @@ fn test_sqlite_round_trips_tab_groups() {
         right_panel: None,
         group_id: Some(group_id),
         pinned: false,
+        pinned_explorer_root: None,
     };
     let tab_outside_group = TabSnapshot {
         custom_title: None,
@@ -711,6 +783,7 @@ fn test_sqlite_round_trips_tab_groups() {
         right_panel: None,
         group_id: None,
         pinned: false,
+        pinned_explorer_root: None,
     };
 
     let app_state = AppState {
@@ -807,6 +880,7 @@ fn test_sqlite_round_trips_pinned_state() {
         right_panel: None,
         group_id: None,
         pinned: true,
+        pinned_explorer_root: None,
     };
     let unpinned_tab = TabSnapshot {
         custom_title: None,
@@ -835,6 +909,7 @@ fn test_sqlite_round_trips_pinned_state() {
         right_panel: None,
         group_id: Some(unpinned_group_id),
         pinned: false,
+        pinned_explorer_root: None,
     };
     let tab_in_pinned_group = TabSnapshot {
         custom_title: None,
@@ -863,6 +938,7 @@ fn test_sqlite_round_trips_pinned_state() {
         right_panel: None,
         group_id: Some(pinned_group_id),
         pinned: false,
+        pinned_explorer_root: None,
     };
 
     let app_state = AppState {
