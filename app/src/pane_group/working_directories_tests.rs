@@ -2,13 +2,13 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 use warpui::{App, EntityId};
 
-use super::PaneGroupRepositoryRoots;
+use super::{PaneGroupRepositoryRoots, explorer_root_within_repo};
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::pane_group::WorkingDirectoriesModel;
 
@@ -588,5 +588,116 @@ fn clear_selected_review_repo_removes_only_the_targeted_pane_group_entry() {
                 Some(local(&repo_b)),
             );
         });
+    });
+}
+
+#[test]
+fn explorer_root_is_pinned_subdirectory_of_repo_for_paths_inside_it() {
+    let root = explorer_root_within_repo(
+        Path::new("/repo/sub/deeper"),
+        Some(PathBuf::from("/repo")),
+        Some(Path::new("/repo/sub")),
+    );
+
+    assert_eq!(root, Some(PathBuf::from("/repo/sub")));
+}
+
+#[test]
+fn explorer_root_is_repo_root_for_paths_outside_pinned_directory() {
+    let root = explorer_root_within_repo(
+        Path::new("/repo/other"),
+        Some(PathBuf::from("/repo")),
+        Some(Path::new("/repo/sub")),
+    );
+
+    assert_eq!(root, Some(PathBuf::from("/repo")));
+}
+
+#[test]
+fn explorer_root_is_nested_repo_root_inside_pinned_directory() {
+    let root = explorer_root_within_repo(
+        Path::new("/repo/sub/nested/src"),
+        Some(PathBuf::from("/repo/sub/nested")),
+        Some(Path::new("/repo/sub")),
+    );
+
+    assert_eq!(root, Some(PathBuf::from("/repo/sub/nested")));
+}
+
+#[test]
+fn explorer_root_is_none_outside_repositories_even_with_pin() {
+    let root =
+        explorer_root_within_repo(Path::new("/plain/sub"), None, Some(Path::new("/plain/sub")));
+
+    assert_eq!(root, None);
+}
+
+#[test]
+fn explorer_root_is_repo_root_without_pin() {
+    let root =
+        explorer_root_within_repo(Path::new("/repo/sub"), Some(PathBuf::from("/repo")), None);
+
+    assert_eq!(root, Some(PathBuf::from("/repo")));
+}
+
+#[test]
+fn refresh_working_directories_shows_pinned_subdirectory_of_repo() {
+    App::test((), |mut app| async move {
+        let detected_repos_handle = app.add_singleton_model(|_| DetectedRepositories::default());
+
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let repo_root = temp_dir.path().join("repo");
+        let sub_dir = repo_root.join("sub");
+        let file_in_sub = sub_dir.join("main.rs");
+        fs::create_dir_all(&sub_dir).expect("create repo/sub");
+        fs::write(&file_in_sub, "").expect("create repo/sub/main.rs");
+        let canonical_repo_root = dunce::canonicalize(&repo_root).expect("canonical repo root");
+        let canonical_sub_dir = dunce::canonicalize(&sub_dir).expect("canonical sub dir");
+        let canonical_file = dunce::canonicalize(&file_in_sub).expect("canonical file");
+
+        detected_repos_handle.update(&mut app, |repos, _ctx| {
+            let canonical =
+                warp_util::standardized_path::StandardizedPath::from_local_canonicalized(
+                    canonical_repo_root.as_path(),
+                )
+                .expect("canonicalized path");
+            repos.insert_test_repo_root(canonical);
+        });
+
+        let pane_group_id = EntityId::new();
+        let terminal = EntityId::new();
+        let editor = EntityId::new();
+
+        let working_directories_handle = app.add_model(|_| WorkingDirectoriesModel::new());
+        let (roots, repos): (Vec<LocalOrRemotePath>, Vec<LocalOrRemotePath>) =
+            working_directories_handle.update(&mut app, |model, ctx| {
+                model.pin_explorer_root(pane_group_id, sub_dir.clone());
+                model.refresh_working_directories_for_pane_group(
+                    pane_group_id,
+                    vec![(terminal, local(&sub_dir))],
+                    vec![(editor, local(&canonical_file))],
+                    Some(terminal),
+                    ctx,
+                );
+
+                (
+                    model
+                        .most_recent_directories_for_pane_group(pane_group_id)
+                        .expect("pane group exists")
+                        .map(|dir| dir.path)
+                        .collect(),
+                    model
+                        .most_recent_repositories_for_pane_group(pane_group_id)
+                        .expect("pane group exists")
+                        .collect(),
+                )
+            });
+
+        assert_eq!(roots, vec![local(&canonical_sub_dir)]);
+        assert_eq!(
+            repos,
+            vec![local(&canonical_repo_root)],
+            "the pin only changes the explorer root, not the detected repository"
+        );
     });
 }

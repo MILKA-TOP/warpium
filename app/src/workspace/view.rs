@@ -8960,13 +8960,20 @@ impl Workspace {
     }
 
     fn open_directory_in_new_tab(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
-        let options = NewTerminalOptions::default().with_initial_directory(path);
+        let options = NewTerminalOptions::default().with_initial_directory(path.clone());
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(options)),
             Arc::new(HashMap::new()),
             None,
             ctx,
         );
+        let pane_group = self.active_tab_pane_group().clone();
+        let pane_group_id = pane_group.id();
+        self.working_directories_model.update(ctx, |model, _| {
+            model.pin_explorer_root(pane_group_id, path);
+        });
+        // Activating the tab may already have computed its roots without the pin.
+        self.refresh_working_directories_for_pane_group(&pane_group, ctx);
     }
 
     #[cfg(feature = "local_fs")]

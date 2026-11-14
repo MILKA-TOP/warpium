@@ -300,6 +300,10 @@ pub struct WorkingDirectoriesModel {
     selected_review_repo: HashMap<EntityId, LocalOrRemotePath>,
     global_search_views: HashMap<EntityId, ViewHandle<GlobalSearchView>>,
     file_tree_views: HashMap<EntityId, ViewHandle<FileTreeView>>,
+    /// Per-pane-group directory the user explicitly opened the tab in (e.g. from the Project
+    /// Explorer's "Open in new tab"). It is shown as the explorer root instead of the enclosing
+    /// repository root while the pane group's paths stay inside it.
+    pinned_explorer_roots: HashMap<EntityId, PathBuf>,
 }
 
 #[derive(Default)]
@@ -561,6 +565,14 @@ impl WorkingDirectoriesModel {
         self.code_review_views.remove(&pane_group_id);
         self.focused_repo.remove(&pane_group_id);
         self.selected_review_repo.remove(&pane_group_id);
+        self.pinned_explorer_roots.remove(&pane_group_id);
+    }
+
+    /// Makes `directory` the explorer root for paths inside it in this pane group, even when it
+    /// is a subdirectory of a repository whose root would otherwise be shown.
+    pub fn pin_explorer_root(&mut self, pane_group_id: EntityId, directory: PathBuf) {
+        let directory = dunce::canonicalize(&directory).unwrap_or(directory);
+        self.pinned_explorer_roots.insert(pane_group_id, directory);
     }
 
     fn handle_empty_pane_group(&mut self, pane_group_id: EntityId, ctx: &mut ModelContext<Self>) {
@@ -629,13 +641,17 @@ impl WorkingDirectoriesModel {
         let old_focused_repo: Option<LocalOrRemotePath> =
             self.focused_repo.get(&pane_group_id).cloned().flatten();
 
-        // Resolve a local path to its detected repository root, or keep the path as-is if no repo is found.
-        let root_for_path = |path: PathBuf| {
-            DetectedRepositories::as_ref(ctx)
-                .get_root_for_path(&LocalOrRemotePath::Local(path.clone()))
-                .and_then(|r| PathBuf::try_from(r).ok())
-                .unwrap_or(path)
+        let pinned_root = self.pinned_explorer_roots.get(&pane_group_id).cloned();
+        // Doesn't go through `self.get_repo_root_for_path` so that it doesn't borrow `self`.
+        let display_repo_root_for_path = |path: &Path| {
+            let repo_root = DetectedRepositories::as_ref(ctx)
+                .get_root_for_path(&LocalOrRemotePath::Local(path.to_path_buf()))
+                .and_then(|r| PathBuf::try_from(r).ok());
+            explorer_root_within_repo(path, repo_root, pinned_root.as_deref())
         };
+
+        // Resolve a local path to its detected repository root, or keep the path as-is if no repo is found.
+        let root_for_path = |path: PathBuf| display_repo_root_for_path(&path).unwrap_or(path);
 
         let root_for_raw_path = |raw_path: &str| normalize_cwd(raw_path).map(root_for_path);
 
@@ -677,8 +693,7 @@ impl WorkingDirectoriesModel {
             .into_iter()
             .filter_map(|(view_id, path)| {
                 let path_buf = PathBuf::from(&path);
-                let resolved_path = self
-                    .get_repo_root_for_path(&path_buf, ctx)
+                let resolved_path = display_repo_root_for_path(&path_buf)
                     .or_else(|| path_buf.parent().map(|p| p.to_path_buf()))?;
 
                 if file_path_ancestors.insert(resolved_path.clone()) {
@@ -983,11 +998,31 @@ impl WorkingDirectoriesModel {
     }
 }
 
+/// Returns the repository-level explorer root for `path`: `pinned_root` when `path` is inside it
+/// and it is inside `repo_root`, otherwise `repo_root`.
+#[cfg(feature = "local_fs")]
+fn explorer_root_within_repo(
+    path: &Path,
+    repo_root: Option<PathBuf>,
+    pinned_root: Option<&Path>,
+) -> Option<PathBuf> {
+    match (repo_root, pinned_root) {
+        (Some(repo_root), Some(pinned_root))
+            if path.starts_with(pinned_root) && pinned_root.starts_with(&repo_root) =>
+        {
+            Some(pinned_root.to_path_buf())
+        }
+        (repo_root, _) => repo_root,
+    }
+}
+
 #[cfg(not(feature = "local_fs"))]
 impl WorkingDirectoriesModel {
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn pin_explorer_root(&mut self, _pane_group_id: EntityId, _directory: std::path::PathBuf) {}
 
     /// Get the unique directories for a specific pane group in most to least recently added order.
     pub fn most_recent_directories_for_pane_group(

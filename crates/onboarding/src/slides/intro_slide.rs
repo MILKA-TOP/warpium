@@ -1,9 +1,9 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{Component as _, Options as _, button};
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::shimmering_text::{
@@ -24,6 +24,7 @@ use warpui_core::{
 
 use super::OnboardingSlide;
 use crate::OnboardingEvent;
+use crate::branding;
 use crate::model::OnboardingStateModel;
 
 #[derive(Clone, Debug)]
@@ -153,8 +154,9 @@ impl IntroSlide {
     fn render_centered_content(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
 
+        let channel = ChannelState::channel();
         let logo_fill = internal_colors::fg_overlay_4(theme);
-        let logo = ConstrainedBox::new(Icon::WarpLogoLight.to_warpui_icon(logo_fill).finish())
+        let logo = ConstrainedBox::new(branding::logo_mark(channel, logo_fill).finish())
             .with_width(64.)
             .with_height(64.)
             .finish();
@@ -162,7 +164,7 @@ impl IntroSlide {
         let base_color: ColorU = internal_colors::fg_overlay_4(theme).into();
         let shimmer_color: ColorU = theme.foreground().into();
         let title = ShimmeringTextElement::new(
-            "Welcome to Warp",
+            branding::welcome_title(channel),
             appearance.ui_font_family(),
             32.,
             base_color,
@@ -174,7 +176,7 @@ impl IntroSlide {
 
         let subtitle_color = internal_colors::text_sub(theme, theme.background().into_solid());
         let subtitle = FormattedTextElement::from_str(
-            "A modern terminal with state of the art agents built in.",
+            branding::welcome_subtitle(channel),
             appearance.ui_font_family(),
             16.,
         )
