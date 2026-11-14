@@ -36,6 +36,14 @@ Warpium is Warp's `oss` channel with its own bundle name (`Warpium`) and bundle 
 
 User-visible names come from `Channel::app_display_name()` (`"Warpium"` on Oss).
 
+## Importing configuration from Warp
+
+Warpium imports and keeps syncing the official Warp app's configuration (settings, themes,
+workflows, keybindings, skills, …) one way, on launch and from the command palette. Fork-only code
+lives in `crates/warp_config_import` (protoc-free, unit-tested with
+`cargo test -p warp_config_import`) and `app/src/warpium/`. The category table and sync rules are
+in [docs/warpium/warp-config-import.md](docs/warpium/warp-config-import.md).
+
 ## Versioning
 
 A Warpium version is the upstream Warp release it is based on plus a fork counter as one

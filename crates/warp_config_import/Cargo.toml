@@ -1,0 +1,16 @@
+[package]
+name = "warp_config_import"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: one-way import and sync of user configuration from an official Warp install"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+toml_edit.workspace = true
