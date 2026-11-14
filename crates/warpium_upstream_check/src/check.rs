@@ -145,17 +145,65 @@ pub fn backoff_delay(consecutive_failures: u32, max: Duration) -> Duration {
 /// one is active, otherwise whatever remains of `interval` since the last successful check. With
 /// no remembered result for `base` (a first run, or a build with a new base), it is due at once.
 pub fn next_check_delay(state: &CheckState, base: &str, now: u64, interval: Duration) -> Duration {
-    let wait_until = state.retry_at.max(state.rate_limited_until);
+    scheduled_delay(
+        state.retry_at,
+        state.rate_limited_until,
+        state
+            .last_success
+            .filter(|_| state.cached_status(base).is_some()),
+        now,
+        interval,
+    )
+}
+
+/// Delay before a scheduled check: until `retry_at` or `rate_limited_until` while either is in the
+/// future, otherwise whatever remains of `interval` since `last_success` (at once without one).
+/// Shared by the Warpium GitHub checks.
+pub fn scheduled_delay(
+    retry_at: Option<u64>,
+    rate_limited_until: Option<u64>,
+    last_success: Option<u64>,
+    now: u64,
+    interval: Duration,
+) -> Duration {
+    let wait_until = retry_at.max(rate_limited_until);
     if let Some(until) = wait_until.filter(|&until| until > now) {
         return Duration::from_secs(until - now);
     }
-    match state.last_success {
-        Some(last_success) if state.cached_status(base).is_some() => {
+    match last_success {
+        Some(last_success) => {
             let due = last_success.saturating_add(interval.as_secs());
             Duration::from_secs(due.saturating_sub(now).min(interval.as_secs()))
         }
-        _ => Duration::ZERO,
+        None => Duration::ZERO,
     }
+}
+
+/// Until when a check started by `trigger` must not send requests, if it is held back now: a
+/// scheduled check waits out both back-off and a rate limit, a manual one only a rate limit.
+pub fn blocked_until(
+    trigger: Trigger,
+    retry_at: Option<u64>,
+    rate_limited_until: Option<u64>,
+    now: u64,
+) -> Option<u64> {
+    let until = match trigger {
+        Trigger::Scheduled => retry_at.max(rate_limited_until),
+        Trigger::Manual => rate_limited_until,
+    };
+    until.filter(|&until| until > now)
+}
+
+/// When to retry after the `consecutive_failures`-th failure in a row: after the back-off delay,
+/// and not before a rate limit GitHub reported ends.
+pub fn retry_after_failure(
+    consecutive_failures: u32,
+    rate_limited_until: Option<u64>,
+    now: u64,
+    max_backoff: Duration,
+) -> u64 {
+    let retry_at = now + backoff_delay(consecutive_failures, max_backoff).as_secs();
+    retry_at.max(rate_limited_until.unwrap_or_default())
 }
 
 /// Runs one check of upstream `master` against `base` and returns the updated state with the
@@ -172,11 +220,7 @@ where
     F: Fn(HttpRequest) -> Fut,
     Fut: Future<Output = Result<HttpResponse, String>>,
 {
-    let blocked_until = match trigger {
-        Trigger::Scheduled => state.retry_at.max(state.rate_limited_until),
-        Trigger::Manual => state.rate_limited_until,
-    };
-    if let Some(until) = blocked_until.filter(|&until| until > now) {
+    if let Some(until) = blocked_until(trigger, state.retry_at, state.rate_limited_until, now) {
         return (state, CheckOutcome::Deferred { until });
     }
 
@@ -190,13 +234,22 @@ where
         }
         Err(err) => {
             state.consecutive_failures = state.consecutive_failures.saturating_add(1);
-            let mut retry_at =
-                now + backoff_delay(state.consecutive_failures, max_backoff).as_secs();
-            if let CheckError::RateLimited { until } = err {
-                state.rate_limited_until = Some(until);
-                retry_at = retry_at.max(until);
+            let rate_limited_until = match err {
+                CheckError::RateLimited { until } => Some(until),
+                CheckError::Transport(_)
+                | CheckError::Http { .. }
+                | CheckError::BaseNotFound
+                | CheckError::Parse(_) => None,
+            };
+            if rate_limited_until.is_some() {
+                state.rate_limited_until = rate_limited_until;
             }
-            state.retry_at = Some(retry_at);
+            state.retry_at = Some(retry_after_failure(
+                state.consecutive_failures,
+                rate_limited_until,
+                now,
+                max_backoff,
+            ));
             CheckOutcome::Failed(err)
         }
     };

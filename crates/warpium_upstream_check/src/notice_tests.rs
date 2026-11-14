@@ -74,13 +74,16 @@ fn banner_heading_counts_commits() {
 fn banner_description_shows_the_latest_commit_date() {
     assert_eq!(
         banner_description(&status(2, "2026-11-14T07:36:23Z")),
-        "Latest: 2026-11-14"
+        "Latest: 2026-11-14. Source changes to merge; nothing to install."
     );
 }
 
 #[test]
-fn banner_description_is_empty_for_a_malformed_date() {
-    assert_eq!(banner_description(&status(2, "yesterday")), "");
+fn banner_description_omits_a_malformed_date() {
+    assert_eq!(
+        banner_description(&status(2, "yesterday")),
+        "Source changes to merge; nothing to install."
+    );
 }
 
 #[test]

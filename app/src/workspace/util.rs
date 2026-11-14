@@ -30,6 +30,7 @@ pub(super) struct WorkspaceMouseStates {
     pub(super) banner_button: MouseStateHandle,
     pub(super) banner_secondary_button: MouseStateHandle,
     pub(super) more_info_banner_button: MouseStateHandle,
+    pub(super) banner_extra_button: MouseStateHandle,
     pub(super) resource_center_icon: MouseStateHandle,
     pub(super) ai_tab_bar_button: MouseStateHandle,
     pub(super) agent_management_view_button: MouseStateHandle,

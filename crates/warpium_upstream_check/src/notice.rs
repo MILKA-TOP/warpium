@@ -32,8 +32,8 @@ pub fn banner_heading(status: &UpstreamStatus) -> String {
 /// The banner's secondary text, elided first when the window is narrow.
 pub fn banner_description(status: &UpstreamStatus) -> String {
     match date_part(&status.head_date) {
-        Some(date) => format!("Latest: {date}"),
-        None => String::new(),
+        Some(date) => format!("Latest: {date}. Source changes to merge; nothing to install."),
+        None => "Source changes to merge; nothing to install.".to_owned(),
     }
 }
 
@@ -62,7 +62,8 @@ fn commits_phrase(ahead_by: u32) -> String {
     }
 }
 
-fn wait_phrase(seconds: u64) -> String {
+/// How long to wait, rounded up to minutes or hours, for a message.
+pub fn wait_phrase(seconds: u64) -> String {
     let minutes = seconds.div_ceil(60).max(1);
     match minutes {
         1 => "1 minute".to_owned(),

@@ -15564,6 +15564,7 @@ dependencies = [
  "warp_terminal",
  "warp_util",
  "warp_web_event_bus",
+ "warpium_self_update",
  "warpium_upstream_check",
  "warpui",
  "warpui_core",
@@ -16343,6 +16344,24 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "warpium_self_update"
+version = "0.1.0"
+dependencies = [
+ "command",
+ "futures",
+ "hex",
+ "libc",
+ "log",
+ "plist",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.17",
+ "warpium_upstream_check",
 ]
 
 [[package]]

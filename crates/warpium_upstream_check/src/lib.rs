@@ -11,12 +11,13 @@ mod notice;
 
 pub use check::{
     CheckError, CheckOutcome, CheckState, Comparison, HttpRequest, HttpResponse, Trigger,
-    UpstreamHead, UpstreamStatus, backoff_delay, next_check_delay, run_check,
+    UpstreamHead, UpstreamStatus, backoff_delay, blocked_until, next_check_delay,
+    retry_after_failure, run_check, scheduled_delay,
 };
 pub use github::{
     FORK_REPO, FORK_URL, UPSTREAM_BRANCH, UPSTREAM_REPO, compare_web_url, parse_commit_sha,
-    resolve_base,
+    rate_limit_until, resolve_base,
 };
 pub use notice::{
-    banner_description, banner_heading, check_interval, manual_report, should_notify,
+    banner_description, banner_heading, check_interval, manual_report, should_notify, wait_phrase,
 };
