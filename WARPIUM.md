@@ -35,8 +35,9 @@ Warpium is Warp's `oss` channel with its own bundle name (`Warpium`) and bundle 
 - Linux and Windows packaging: inherited, not built or maintained for Warpium
 
 User-visible names come from `Channel::app_display_name()` (`"Warpium"` on Oss). The first-run
-onboarding slides take their OSS logo, title and subtitle from `crates/onboarding/src/branding.rs`.
-Text about Warp's own service (its Terms of Service, Warp's AI features) keeps the Warp name.
+onboarding slides take their OSS logo, welcome title and subtitle and "Customize your …" title from
+`crates/onboarding/src/branding.rs`. Other onboarding text still says Warp, including text that
+refers to Warp's own service (its Terms of Service, Warp's AI features).
 
 ## Importing configuration from Warp
 
