@@ -292,7 +292,8 @@ def create_server(s: Services) -> FastMCP:
         "artifact" runs the app installed by install_artifact. env accepts only RUST_LOG,
         RUST_BACKTRACE, RUST_LIB_BACKTRACE and the Warpium test overrides
         WARPIUM_UPSTREAM_BASE_OVERRIDE (40-hex commit sha),
-        WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE (e.g. v0.2026.06.03.09.49.stable_00.1) and
+        WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE (e.g. v0.2026.06.03.09.49.stable_00.1; only
+        builds that include the self-updater read it) and
         WARPIUM_IMPORT_DRY_RUN ('0' or '1'); other values are refused. args accepts only
         --flag[=value]. The server always sets WARP_DATA_PROFILE=mcp-test; debug builds honor
         it (own settings, keychain items and data). Release builds and artifacts ignore it and
@@ -312,10 +313,12 @@ def create_server(s: Services) -> FastMCP:
         async def app_reset_data(confirm: bool = False) -> dict:
             """VM mode only. Quit the Warpium under test and delete Warpium's user data in the
             guest so first-run onboarding can be tested again: ~/.warp-oss(-mcp-test),
-            ~/Library/Application Support/dev.milka.Warpium(-mcp-test), its Preferences plist
-            (plus `defaults delete`), ~/Library/Logs/warp-oss.log(.old*) and the
-            dev.milka.Warpium(-mcp-test) keychain items. Requires confirm=true. Refused while
-            another Warpium process is running."""
+            ~/Library/Application Support/dev.milka.Warpium(-mcp-test) (also inside the
+            2BBY89MBSN.dev.warp group container, if present), its Preferences plist (plus
+            `defaults delete`), ~/Library/Logs/warp-oss.log and its rotated/in-session files, and
+            the dev.milka.Warpium(-mcp-test) keychain items. Requires confirm=true. Refused,
+            without quitting anything, while another Warpium process is running. Check `ok`:
+            false means the data is only partly deleted (see `errors`)."""
             return await _thread(s.app.reset_data, confirm)
 
     @mcp.tool()

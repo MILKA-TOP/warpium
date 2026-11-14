@@ -17,10 +17,11 @@ from warpium_mac_mcp.workspace import Workspace, WorkspaceError
 class FakeRun:
     """Records `defaults`/`security` calls; each keychain service holds `items[svc]` items."""
 
-    def __init__(self, items=None, defaults_rc=0):
+    def __init__(self, items=None, defaults_rc=0, defaults_err=""):
         self.calls = []
         self.items = dict(items or {})
         self.defaults_rc = defaults_rc
+        self.defaults_err = defaults_err
 
     def __call__(self, argv, **kwargs):
         assert isinstance(argv, list) and "shell" not in kwargs
@@ -32,7 +33,7 @@ class FakeRun:
                 self.items[svc] -= 1
                 return subprocess.CompletedProcess(argv, 0, "", "")
             return subprocess.CompletedProcess(argv, 44, "", "not found")
-        return subprocess.CompletedProcess(argv, self.defaults_rc, "", "")
+        return subprocess.CompletedProcess(argv, self.defaults_rc, "", self.defaults_err)
 
 
 def _manager(tmp_path, vm=True, procs=None, run=None):
@@ -62,11 +63,19 @@ def _populate(home: Path) -> dict[str, Path]:
         "plist": lib / "Preferences" / "dev.milka.Warpium.plist",
         "log": lib / "Logs" / "warp-oss.log",
         "log_old": lib / "Logs" / "warp-oss.log.old.0",
+        "log_chunk": lib / "Logs" / "warp-oss.log.in_session.0",
+        "log_old_chunk": lib / "Logs" / "warp-oss.log.old.1.in_session.2",
+        "group": lib
+        / "Group Containers"
+        / "2BBY89MBSN.dev.warp"
+        / "Library"
+        / "Application Support"
+        / "dev.milka.Warpium",
     }
-    for key in ("config", "config_profile", "support", "support_profile"):
+    for key in ("config", "config_profile", "support", "support_profile", "group"):
         (p[key] / "sub").mkdir(parents=True)
         (p[key] / "sub" / "f").write_text("x")
-    for key in ("plist", "log", "log_old"):
+    for key in ("plist", "log", "log_old", "log_chunk", "log_old_chunk"):
         p[key].parent.mkdir(parents=True, exist_ok=True)
         p[key].write_text("x")
     return p
@@ -81,6 +90,14 @@ def _keep(home: Path) -> list[Path]:
         lib / "Preferences" / "dev.warp.Warp-Stable.plist",
         lib / "Preferences" / "dev.milka.Warpium.other.plist",
         lib / "Logs" / "warp.log",
+        lib / "Logs" / "warp-oss-other.log",
+        lib
+        / "Group Containers"
+        / "2BBY89MBSN.dev.warp"
+        / "Library"
+        / "Application Support"
+        / "dev.warp.Warp-Stable"
+        / "warp.sqlite",
         home / ".config" / "warpium-mac-mcp" / "token",
     ]
     for k in keep:
@@ -120,15 +137,14 @@ def test_deletes_warpium_data_only(tmp_path):
     assert all(k.exists() for k in keep)
     assert set(out["removed"]) == {str(path) for path in p.values()}
     assert out["errors"] == {}
+    assert out["ok"] is True
     assert out["defaults_delete"] == {
         "dev.milka.Warpium": "deleted",
         "dev.milka.Warpium-mcp-test": "deleted",
     }
     assert out["keychain_items_deleted"] == {
         "dev.milka.Warpium": 3,
-        "dev.milka.Warpium.tui": 0,
         "dev.milka.Warpium-mcp-test": 1,
-        "dev.milka.Warpium-mcp-test.tui": 0,
     }
     assert ["defaults", "delete", "dev.milka.Warpium"] in run.calls
     assert ["security", "delete-generic-password", "-s", "dev.milka.Warpium"] in run.calls
@@ -162,6 +178,48 @@ def test_refuses_while_other_warpium_runs(tmp_path):
     assert run.calls == []
 
 
+def test_refusal_leaves_app_under_test_running(tmp_path):
+    from warpium_mac_mcp.app import Launched
+
+    am, _ = _manager(tmp_path, procs=[(4242, "/Applications/Warpium.app/Contents/MacOS/warp-oss")])
+    proc = subprocess.Popen(["sleep", "60"])
+    try:
+        am._launched = Launched(proc, "build", Path("/x"), 0.0, tmp_path / "o.log", {}, [])
+        with pytest.raises(WorkspaceError, match="4242"):
+            am.reset_data(confirm=True)
+        assert proc.poll() is None
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_defaults_absent_vs_error(tmp_path):
+    missing = "Domain (dev.milka.Warpium) not found.\nDefaults have not been changed."
+    am, _ = _manager(tmp_path, run=FakeRun(defaults_rc=1, defaults_err=missing))
+    out = am.reset_data(confirm=True)
+    assert out["defaults_delete"]["dev.milka.Warpium"] == "absent"
+    assert out["ok"] is True
+
+    failed = "Could not write domain dev.milka.Warpium; exiting"
+    am, _ = _manager(tmp_path, run=FakeRun(defaults_rc=1, defaults_err=failed))
+    out = am.reset_data(confirm=True)
+    assert out["defaults_delete"]["dev.milka.Warpium"].startswith("error (exit 1)")
+    assert out["ok"] is False
+    assert "defaults delete dev.milka.Warpium" in out["errors"]
+
+
+def test_keychain_error_is_reported(tmp_path):
+    def run(argv, **kwargs):
+        if argv[0] == "security":
+            return subprocess.CompletedProcess(argv, 51, "", "user interaction is not allowed")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    am, _ = _manager(tmp_path, run=run)
+    out = am.reset_data(confirm=True)
+    assert "exit 51" in out["keychain_items_deleted"]["dev.milka.Warpium"]
+    assert out["ok"] is False
+
+
 def test_quits_app_under_test_first(tmp_path):
     am, home = _manager(tmp_path)
     proc = subprocess.Popen(["sleep", "60"])
@@ -191,9 +249,10 @@ def test_keychain_timeout_is_reported(tmp_path):
     def run(argv, **kwargs):
         if argv[0] == "security":
             raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
-        return subprocess.CompletedProcess(argv, 1, "", "")
+        return subprocess.CompletedProcess(argv, 1, "", "Domain x does not exist")
 
     am, _ = _manager(tmp_path, run=run)
     out = am.reset_data(confirm=True)
     assert out["defaults_delete"]["dev.milka.Warpium"] == "absent"
     assert out["keychain_items_deleted"]["dev.milka.Warpium"].startswith("error after 0")
+    assert out["ok"] is False

@@ -29,9 +29,14 @@ LOG_CREATE_WINDOW_S = 120
 MAX_KEYCHAIN_ITEMS = 64
 # Bounds each `defaults`/`security` call, e.g. if a keychain dialog appears.
 RESET_CMD_TIMEOUT_S = 15
-# Suffix of the TUI front-end's keychain service (TUI_SECURE_STORAGE_SERVICE_SUFFIX
-# in app/src/lib.rs).
-TUI_KEYCHAIN_SUFFIX = ".tui"
+# `security` exit status for "The specified item could not be found in the keychain."
+KEYCHAIN_NOT_FOUND_RC = 44
+# App group of signed builds (`app_group_container_path` in crates/warp_core/src/paths.rs,
+# APPLE_TEAM_ID in crates/warp_core/src/macos.rs). Self-signed Warpium can't use it, but
+# when it can, `secure_state_dir()` (warp.sqlite) lives in
+# ~/Library/Group Containers/<group>/Library/Application Support/<domain>. The container
+# is shared with Warp, so only the Warpium subfolders are removed.
+APP_GROUP_ID = "2BBY89MBSN.dev.warp"
 
 
 @dataclass
@@ -258,14 +263,18 @@ class AppManager:
             home / OSS_CONFIG_DIR_NAME,
             home / f"{OSS_CONFIG_DIR_NAME}-{self.cfg.data_profile}",
         ]
+        group_support = lib / "Group Containers" / APP_GROUP_ID / "Library" / "Application Support"
         for domain in self.data_domains():
             paths.append(lib / "Application Support" / domain)
+            paths.append(group_support / domain)
             paths.append(lib / "Preferences" / f"{domain}.plist")
         for log_file in self.cfg.log_files:
             paths.append(log_file)
-            # Rotated logs: warp-oss.log.old.N (crates/warp_logging/src/native.rs).
+            # Rotated logs and in-session chunks: warp-oss.log.old.N,
+            # warp-oss.log.in_session.M, warp-oss.log.old.N.in_session.M
+            # (crates/warp_logging/src/native.rs).
             if log_file.parent.is_dir():
-                paths.extend(sorted(log_file.parent.glob(f"{log_file.name}.old*")))
+                paths.extend(sorted(log_file.parent.glob(f"{log_file.name}.*")))
         return paths
 
     def reset_data(self, confirm: bool = False) -> dict:
@@ -279,6 +288,12 @@ class AppManager:
             )
         if confirm is not True:
             raise ValidationError("app_reset_data deletes all Warpium user data; pass confirm=true")
+        # Check before quitting, so a refused reset leaves the test app running.
+        other = self.other_warpium_pids()
+        if other:
+            raise WorkspaceError(
+                f"other Warpium processes are running (pids {sorted(other)}); quit them first"
+            )
         quit_result = self.quit()
         with self._lock:  # app_launch takes the lock too, so nothing starts mid-reset
             still = self.target_pids() | self.other_warpium_pids()
@@ -295,11 +310,16 @@ class AppManager:
                         removed.append(str(path))
                 except OSError as e:
                     errors[str(path)] = str(e)
-            keychain: dict[str, int | str] = {}
-            for domain in self.data_domains():
-                for service in (domain, domain + TUI_KEYCHAIN_SUFFIX):
-                    keychain[service] = self._delete_keychain_items(service)
+            keychain = {d: self._delete_keychain_items(d) for d in self.data_domains()}
+        for domain, result in defaults.items():
+            if result.startswith("error"):
+                errors[f"defaults delete {domain}"] = result
+        for service, result in keychain.items():
+            if isinstance(result, str):
+                errors[f"keychain {service}"] = result
         return {
+            # False means the data is only partly gone; see errors before relaunching.
+            "ok": not errors,
             "quit": quit_result,
             "defaults_delete": defaults,
             "removed": removed,
@@ -318,12 +338,18 @@ class AppManager:
 
     def _defaults_delete(self, domain: str) -> str:
         # Deleting the plist alone is not enough: cfprefsd caches the domain and
-        # can write it back. Exit status 1 means the domain doesn't exist.
+        # can write it back.
         try:
             r = self._reset_cmd(["defaults", "delete", domain])
         except (OSError, subprocess.TimeoutExpired) as e:
             return f"error: {e}"
-        return "deleted" if r.returncode == 0 else "absent"
+        if r.returncode == 0:
+            return "deleted"
+        msg = (r.stderr or r.stdout or "").strip()
+        # A missing domain: "Domain (<d>) not found.\nDefaults have not been changed."
+        if r.returncode == 1 and ("not found" in msg or "does not exist" in msg):
+            return "absent"
+        return f"error (exit {r.returncode}): {msg[:300]}"
 
     def _delete_keychain_items(self, service: str) -> int | str:
         count = 0
@@ -332,8 +358,11 @@ class AppManager:
                 r = self._reset_cmd(["security", "delete-generic-password", "-s", service])
             except (OSError, subprocess.TimeoutExpired) as e:
                 return f"error after {count} deleted: {e}"
-            if r.returncode != 0:  # 44: no (more) items for this service
+            if r.returncode == KEYCHAIN_NOT_FOUND_RC:  # no (more) items for this service
                 return count
+            if r.returncode != 0:
+                msg = (r.stderr or r.stdout or "").strip()[:300]
+                return f"error after {count} deleted (exit {r.returncode}): {msg}"
             count += 1
         return f"stopped after {count} deleted (limit {MAX_KEYCHAIN_ITEMS})"
 

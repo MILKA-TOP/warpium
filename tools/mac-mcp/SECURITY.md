@@ -199,12 +199,16 @@ nothing of yours on it, so inside it, and only there, the server can lift the re
   data in the guest so first-run onboarding can be tested again: `~/.warp-oss`,
   `~/Library/Application Support/dev.milka.Warpium`, `~/Library/Preferences/dev.milka.Warpium.plist`
   (after `defaults delete dev.milka.Warpium`, since cfprefsd caches the domain),
-  `~/Library/Logs/warp-oss.log` and its rotated `.old*` files, each also in the `-mcp-test`
-  variant that debug builds use, and the login-keychain items of the services
-  `dev.milka.Warpium`, `dev.milka.Warpium-mcp-test` and their `.tui` variants
-  (`security delete-generic-password -s`, at most 64 per service, each call with a timeout).
-  The paths and service names are fixed in the server; the only argument is `confirm`, which
-  must be `true`. It is refused while any other Warpium/WarpOss process runs, a symlink at one
+  `~/Library/Logs/warp-oss.log` and its `warp-oss.log.*` rotated/in-session files, the
+  `dev.milka.Warpium` folder inside the signed-build group container
+  (`~/Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support/`, shared with
+  Warp, whose folders are left alone), each also in the `-mcp-test` variant that debug builds
+  use, and the login-keychain items of the services `dev.milka.Warpium` and
+  `dev.milka.Warpium-mcp-test` (`security delete-generic-password -s`, at most 64 per
+  service, each call with a timeout). The paths and service names are fixed in the server; the
+  only argument is `confirm`, which must be `true`. It is refused, before anything is quit,
+  while any other Warpium/WarpOss process runs. The result's `ok` is false when any step
+  failed (listed in `errors`). A symlink at one
   of the paths is removed without being followed, and nothing outside this list (Warp's own
   data, the server's token and audit log, the workspace) is touched. Without `--vm-mode` the
   tool does not exist, and the method refuses on its own too, because on a real Mac it would

@@ -414,7 +414,7 @@ have, so use `install_artifact(run_id)` and `app_launch(source="artifact")` inst
 | `run_integration_test(name, real_display)` | `cargo run -p integration --bin integration -- <name>` (job). |
 | `app_launch(source, env, args, profile)` | Runs the dev binary (`build`) or the installed artifact (`artifact`). env accepts `RUST_LOG`/`RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` and the Warpium test overrides below, nothing else. Always sets `WARP_DATA_PROFILE=mcp-test`. |
 | `app_quit`, `app_status` | Stops the app under test, or reports its pid, windows, frontmost state and warpctrl instance. |
-| `app_reset_data(confirm=true)` | **VM mode only.** Quits the app under test and deletes Warpium's user data in the guest so first-run onboarding can be tested again without `vm/reset.sh`: `~/.warp-oss`, `~/Library/Application Support/dev.milka.Warpium`, `~/Library/Preferences/dev.milka.Warpium.plist` (plus `defaults delete`), `~/Library/Logs/warp-oss.log` (and rotated `.old*`), and the `dev.milka.Warpium` keychain items; each also with the `-mcp-test` suffix that debug builds use. Refused while another Warpium runs. |
+| `app_reset_data(confirm=true)` | **VM mode only.** Quits the app under test and deletes Warpium's user data in the guest so first-run onboarding can be tested again without `vm/reset.sh`: `~/.warp-oss`, `~/Library/Application Support/dev.milka.Warpium`, `~/Library/Preferences/dev.milka.Warpium.plist` (plus `defaults delete`), `~/Library/Logs/warp-oss.log` (and its rotated and in-session files), the Warpium folder in the signed-build group container if present, and the `dev.milka.Warpium` keychain items; each also with the `-mcp-test` suffix that debug builds use. Refused while another Warpium runs. `ok: false` means only part of the data was deleted (see `errors`). |
 | `app_logs(tail, grep, since, source)` | `~/Library/Logs/warp-oss.log`, or the launched app's stdout/stderr. |
 | `list_windows` | Warpium windows with ids and bounds. |
 | `screenshot(window, max_width)` | PNG of one Warpium window (max 1600 px wide by default) plus bounds and scale. |
@@ -440,7 +440,7 @@ Warpium test overrides accepted by `app_launch(env=...)`; any other value is ref
 | Variable | Accepted value | Used by |
 |---|---|---|
 | `WARPIUM_UPSTREAM_BASE_OVERRIDE` | full 40-hex commit sha | upstream-commits notifier: compare against an older upstream commit |
-| `WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE` | Warpium version tag, e.g. `v0.2026.06.03.09.49.stable_00.1` | self-updater: pretend an older version is installed |
+| `WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE` | Warpium version tag, e.g. `v0.2026.06.03.09.49.stable_00.1` | self-updater (builds that include it): pretend an older version is installed |
 | `WARPIUM_IMPORT_DRY_RUN` | `0` or `1` | Warp config import: `1` logs what would change without writing |
 
 Example: `app_launch(source="artifact", env={"WARPIUM_IMPORT_DRY_RUN": "1", "RUST_LOG": "info"})`.
