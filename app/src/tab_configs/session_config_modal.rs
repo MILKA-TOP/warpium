@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use pathfinder_geometry::vector::vec2f;
+use warp_core::channel::ChannelState;
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex,
     FormattedTextElement, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
@@ -86,13 +87,16 @@ impl SessionConfigModal {
         });
 
         let submit_button = ctx.add_view(|ctx| {
-            ActionButton::new("Get Warping", PrimaryTheme)
-                .with_full_width(true)
-                .with_keybinding(
-                    KeystrokeSource::Fixed(Keystroke::parse("enter").unwrap_or_default()),
-                    ctx,
-                )
-                .on_click(|ctx| ctx.dispatch_typed_action(SessionConfigModalAction::Submit))
+            ActionButton::new(
+                onboarding::get_started_label(ChannelState::channel()),
+                PrimaryTheme,
+            )
+            .with_full_width(true)
+            .with_keybinding(
+                KeystrokeSource::Fixed(Keystroke::parse("enter").unwrap_or_default()),
+                ctx,
+            )
+            .on_click(|ctx| ctx.dispatch_typed_action(SessionConfigModalAction::Submit))
         });
 
         let pill_mouse_states = session_types

@@ -76,8 +76,7 @@ impl IntentionSlide {
         let theme = appearance.theme();
 
         let channel = ChannelState::channel();
-        let logo_fill = internal_colors::fg_overlay_4(theme);
-        let logo = ConstrainedBox::new(branding::logo_mark(channel, logo_fill).finish())
+        let logo = ConstrainedBox::new(branding::logo_mark(channel, appearance))
             .with_width(64.)
             .with_height(64.)
             .finish();

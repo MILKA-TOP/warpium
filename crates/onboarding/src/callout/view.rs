@@ -1,4 +1,5 @@
 use ui_components::Component;
+use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
 use warpui_core::elements::Empty;
 use warpui_core::keymap::macros::*;
@@ -22,6 +23,7 @@ pub struct OnboardingKeybindings {
 }
 
 use crate::OnboardingIntention;
+use crate::branding;
 use crate::callout::model::{
     AgentModalityCalloutState, FinalState, OnboardingCalloutModel, OnboardingCalloutModelEvent,
     OnboardingCalloutState, OnboardingQuery, UniversalInputCalloutState,
@@ -59,7 +61,7 @@ fn get_universal_input_callout_options(
 ) -> Option<CalloutOptions> {
     match state {
         UniversalInputCalloutState::MeetInput => Some(CalloutOptions {
-            title: "Meet the Warp input",
+            title: branding::input_callout_title(ChannelState::channel()),
             text: format!(
                 "Your terminal input accepts both terminal commands and agent prompts and automatically detects which you're using. Use {} to lock the input to Agent mode (natural language) or Terminal mode (commands).",
                 keybindings.toggle_input_mode
@@ -119,7 +121,8 @@ fn get_agent_modality_callout_options(
                 Some(CalloutOptions {
                     title: "Welcome to terminal mode",
                     text: format!(
-                        "Run commands here, just like a regular terminal. If you type a question or task using natural language, Warp can suggest opening it in agent mode. You can always override using {}.",
+                        "Run commands here, just like a regular terminal. If you type a question or task using natural language, {} can suggest opening it in agent mode. You can always override using {}.",
+                        ChannelState::channel().app_display_name(),
                         keybindings.toggle_input_mode
                     ),
                     step: StepStatus::new(0, total_steps),
@@ -136,7 +139,8 @@ fn get_agent_modality_callout_options(
                 Some(CalloutOptions {
                     title: "You’re in terminal mode",
                     text: format!(
-                        "Run commands here, just like a regular terminal. If you type a question or task using natural language, Warp can suggest opening it in agent mode. You can always override using {}.",
+                        "Run commands here, just like a regular terminal. If you type a question or task using natural language, {} can suggest opening it in agent mode. You can always override using {}.",
+                        ChannelState::channel().app_display_name(),
                         keybindings.toggle_input_mode
                     ),
                     step: StepStatus::new(0, total_steps),

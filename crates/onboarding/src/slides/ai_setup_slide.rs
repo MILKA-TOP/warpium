@@ -100,12 +100,10 @@ impl AiSetupSlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
 
-        let logo_fill = internal_colors::fg_overlay_4(theme);
-        let logo =
-            ConstrainedBox::new(branding::logo_mark(ChannelState::channel(), logo_fill).finish())
-                .with_width(64.)
-                .with_height(64.)
-                .finish();
+        let logo = ConstrainedBox::new(branding::logo_mark(ChannelState::channel(), appearance))
+            .with_width(64.)
+            .with_height(64.)
+            .finish();
 
         let title = appearance
             .ui_builder()

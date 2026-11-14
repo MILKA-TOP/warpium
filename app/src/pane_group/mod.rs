@@ -3108,9 +3108,10 @@ impl PaneGroup {
         let user_default_shell_changed_banner = ctx.add_typed_action_view(|_| {
             Banner::<PaneGroupAction>::new_permanently_dismissible(
                 BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::plain_text(
-                        "Warp doesn't currently support your default shell, falling back to zsh.  ",
-                    ),
+                    FormattedTextFragment::plain_text(format!(
+                        "{} doesn't currently support your default shell, falling back to zsh.  ",
+                        ChannelState::channel().app_display_name()
+                    )),
                     FormattedTextFragment::hyperlink("Learn more", WARP_SHELL_COMPATIBILITY_DOCS),
                 ]),
             )

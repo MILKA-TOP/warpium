@@ -4162,6 +4162,14 @@ impl Workspace {
 
                         let pane_group = self.tabs[tab_index].pane_group.clone();
 
+                        if let Some(pinned_root) = &saved_tab.pinned_explorer_root {
+                            pane_group.update(ctx, |pane_group, _| {
+                                pane_group.set_pinned_explorer_root(pinned_root.clone())
+                            });
+                            // Adding the tab may already have computed its roots without the pin.
+                            self.refresh_working_directories_for_pane_group(&pane_group, ctx);
+                        }
+
                         if let Some(left_panel_snapshot) = &saved_tab.left_panel {
                             self.restore_left_panel_for_tab(&pane_group, left_panel_snapshot, ctx);
                         }
@@ -11971,6 +11979,7 @@ impl Workspace {
                     // enabled.
                     pinned: FeatureFlag::PinnedTabs.is_enabled()
                         && self.tabs.get(tab_index).is_some_and(|tab| tab.pinned),
+                    pinned_explorer_root: pane_group.pinned_explorer_root().cloned(),
                 }
             })
             .filter(|tab| {
@@ -14682,10 +14691,10 @@ impl Workspace {
                         // Show a helpful toast if the user denied permissions.
                         let url = NOTIFICATIONS_TROUBLESHOOT_URL.to_string();
                         view.toast_stack.update(ctx, |toast_stack, ctx| {
-                            let toast = DismissibleToast::error(
-                                "Warp doesn't have permission to send desktop notifications."
-                                    .to_string(),
-                            )
+                            let toast = DismissibleToast::error(format!(
+                                "{} doesn't have permission to send desktop notifications.",
+                                ChannelState::channel().app_display_name()
+                            ))
                             .with_link(
                                 ToastLink::new("Troubleshoot notifications".to_string())
                                     .with_href(url),

@@ -35,9 +35,14 @@ Warpium is Warp's `oss` channel with its own bundle name (`Warpium`) and bundle 
 - Linux and Windows packaging: inherited, not built or maintained for Warpium
 
 User-visible names come from `Channel::app_display_name()` (`"Warpium"` on Oss). The first-run
-onboarding slides take their OSS logo, welcome title and subtitle and "Customize your …" title from
-`crates/onboarding/src/branding.rs`. Other onboarding text still says Warp, including text that
-refers to Warp's own service (its Terms of Service, Warp's AI features).
+onboarding slides take their OSS logo (the full-colour mark), welcome title and subtitle,
+"Customize your …" title, "Get started" button and input callout title from
+`crates/onboarding/src/branding.rs`. Text that refers to Warp's own service keeps the Warp name: its
+account, Terms of Service, AI features and plans, Warp Agent, Warp Drive and the Warp plugins for
+CLI agents.
+
+Monochrome SVGs drawn with the `Icon` element (such as `warpium-mark-neutral.svg`) must be white:
+`Icon` tints by the image's red channel, so black shapes render as nothing.
 
 ## Importing configuration from Warp
 
@@ -67,7 +72,8 @@ unit-tested with `cargo test -p warpium_upstream_check`) and `app/src/warpium/up
   doubling up to the interval; GitHub's rate-limit headers are honored. State, including the
   last result (so the banner survives a relaunch) and the dismissed head, is kept in private
   preferences under `WarpiumUpstreamCheckState`.
-- **Notification.** A workspace banner, "Upstream Warp has N new commits since this build", with
+- **Notification.** A workspace banner, "N new upstream Warp commits", followed by the latest
+  upstream commit date, with
   **View changes** (the GitHub compare page from the base), **Sync fork** (opens the fork's GitHub
   page, which has GitHub's **Sync fork** button) and a close button that hides it until upstream
   moves again. It appears once upstream is `warpium.upstream_check_min_commits` (default 1)

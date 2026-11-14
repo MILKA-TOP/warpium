@@ -84,6 +84,9 @@ pub struct TabSnapshot {
     pub group_id: Option<TabGroupId>,
     /// True when this tab is pinned to the front of the tab list.
     pub pinned: bool,
+    /// Directory shown as this tab's Project Explorer root instead of the enclosing repository
+    /// root (see `PaneGroup::pinned_explorer_root`).
+    pub pinned_explorer_root: Option<PathBuf>,
 }
 
 impl TabSnapshot {

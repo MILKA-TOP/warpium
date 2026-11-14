@@ -215,6 +215,8 @@ COLOR_ON_DARK = MarkStyle(
 WHITE = MarkStyle("#FFFFFF", "#FFFFFF", "#FFFFFF", overlap_opacity=0.72)
 WHITE_SMALL = MarkStyle("#FFFFFF", "#FFFFFF", "#FFFFFF", overlap_opacity=0.86)
 BLACK = MarkStyle("#000000", "#000000", "#000000", overlap_opacity=0.45)
+# In-app monochrome mark for `Icon`, which tints by the red channel, so the shapes must be white.
+MASK = MarkStyle("#FFFFFF", "#FFFFFF", "#FFFFFF", overlap_opacity=0.45)
 GRAPHITE = MarkStyle(
     upper=Gradient([(0, "#1B1D22"), (1, "#15171B")], (SHEAR, 0), (SHAPE_W, SHAPE_H)),
     lower=Gradient(
@@ -588,7 +590,7 @@ def main() -> None:
 
     write(APP_SVG / "warpium-mark.svg", mark_only(COLOR, "warpium-mark"))
     write(APP_SVG / "warpium-mark-on-dark.svg", mark_only(COLOR_ON_DARK, "warpium-mark"))
-    write(APP_SVG / "warpium-mark-neutral.svg", mark_only(BLACK, "warpium-mark"))
+    write(APP_SVG / "warpium-mark-neutral.svg", mark_only(MASK, "warpium-mark"))
     write(APP_SVG / "warpium-logo-with-dark-title.svg", logo_svg(text, on_dark=False))
     write(APP_SVG / "warpium-logo-with-light-title.svg", logo_svg(text, on_dark=True))
     for name, content in icon_composer_layers().items():

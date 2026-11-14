@@ -1,5 +1,6 @@
 use pathfinder_color::ColorU;
 use ui_components::{Component as _, Options as _, button};
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
@@ -21,6 +22,7 @@ use warpui_core::{
 
 use super::OnboardingSlide;
 use crate::OnboardingIntention;
+use crate::branding;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::telemetry::OnboardingEvent;
@@ -271,7 +273,11 @@ impl ThemePickerSlide {
         );
 
         let account_first = FeatureFlag::AccountFirstOnboarding.is_enabled();
-        let next_label = if account_first { "Next" } else { "Get Warping" };
+        let next_label = if account_first {
+            "Next"
+        } else {
+            branding::get_started_label(ChannelState::channel())
+        };
 
         let enter = Keystroke::parse("enter").unwrap_or_default();
         let next_button = self.next_button.render(

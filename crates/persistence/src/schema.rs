@@ -374,6 +374,7 @@ diesel::table! {
         color -> Nullable<Text>,
         tab_group_id -> Nullable<Integer>,
         pinned -> Bool,
+        pinned_explorer_root -> Nullable<Binary>,
     }
 }
 

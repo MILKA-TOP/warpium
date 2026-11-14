@@ -359,6 +359,8 @@ pub struct Tab {
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
     pub pinned: bool,
+    /// Platform-encoded path of the tab's pinned Project Explorer root.
+    pub pinned_explorer_root: Option<Vec<u8>>,
 }
 
 #[derive(Insertable)]
@@ -369,6 +371,7 @@ pub struct NewTab {
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
     pub pinned: bool,
+    pub pinned_explorer_root: Option<Vec<u8>>,
 }
 
 /// Persisted form of a tab group. `name` is optional — untitled groups omit

@@ -60,13 +60,10 @@ fn check_interval_is_clamped() {
 
 #[test]
 fn banner_heading_counts_commits() {
-    assert_eq!(
-        banner_heading(&status(1, "")),
-        "Upstream Warp has 1 new commit since this build."
-    );
+    assert_eq!(banner_heading(&status(1, "")), "1 new upstream Warp commit");
     assert_eq!(
         banner_heading(&status(29, "")),
-        "Upstream Warp has 29 new commits since this build."
+        "29 new upstream Warp commits"
     );
 }
 
@@ -74,16 +71,13 @@ fn banner_heading_counts_commits() {
 fn banner_description_shows_the_latest_commit_date() {
     assert_eq!(
         banner_description(&status(2, "2026-11-14T07:36:23Z")),
-        "Latest upstream commit: 2026-11-14. Merge them into the fork."
+        "Latest: 2026-11-14"
     );
 }
 
 #[test]
-fn banner_description_omits_a_malformed_date() {
-    assert_eq!(
-        banner_description(&status(2, "yesterday")),
-        "Merge them into the fork."
-    );
+fn banner_description_is_empty_for_a_malformed_date() {
+    assert_eq!(banner_description(&status(2, "yesterday")), "");
 }
 
 #[test]
