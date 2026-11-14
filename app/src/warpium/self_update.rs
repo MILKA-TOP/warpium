@@ -310,9 +310,12 @@ impl SelfUpdater {
         if !is_supported_platform() {
             return None;
         }
-        let in_progress = |heading: String| UpdateBanner {
+        let in_progress = |heading: String, release: &Release| UpdateBanner {
             heading,
-            description: "Keep working; you choose when to restart.".to_owned(),
+            description: warpium_self_update::in_progress_description(
+                self.current.as_ref(),
+                release,
+            ),
             kind: UpdateBannerKind::InProgress,
         };
         match &self.stage {
@@ -320,8 +323,8 @@ impl SelfUpdater {
                 let current = self.current.as_ref()?;
                 let release = self.offered(ctx)?;
                 Some(UpdateBanner {
-                    heading: warpium_self_update::banner_heading(current, release),
-                    description: warpium_self_update::banner_description().to_owned(),
+                    heading: warpium_self_update::OFFER_HEADING.to_owned(),
+                    description: warpium_self_update::offer_description(current, release),
                     kind: UpdateBannerKind::Available,
                 })
             }
@@ -330,10 +333,11 @@ impl SelfUpdater {
                 message,
                 dmg,
             } => Some(UpdateBanner {
-                heading: format!("Couldn't update to Warpium {}.", release.tag),
+                heading: warpium_self_update::FAILED_HEADING.to_owned(),
                 description: format!(
-                    "{}. Your current version is unchanged.",
-                    capitalize(message)
+                    "{}. Warpium {} wasn't installed; your current version is unchanged.",
+                    capitalize(message),
+                    warpium_self_update::release_name(self.current.as_ref(), release)
                 ),
                 kind: UpdateBannerKind::Failed {
                     can_reveal_dmg: dmg.is_some(),
@@ -344,18 +348,17 @@ impl SelfUpdater {
             {
                 None
             }
-            Stage::Downloading { release, percent } => Some(in_progress(match percent {
-                Some(percent) => format!("Downloading Warpium {}… {percent}%", release.tag),
-                None => format!("Downloading Warpium {}…", release.tag),
-            })),
-            Stage::Preparing { release } => {
-                Some(in_progress(format!("Preparing Warpium {}…", release.tag)))
-            }
+            Stage::Downloading { release, percent } => Some(in_progress(
+                warpium_self_update::downloading_heading(*percent),
+                release,
+            )),
+            Stage::Preparing { release } => Some(in_progress(
+                warpium_self_update::PREPARING_HEADING.to_owned(),
+                release,
+            )),
             Stage::Ready { release, .. } => Some(UpdateBanner {
-                heading: format!("Warpium {} is ready.", release.tag),
-                description:
-                    "Restart now to switch to it, or it's installed when you quit Warpium."
-                        .to_owned(),
+                heading: warpium_self_update::READY_HEADING.to_owned(),
+                description: warpium_self_update::ready_description(self.current.as_ref(), release),
                 kind: UpdateBannerKind::Ready,
             }),
         }

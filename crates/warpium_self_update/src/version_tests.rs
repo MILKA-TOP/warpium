@@ -25,6 +25,18 @@ fn derives_the_plist_version() {
 }
 
 #[test]
+fn short_name_is_the_upstream_date_time_and_fork_counter() {
+    assert_eq!(
+        v("v0.2026.06.03.09.49.stable_00.1").short_name(),
+        "2026.06.03.0949.1"
+    );
+    assert_eq!(
+        v("v0.2026.11.20.08.05.preview_03.12").short_name(),
+        "2026.11.20.0805.12"
+    );
+}
+
+#[test]
 fn rejects_malformed_tags() {
     for tag in [
         "",

@@ -15425,6 +15425,12 @@ impl Workspace {
     }
 
     fn manual_check_for_update(&self, ctx: &mut ViewContext<Self>) {
+        // Warpium: Warp's updater never contacts Warp's servers on OSS; check for Warpium releases.
+        if ChannelState::channel() == Channel::Oss {
+            #[cfg(not(target_family = "wasm"))]
+            Self::update_self_updater(ctx, |updater, ctx| updater.check_now(ctx));
+            return;
+        }
         AutoupdateState::handle(ctx).update(ctx, |autoupdate_state, ctx| {
             autoupdate_state.manually_check_for_update(ctx);
         });

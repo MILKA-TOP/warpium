@@ -26,6 +26,11 @@ pub async fn fetch_channel_versions(
             .context("Failed to parse channel versions JSON");
     }
 
+    // Warpium: OSS builds never contact Warp's update servers.
+    if ChannelState::channel() == Channel::Oss {
+        anyhow::bail!("Channel versions are not fetched for the open-source channel");
+    }
+
     let channel_versions = server_api
         .fetch_channel_versions(include_changelogs, is_daily)
         .await

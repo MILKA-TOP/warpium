@@ -92,16 +92,78 @@ fn a_saved_release_with_a_malformed_tag_is_not_offered() {
 }
 
 #[test]
-fn banner_heading_names_both_versions() {
-    let heading = banner_heading(
+fn offer_description_names_both_versions_by_short_name() {
+    let description = offer_description(
         &version(CURRENT),
         &release("v0.2026.06.03.09.49.stable_00.3"),
     );
 
     assert_eq!(
-        heading,
-        "Warpium v0.2026.06.03.09.49.stable_00.3 is available (you have v0.2026.06.03.09.49.stable_00.2)."
+        description,
+        "Version 2026.06.03.0949.3 (you have 2026.06.03.0949.2). Update now downloads it in the \
+         background; you choose when to restart."
     );
+}
+
+#[test]
+fn offer_description_reads_newer_after_an_upstream_sync_resets_the_fork_counter() {
+    let description = offer_description(
+        &version(CURRENT),
+        &release("v0.2026.06.03.17.10.stable_01.1"),
+    );
+
+    assert_eq!(
+        description,
+        "Version 2026.06.03.1710.1 (you have 2026.06.03.0949.2). Update now downloads it in the \
+         background; you choose when to restart."
+    );
+}
+
+#[test]
+fn offer_description_uses_full_tags_when_short_names_collide() {
+    let description = offer_description(
+        &version(CURRENT),
+        &release("v0.2026.06.03.09.49.stable_01.2"),
+    );
+
+    assert_eq!(
+        description,
+        "Version v0.2026.06.03.09.49.stable_01.2 (you have v0.2026.06.03.09.49.stable_00.2). Update \
+         now downloads it in the background; you choose when to restart."
+    );
+}
+
+#[test]
+fn downloading_heading_shows_progress_when_known() {
+    assert_eq!(downloading_heading(Some(42)), "Downloading update… 42%");
+    assert_eq!(downloading_heading(None), "Downloading update…");
+}
+
+#[test]
+fn ready_description_names_the_release() {
+    assert_eq!(
+        ready_description(
+            Some(&version(CURRENT)),
+            &release("v0.2026.06.03.09.49.stable_00.3")
+        ),
+        "Restart now to switch to Warpium 2026.06.03.0949.3, or it's installed when you quit."
+    );
+}
+
+#[test]
+fn release_name_uses_the_full_tag_when_it_collides_with_the_running_version() {
+    assert_eq!(
+        release_name(
+            Some(&version(CURRENT)),
+            &release("v0.2026.06.03.09.49.stable_01.2")
+        ),
+        "v0.2026.06.03.09.49.stable_01.2"
+    );
+}
+
+#[test]
+fn release_name_falls_back_to_a_malformed_tag() {
+    assert_eq!(release_name(None, &release("v9")), "v9");
 }
 
 #[test]

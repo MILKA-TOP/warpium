@@ -20,7 +20,9 @@ pub use install::{
     remove_backup, swap_bundles,
 };
 pub use notice::{
-    banner_description, banner_heading, manual_report, progress_percent, update_to_offer,
+    FAILED_HEADING, OFFER_HEADING, PREPARING_HEADING, READY_HEADING, downloading_heading,
+    in_progress_description, manual_report, offer_description, progress_percent, ready_description,
+    release_name, update_to_offer,
 };
 pub use release::{
     RELEASE_REPO, Release, ReleaseError, dmg_asset_name, parse_latest_release, release_page_url,
