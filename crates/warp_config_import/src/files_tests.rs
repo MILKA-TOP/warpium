@@ -102,7 +102,9 @@ fn initial_import_copies_every_category() {
     );
     assert!(report.conflicts.is_empty() && report.errors.is_empty());
     assert_eq!(
-        fixture.read_target("workflows/nested/deploy.yaml").as_deref(),
+        fixture
+            .read_target("workflows/nested/deploy.yaml")
+            .as_deref(),
         Some("name: deploy")
     );
     assert_eq!(
@@ -153,10 +155,19 @@ fn ongoing_sync_follows_the_three_way_rule() {
         )]
     );
     assert_eq!(fixture.read_target("themes/a.yaml").as_deref(), Some("a2"));
-    assert_eq!(fixture.read_target("themes/b.yaml").as_deref(), Some("b-local"));
-    assert_eq!(fixture.read_target("themes/c.yaml").as_deref(), Some("c-local"));
+    assert_eq!(
+        fixture.read_target("themes/b.yaml").as_deref(),
+        Some("b-local")
+    );
+    assert_eq!(
+        fixture.read_target("themes/c.yaml").as_deref(),
+        Some("c-local")
+    );
     assert_eq!(fixture.read_target("themes/d.yaml").as_deref(), Some("d1"));
-    assert_eq!(fixture.read_target("themes/f.yaml").as_deref(), Some("f-local"));
+    assert_eq!(
+        fixture.read_target("themes/f.yaml").as_deref(),
+        Some("f-local")
+    );
 
     // An update replaces an unmodified file, which is backed up first.
     assert_eq!(
@@ -233,8 +244,12 @@ fn inline_secret_heuristic() {
     assert!(json_has_inline_secrets(
         br#"{"mcpServers": {"x": {"url": "https://x", "headers": {"Authorization": "Bearer y"}}}}"#
     ));
-    assert!(json_has_inline_secrets(br#"{"servers": [{"apiKey": "k"}]}"#));
-    assert!(!json_has_inline_secrets(br#"{"servers": [{"api_key": ""}]}"#));
+    assert!(json_has_inline_secrets(
+        br#"{"servers": [{"apiKey": "k"}]}"#
+    ));
+    assert!(!json_has_inline_secrets(
+        br#"{"servers": [{"api_key": ""}]}"#
+    ));
     assert!(json_has_inline_secrets(b"{ not json"));
 }
 

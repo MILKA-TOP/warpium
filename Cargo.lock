@@ -15506,6 +15506,7 @@ dependencies = [
  "warp_channel_config",
  "warp_cli",
  "warp_completer",
+ "warp_config_import",
  "warp_core",
  "warp_editor",
  "warp_errors",

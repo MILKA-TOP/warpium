@@ -110,13 +110,7 @@ fn sync_category(
     let mut source_files = BTreeMap::new();
     if category.is_dir {
         let mut truncated = false;
-        walk(
-            &category.source,
-            "",
-            0,
-            &mut source_files,
-            &mut truncated,
-        );
+        walk(&category.source, "", 0, &mut source_files, &mut truncated);
         if truncated {
             report.skipped.push((
                 category.key.to_owned(),
@@ -311,9 +305,17 @@ fn walk(
 pub(crate) fn json_has_inline_secrets(bytes: &[u8]) -> bool {
     fn is_secret_key(key: &str) -> bool {
         let key = key.to_ascii_lowercase();
-        ["token", "secret", "password", "apikey", "api_key", "api-key", "authorization"]
-            .iter()
-            .any(|needle| key.contains(needle))
+        [
+            "token",
+            "secret",
+            "password",
+            "apikey",
+            "api_key",
+            "api-key",
+            "authorization",
+        ]
+        .iter()
+        .any(|needle| key.contains(needle))
     }
     fn visit(value: &serde_json::Value) -> bool {
         match value {

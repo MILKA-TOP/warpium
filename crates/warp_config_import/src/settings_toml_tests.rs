@@ -51,8 +51,14 @@ fn initial_import_into_an_empty_warpium() {
     let result = merge(WARP, None, &BTreeMap::new(), true);
     let merged = parse(result.merged.as_deref().unwrap());
 
-    assert_eq!(merged["appearance"]["text"]["font_name"].as_str(), Some("JetBrains Mono"));
-    assert_eq!(merged["appearance"]["text"]["font_size"].as_integer(), Some(14));
+    assert_eq!(
+        merged["appearance"]["text"]["font_name"].as_str(),
+        Some("JetBrains Mono")
+    );
+    assert_eq!(
+        merged["appearance"]["text"]["font_size"].as_integer(),
+        Some(14)
+    );
     assert_eq!(
         merged["appearance"]["themes"]["theme"]["custom"]["name"].as_str(),
         Some("Dracula")
@@ -86,7 +92,10 @@ fn keeps_warpium_only_settings_and_formatting() {
     assert!(merged_text.starts_with("# My Warpium settings"));
     assert!(merged_text.contains("copy_on_select = true # mine"));
     assert_eq!(merged["warpium"]["sync_from_warp"].as_bool(), Some(false));
-    assert_eq!(merged["appearance"]["text"]["font_size"].as_integer(), Some(14));
+    assert_eq!(
+        merged["appearance"]["text"]["font_size"].as_integer(),
+        Some(14)
+    );
 }
 
 #[test]
@@ -105,8 +114,14 @@ fn ongoing_sync_per_setting() {
 
     let result = merge(&warp, Some(&warpium), &base, false);
     let merged = parse(result.merged.as_deref().unwrap());
-    assert_eq!(merged["appearance"]["text"]["font_name"].as_str(), Some("Fira Code"));
-    assert_eq!(merged["appearance"]["text"]["font_size"].as_integer(), Some(16));
+    assert_eq!(
+        merged["appearance"]["text"]["font_name"].as_str(),
+        Some("Fira Code")
+    );
+    assert_eq!(
+        merged["appearance"]["text"]["font_size"].as_integer(),
+        Some(16)
+    );
     assert_eq!(
         merged["appearance"]["themes"]["theme"]["custom"]["name"].as_str(),
         Some("Nord")
@@ -148,7 +163,8 @@ fn table_settings_merge_as_one_value() {
 #[test]
 fn formatting_differences_are_not_changes() {
     let warp = "[appearance.themes]\ntheme = { custom = { path = \"dracula.yaml\", name = \"Dracula\" } }\n";
-    let warpium = "[appearance.themes.theme.custom]\nname = \"Dracula\" # same\npath = \"dracula.yaml\"\n";
+    let warpium =
+        "[appearance.themes.theme.custom]\nname = \"Dracula\" # same\npath = \"dracula.yaml\"\n";
     let result = merge(warp, Some(warpium), &BTreeMap::new(), false);
     assert!(result.merged.is_none());
     assert_eq!(result.report.unchanged, 1);
@@ -198,8 +214,14 @@ dirs = ["~/.warp/workflows", "/Users/someone/.warpish"]
         Some("~/.warp-projects/x")
     );
     let dirs = merged["session"]["dirs"].as_array().unwrap();
-    assert_eq!(dirs.get(0).and_then(Value::as_str), Some("~/.warp-oss/workflows"));
-    assert_eq!(dirs.get(1).and_then(Value::as_str), Some("/Users/someone/.warpish"));
+    assert_eq!(
+        dirs.get(0).and_then(Value::as_str),
+        Some("~/.warp-oss/workflows")
+    );
+    assert_eq!(
+        dirs.get(1).and_then(Value::as_str),
+        Some("/Users/someone/.warpish")
+    );
 
     // Re-running against the rewritten result is in sync, not a conflict.
     let again = merge_settings_toml(
@@ -226,8 +248,14 @@ fn preview_rewrites_both_config_directories() {
         keybindings_file: home.join(".warp-oss/keybindings.yaml"),
     };
     let rewrites = path_rewrites(&source, &target, &home);
-    assert_eq!(rewrite_str("~/.warp-preview/themes/a.yaml", &rewrites).as_deref(), Some("~/.warp-oss/themes/a.yaml"));
-    assert_eq!(rewrite_str("/Users/someone/.warp/skills", &rewrites).as_deref(), Some("/Users/someone/.warp-oss/skills"));
+    assert_eq!(
+        rewrite_str("~/.warp-preview/themes/a.yaml", &rewrites).as_deref(),
+        Some("~/.warp-oss/themes/a.yaml")
+    );
+    assert_eq!(
+        rewrite_str("/Users/someone/.warp/skills", &rewrites).as_deref(),
+        Some("/Users/someone/.warp-oss/skills")
+    );
 }
 
 #[test]

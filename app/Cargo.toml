@@ -343,6 +343,7 @@ sysinfo.workspace = true
 warp-command-signatures = { workspace = true, features = ["embed-signatures"] }
 is_executable = "1.0.1"
 watcher.workspace = true
+warp_config_import.workspace = true
 warp_files.workspace = true
 
 [target.'cfg(target_family = "wasm")'.dependencies]

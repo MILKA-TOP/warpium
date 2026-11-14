@@ -29,7 +29,17 @@ pub struct Manifest {
     pub settings: BTreeMap<String, String>,
     /// Private (user defaults) settings, keyed by storage key.
     #[serde(default)]
-    pub private_settings: BTreeMap<String, String>,
+    pub private_settings: BTreeMap<String, KeyValueBase>,
+}
+
+/// The base of a private setting. Warpium re-serializes a value when it stores it, so the stored
+/// form can differ from Warp's; each side is compared against its own hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyValueBase {
+    /// Hash of Warp's value at the last import.
+    pub source: String,
+    /// Hash of Warpium's stored value right after the last import.
+    pub target: String,
 }
 
 /// The result of reading the manifest.

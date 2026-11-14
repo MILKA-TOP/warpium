@@ -24,7 +24,7 @@ pub use engine::{
 pub use files::{FileCategory, FileGuard, file_categories, sync_file_categories};
 pub use fs_util::{atomic_write, backup_existing};
 pub use key_values::{KeyValuePlan, PRIVATE_SETTINGS_DENYLIST, plan_key_values};
-pub use manifest::{MANIFEST_FILE_NAME, Manifest, ManifestLoad};
+pub use manifest::{KeyValueBase, MANIFEST_FILE_NAME, Manifest, ManifestLoad};
 pub use report::ImportReport;
 pub use settings_toml::{
     SETTINGS_DENYLIST, SettingsMerge, SettingsMergeError, merge_settings_toml, path_rewrites,

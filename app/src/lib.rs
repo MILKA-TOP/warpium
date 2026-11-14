@@ -98,6 +98,7 @@ mod vim_registers;
 mod voice;
 mod voltron;
 mod warp_managed_paths_watcher;
+mod warpium;
 #[cfg(target_family = "wasm")]
 mod wasm_nux_dialog;
 mod window_settings;
@@ -1547,6 +1548,12 @@ pub(crate) fn initialize_app(
 
     let user_defaults_on_startup = settings::init(startup_toml_parse_error, ctx);
     timer.mark_interval_end("READ_USER_DEFAULTS_AND_INITIALIZE_SETTINGS");
+
+    // Warpium: import configuration from the official Warp app, off the main thread.
+    #[cfg(not(target_family = "wasm"))]
+    if matches!(launch_mode, LaunchMode::App { .. }) {
+        warpium::warp_import::init(ctx);
+    }
 
     if FeatureFlag::UIZoom.is_enabled() {
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());

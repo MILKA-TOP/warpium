@@ -24543,6 +24543,24 @@ impl TypedActionView for Workspace {
                 let path = crate::settings::user_preferences_toml_file_path();
                 self.add_tab_for_code_file(path, None, ctx);
             }
+            ImportSettingsFromWarp => {
+                #[cfg(not(target_family = "wasm"))]
+                crate::warpium::warp_import::WarpConfigImporter::handle(ctx).update(
+                    ctx,
+                    |importer, ctx| {
+                        importer.run(crate::warpium::warp_import::ImportTrigger::Manual, ctx)
+                    },
+                );
+            }
+            ToggleSyncFromWarp => {
+                crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.sync_from_warp.toggle_and_save_value(ctx));
+                    },
+                );
+                ctx.notify();
+            }
             OpenLocalToCloudHandoffPane {
                 launch,
                 environment_id,
@@ -26835,6 +26853,11 @@ impl View for Workspace {
         }
         if *CodeSettings::as_ref(app).show_hidden_files {
             context.set.insert(flags::SHOW_HIDDEN_FILES);
+        }
+        if *crate::warpium::sync_settings::WarpiumSettings::as_ref(app).sync_from_warp {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::SYNC_FROM_WARP_CONTEXT_FLAG);
         }
 
         if self.team_uid(app).is_some() {

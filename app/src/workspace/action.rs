@@ -870,6 +870,10 @@ pub enum WorkspaceAction {
     },
     /// Opens the settings.toml file in a code editor pane.
     OpenSettingsFile,
+    /// Warpium: imports configuration from the official Warp app now and reports the result.
+    ImportSettingsFromWarp,
+    /// Warpium: toggles whether configuration is imported from Warp on every launch.
+    ToggleSyncFromWarp,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1203,6 +1207,8 @@ impl WorkspaceAction {
             | TabConfigSidecarEditConfig { .. }
             | TabConfigSidecarRemoveConfig { .. }
             | OpenSettingsFile
+            | ImportSettingsFromWarp
+            | ToggleSyncFromWarp
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }
