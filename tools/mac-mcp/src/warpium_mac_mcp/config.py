@@ -28,6 +28,15 @@ DEFAULT_LOGFILE_NAMES = ("warp-oss.log",)
 # ~/.warp-oss-<profile> config dir from the owner's normal Warpium data.
 DEFAULT_DATA_PROFILE = "mcp-test"
 
+# Bundle id of the oss channel (`ChannelState` in crates/warp_core/src/channel/state.rs,
+# app/Cargo.toml). It is also the UserDefaults domain, the Application Support
+# folder name and the keychain service name (`secure_storage_service_name` in
+# app/src/lib.rs); debug builds with WARP_DATA_PROFILE append `-<profile>`.
+OSS_APP_ID = "dev.milka.Warpium"
+# Home config dir of the oss channel (`base_warp_config_dir_name` in
+# crates/warp_core/src/paths.rs); `-<profile>` is appended likewise.
+OSS_CONFIG_DIR_NAME = ".warp-oss"
+
 
 # Environment passed to builds, tests and the launched app. Everything else in
 # the server's environment (API keys, cloud credentials, tokens) is dropped, so

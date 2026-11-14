@@ -92,12 +92,36 @@ def validate_run_id(run_id: str | int) -> str:
 # WARP_RECORDING_PROCESS_PATH), redirect data (WARP_DATA_PROFILE), carry
 # secrets (WARP_API_KEY, ...) or enable test hooks (WARP_TEST_*, WARP_MOCK_*).
 # Logging/backtrace controls are what bug repros actually need.
-ALLOWED_ENV = frozenset({"RUST_LOG", "RUST_BACKTRACE", "RUST_LIB_BACKTRACE"})
+RUST_ENV = frozenset({"RUST_LOG", "RUST_BACKTRACE", "RUST_LIB_BACKTRACE"})
+
+# Warpium test overrides, each with a strict value pattern (matched with
+# re.fullmatch, ASCII only) so they can only carry the value shape the app
+# expects, never a path, URL or command:
+# - WARPIUM_UPSTREAM_BASE_OVERRIDE: the upstream commit the upstream-commits
+#   notifier compares against (app/src/warpium/upstream_check.rs). Full SHA only.
+# - WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE: the version the self-updater treats
+#   as installed, in script/warpium/version --tag form
+#   (vN.YYYY.MM.DD.HH.MM.channel_NN.FORK_COUNTER).
+# - WARPIUM_IMPORT_DRY_RUN: Warp config import logs instead of writing
+#   (app/src/warpium/warp_import.rs).
+WARPIUM_TEST_ENV: dict[str, re.Pattern[str]] = {
+    "WARPIUM_UPSTREAM_BASE_OVERRIDE": re.compile(r"[0-9a-fA-F]{40}", re.ASCII),
+    "WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE": re.compile(
+        r"v[0-9]{1,4}\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[a-z]{1,16}_[0-9]{2}"
+        r"\.[1-9][0-9]{0,5}",
+        re.ASCII,
+    ),
+    "WARPIUM_IMPORT_DRY_RUN": re.compile(r"[01]", re.ASCII),
+}
+
+ALLOWED_ENV = RUST_ENV | frozenset(WARPIUM_TEST_ENV)
 
 
 def validate_env(env: Mapping[str, str] | None) -> dict[str, str]:
     if not env:
         return {}
+    if not isinstance(env, Mapping):
+        raise ValidationError("env must be an object of strings")
     if len(env) > len(ALLOWED_ENV):
         raise ValidationError("too many environment variables")
     out: dict[str, str] = {}
@@ -108,6 +132,9 @@ def validate_env(env: Mapping[str, str] | None) -> dict[str, str]:
             )
         if not isinstance(v, str) or len(v) > 1024 or "\x00" in v or "\n" in v:
             raise ValidationError(f"invalid value for {k}")
+        pattern = WARPIUM_TEST_ENV.get(k)
+        if pattern is not None and not pattern.fullmatch(v):
+            raise ValidationError(f"invalid value for {k} (expected {pattern.pattern})")
         out[k] = v
     return out
 

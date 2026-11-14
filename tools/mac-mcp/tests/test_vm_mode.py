@@ -300,6 +300,7 @@ def _tools(tmp_path, vm):
 def test_host_tool_surface_unchanged(tmp_path):
     tools = _tools(tmp_path, vm=False)
     assert "list_system_dialogs" not in tools
+    assert "app_reset_data" not in tools
     for name in ("click", "scroll", "type_text", "press_keys"):
         assert "target" not in tools[name].inputSchema["properties"]
     assert "window" not in tools["press_keys"].inputSchema["properties"]
@@ -309,6 +310,7 @@ def test_host_tool_surface_unchanged(tmp_path):
 def test_vm_tool_surface(tmp_path):
     tools = _tools(tmp_path, vm=True)
     assert "list_system_dialogs" in tools
+    assert "confirm" in tools["app_reset_data"].inputSchema["properties"]
     for name in ("click", "scroll", "type_text", "press_keys"):
         props = tools[name].inputSchema["properties"]
         assert "target" in props and "window" in props
