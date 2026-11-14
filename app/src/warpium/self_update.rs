@@ -4,12 +4,14 @@
 //! checks the latest release on launch and then every `warpium.update_check_interval_hours`, and
 //! the workspace shows a banner when a newer one exists. "Update now" downloads the release's disk
 //! image, checks it against the release's SHA-256 and stages a verified copy of the new app next to
-//! the running one; "Restart now" swaps it in and relaunches. Official Warp builds are never
-//! fetched: Warp's own updater stays off for the OSS channel. The protocol, decisions and install
+//! the running one. The swap happens once the app quits: "Restart now" quits and relaunches, and an
+//! ordinary quit installs it too. Official Warp builds are never fetched: Warp's own updater stays
+//! off for the OSS channel. The protocol, decisions and install
 //! steps live in the `warpium_self_update` crate; this module supplies the HTTP client, the
 //! schedule, persistence and the UI hooks.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -31,8 +33,8 @@ use warpui_extras::user_preferences::UserPreferences as _;
 use super::sync_settings::{
     UPDATE_CHECK_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent,
 };
-use super::{GITHUB_USER_AGENT, fetch_github, show_toast, unix_now};
-use crate::channel::{Channel, ChannelState};
+use super::{GITHUB_USER_AGENT, fetch_github, is_warpium_channel, show_toast, unix_now};
+use crate::channel::ChannelState;
 use crate::settings_view::ToggleSettingActionPair;
 use crate::util::bindings::BindingGroup;
 use crate::view_components::{DismissibleToast, ToastLink};
@@ -50,15 +52,20 @@ const INSTALL_RECORD_KEY: &str = "WarpiumSelfUpdateInstall";
 const CHECKSUM_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
-/// The swap to finish (or undo) when the app quits for an update. Kept outside the model because
-/// termination and a cancelled quit can run while the model is being updated.
-static PENDING_RELAUNCH: Mutex<Option<PendingRelaunch>> = Mutex::new(None);
+/// The staged update to swap in when the app quits. Kept outside the model because termination
+/// and a cancelled quit can run while the model is being updated.
+static PENDING_SWAP: Mutex<Option<PendingSwap>> = Mutex::new(None);
+/// Numbers mountpoints, so a retry never reuses one that a failed detach left mounted.
+static MOUNT_ATTEMPT: AtomicU32 = AtomicU32::new(0);
 
-struct PendingRelaunch {
-    /// The running bundle's path, which now holds the new version.
+struct PendingSwap {
+    tag: String,
+    /// The running bundle, replaced on quit.
     bundle: PathBuf,
-    /// The staged path, which now holds the previous version.
-    previous: PathBuf,
+    /// The verified copy of the new version.
+    staged: PathBuf,
+    /// Whether to start the new version once this process has exited.
+    relaunch: bool,
 }
 
 /// An update swapped in on quit, whose previous version is kept until the new one has launched.
@@ -78,11 +85,9 @@ enum Stage {
     Preparing {
         release: Release,
     },
-    /// A verified copy sits next to the running app; restarting swaps it in.
+    /// A verified copy sits next to the running app and is swapped in when the app quits.
     Ready {
         release: Release,
-        bundle: PathBuf,
-        staged: PathBuf,
     },
     Failed {
         release: Release,
@@ -141,7 +146,7 @@ impl SingletonEntity for SelfUpdater {}
 /// Registers the updater and, for `poll` launches, starts the scheduled checks. The updater is
 /// registered in every launch mode because the command palette action is.
 pub(crate) fn init(poll: bool, ctx: &mut AppContext) {
-    if is_supported_channel() {
+    if is_warpium_channel() {
         // Warpium must never offer or install official Warp builds.
         debug_assert!(
             ChannelState::releases_base_url().is_empty()
@@ -197,17 +202,48 @@ pub(crate) fn init_bindings(app: &mut AppContext) {
     );
 }
 
-/// Keeps the previous version as the backup and starts the new one once this process has exited,
-/// if the user restarted for an update. Called while the app terminates.
-pub(crate) fn spawn_relaunch_if_requested() {
-    let Some(PendingRelaunch { bundle, previous }) = pending_relaunch().take() else {
+/// Swaps in a staged update, keeping the previous version as the backup, and starts the new
+/// version once this process has exited if the user restarted for it. Called while the app
+/// terminates, after the user confirmed quitting, so the running app never uses a replaced bundle.
+pub(crate) fn finish_update_on_quit(ctx: &mut AppContext) {
+    let Some(PendingSwap {
+        tag,
+        bundle,
+        staged,
+        relaunch,
+    }) = pending_swap().take()
+    else {
         return;
     };
-    if let Err(err) = warpium_self_update::keep_as_backup(&previous, &bundle) {
-        log::warn!("[Warpium update] Couldn't rename the previous version's backup: {err}");
+    match warpium_self_update::swap_bundles(&staged, &bundle) {
+        Ok(()) => {
+            log::info!("[Warpium update] Installed Warpium {tag}");
+            if let Err(err) = warpium_self_update::keep_as_backup(&staged, &bundle) {
+                log::warn!("[Warpium update] Couldn't rename the previous version's backup: {err}");
+            }
+            match serde_json::to_string(&InstallRecord { tag }) {
+                Ok(json) => {
+                    if let Err(err) = ctx
+                        .private_user_preferences()
+                        .write_value(INSTALL_RECORD_KEY, json)
+                    {
+                        log::warn!("[Warpium update] Failed to save the install record: {err:#}");
+                    }
+                }
+                Err(err) => {
+                    log::warn!("[Warpium update] Failed to serialize the install record: {err}");
+                }
+            }
+        }
+        Err(err) => {
+            report_error!(anyhow::Error::new(err).context("Failed to swap in a Warpium update"));
+        }
+    }
+    if !relaunch {
+        return;
     }
     // Like Warp's updater: a shell waits for this process to exit, so the dock doesn't show two
-    // icons, then opens a new instance of the (now replaced) bundle.
+    // icons, then opens a new instance of the bundle.
     let result = command::blocking::Command::new("/bin/sh")
         .arg("-c")
         .arg(r#"while ps -p "$1" >/dev/null 2>&1; do sleep 0.2; done; /usr/bin/open -n "$2""#)
@@ -216,29 +252,21 @@ pub(crate) fn spawn_relaunch_if_requested() {
         .arg(&bundle)
         .spawn();
     match result {
-        Ok(_) => log::info!("[Warpium update] Relaunching into the new version"),
+        Ok(_) => log::info!("[Warpium update] Relaunching"),
         Err(err) => log::error!("[Warpium update] Couldn't relaunch after updating: {err}"),
     }
 }
 
-/// Puts the previous version back in place because the user cancelled quitting. The new version
-/// stays staged, so "Restart now" works again.
+/// Forgets a requested relaunch because the user cancelled quitting. The staged update stays, and
+/// is installed on the next quit.
 pub(crate) fn cancel_relaunch() {
-    let Some(PendingRelaunch { bundle, previous }) = pending_relaunch().take() else {
-        return;
-    };
-    match warpium_self_update::swap_bundles(&previous, &bundle) {
-        Ok(()) => log::info!("[Warpium update] Quit cancelled; restored the running version"),
-        Err(err) => log::error!(
-            "[Warpium update] Quit cancelled but the running version couldn't be restored: {err}"
-        ),
+    if let Some(pending) = pending_swap().as_mut() {
+        pending.relaunch = false;
     }
 }
 
-fn pending_relaunch() -> MutexGuard<'static, Option<PendingRelaunch>> {
-    PENDING_RELAUNCH
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+fn pending_swap() -> MutexGuard<'static, Option<PendingSwap>> {
+    PENDING_SWAP.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl SelfUpdater {
@@ -248,7 +276,7 @@ impl SelfUpdater {
             runtime_override.as_deref(),
             EMBEDDED_VERSION,
         );
-        if is_supported_channel() {
+        if is_warpium_channel() {
             match &current {
                 Some(current) => log::info!("[Warpium update] Running Warpium {current}"),
                 None => log::info!(
@@ -311,7 +339,11 @@ impl SelfUpdater {
                     can_reveal_dmg: dmg.is_some(),
                 },
             }),
-            _ if self.status_hidden => None,
+            Stage::Downloading { .. } | Stage::Preparing { .. } | Stage::Ready { .. }
+                if self.status_hidden =>
+            {
+                None
+            }
             Stage::Downloading { release, percent } => Some(in_progress(match percent {
                 Some(percent) => format!("Downloading Warpium {}… {percent}%", release.tag),
                 None => format!("Downloading Warpium {}…", release.tag),
@@ -321,7 +353,9 @@ impl SelfUpdater {
             }
             Stage::Ready { release, .. } => Some(UpdateBanner {
                 heading: format!("Warpium {} is ready.", release.tag),
-                description: "Restart Warpium to switch to it.".to_owned(),
+                description:
+                    "Restart now to switch to it, or it's installed when you quit Warpium."
+                        .to_owned(),
                 kind: UpdateBannerKind::Ready,
             }),
         }
@@ -403,47 +437,21 @@ impl SelfUpdater {
         }
     }
 
-    /// Swaps the staged version in and quits; the new version starts once this process has exited.
-    /// Cancelling the quit puts the running version back.
-    pub(crate) fn restart(&mut self, ctx: &mut ModelContext<Self>) {
-        let Stage::Ready {
-            release,
-            bundle,
-            staged,
-        } = &self.stage
-        else {
-            return;
-        };
-        let (release, bundle, staged) = (release.clone(), bundle.clone(), staged.clone());
-        if let Err(err) = warpium_self_update::swap_bundles(&staged, &bundle) {
-            let failure = UpdateFailure::Install {
-                err,
-                dmg: dmg_path(&update_work_dir(&release.tag), &release),
-            };
-            self.fail(release, failure, ctx);
-            remove_in_background(vec![staged]);
+    /// Quits and starts the staged version; the swap happens once the quit is confirmed.
+    pub(crate) fn restart(&self, ctx: &mut ModelContext<Self>) {
+        if !matches!(self.stage, Stage::Ready { .. }) {
             return;
         }
-        safe_info!(
-            safe: ("[Warpium update] Swapped in Warpium {}; quitting to relaunch", release.tag),
-            full: ("[Warpium update] Swapped in Warpium {} at {}; quitting to relaunch", release.tag, bundle.display())
-        );
-        self.save_install_record(
-            Some(&InstallRecord {
-                tag: release.tag.clone(),
-            }),
-            ctx,
-        );
-        *pending_relaunch() = Some(PendingRelaunch {
-            bundle,
-            previous: staged,
-        });
+        match pending_swap().as_mut() {
+            Some(pending) => pending.relaunch = true,
+            None => return,
+        }
         ctx.terminate_app(TerminationMode::Cancellable, None);
     }
 
     /// Checks now and reports the result in a toast, whatever it is.
     pub(crate) fn check_now(&mut self, ctx: &mut ModelContext<Self>) {
-        let message = if !is_supported_channel() {
+        let message = if !is_warpium_channel() {
             Some("Warpium updates are only available in Warpium builds".to_owned())
         } else if !is_supported_platform() {
             Some("Warpium updates are only available on Apple silicon Macs".to_owned())
@@ -462,7 +470,7 @@ impl SelfUpdater {
                     Some(format!("Warpium {} is being downloaded", release.tag))
                 }
                 Stage::Ready { release, .. } => Some(format!(
-                    "Warpium {} is ready; restart Warpium to switch to it",
+                    "Warpium {} is ready; restart or quit Warpium to switch to it",
                     release.tag
                 )),
             }
@@ -524,7 +532,10 @@ impl SelfUpdater {
                         updater.set_stage(Stage::Preparing { release: preparing }, ctx)
                     })
                     .await;
-                let mountpoint = work_dir.join("mnt");
+                let mountpoint = work_dir.join(format!(
+                    "mnt-{}",
+                    MOUNT_ATTEMPT.fetch_add(1, Ordering::Relaxed)
+                ));
                 prepare_off_main_thread(dmg.clone(), version, bundle.clone(), mountpoint)
                     .await
                     .map(|prepared| (prepared, bundle))
@@ -549,14 +560,13 @@ impl SelfUpdater {
                     safe: ("[Warpium update] Warpium {} is ready to swap in", release.tag),
                     full: ("[Warpium update] Warpium {} is ready to swap in from {}", release.tag, prepared.staged.display())
                 );
-                self.set_stage(
-                    Stage::Ready {
-                        release,
-                        bundle,
-                        staged: prepared.staged,
-                    },
-                    ctx,
-                );
+                *pending_swap() = Some(PendingSwap {
+                    tag: release.tag.clone(),
+                    bundle,
+                    staged: prepared.staged,
+                    relaunch: false,
+                });
+                self.set_stage(Stage::Ready { release }, ctx);
             }
             Err(failure) => self.fail(release, failure, ctx),
         }
@@ -598,15 +608,7 @@ impl SelfUpdater {
         if !is_supported_platform() {
             return;
         }
-        let mut leftovers = abandoned_download_dirs();
         let bundle = running_bundle_path().ok();
-        if let Some(bundle) = &bundle {
-            leftovers.extend(warpium_self_update::abandoned_staged_copies(
-                bundle,
-                warpium_self_update::process_is_running,
-            ));
-        }
-
         let record = ctx
             .private_user_preferences()
             .read_value(INSTALL_RECORD_KEY)
@@ -636,18 +638,19 @@ impl SelfUpdater {
             }
             None => None,
         };
-        if leftovers.is_empty() && backup.is_none() {
-            return;
-        }
 
-        let (sender, receiver) = futures::channel::oneshot::channel();
-        std::thread::spawn(move || {
-            remove_paths(&leftovers);
-            let backup_removed = backup.is_some_and(|backup| remove_paths(&[backup]));
-            let _ = sender.send(backup_removed);
-        });
         ctx.spawn(
-            async move { receiver.await.unwrap_or(false) },
+            blocking::unblock(move || {
+                let mut leftovers = abandoned_download_dirs();
+                if let Some(bundle) = &bundle {
+                    leftovers.extend(warpium_self_update::abandoned_staged_copies(
+                        bundle,
+                        warpium_self_update::process_is_running,
+                    ));
+                }
+                remove_paths(&leftovers);
+                backup.is_some_and(|backup| remove_paths(&[backup]))
+            }),
             |updater, backup_removed, ctx| {
                 // Kept on failure, so the next launch tries again.
                 if backup_removed {
@@ -890,6 +893,30 @@ async fn download_release(
         &release.dmg_name(),
     )?;
 
+    let dmg = dmg_path(dir, release);
+    if file_has_digest(&dmg, &expected).await {
+        log::info!("[Warpium update] Reusing the verified download");
+        return Ok(dmg);
+    }
+
+    let partial = dmg.with_extension("dmg.part");
+    let result = download_verified(client, release, &partial, &expected, spawner).await;
+    if result.is_err() {
+        let _ = async_fs::remove_file(&partial).await;
+    }
+    result?;
+    async_fs::rename(&partial, &dmg).await?;
+    Ok(dmg)
+}
+
+/// Streams the disk image to `partial`, reporting progress, and checks its size and SHA-256.
+async fn download_verified(
+    client: &http_client::Client,
+    release: &Release,
+    partial: &Path,
+    expected: &[u8; 32],
+    spawner: &ModelSpawner<SelfUpdater>,
+) -> Result<(), DownloadError> {
     let response = client
         .get(release.dmg_url().as_str())
         .header("User-Agent", GITHUB_USER_AGENT)
@@ -901,9 +928,7 @@ async fn download_release(
         return Err(DownloadError::Http(response.status().as_u16()));
     }
 
-    let dmg = dmg_path(dir, release);
-    let partial = dmg.with_extension("dmg.part");
-    let mut file = async_fs::File::create(&partial).await?;
+    let mut file = async_fs::File::create(partial).await?;
     let mut hasher = Sha256Hasher::default();
     let mut received = 0u64;
     let mut reported = Some(0);
@@ -922,35 +947,49 @@ async fn download_release(
         }
     }
     file.sync_all().await?;
-    drop(file);
 
-    let verified = if release.dmg_size > 0 && received != release.dmg_size {
-        Err(DownloadError::Incomplete {
+    if release.dmg_size > 0 && received != release.dmg_size {
+        return Err(DownloadError::Incomplete {
             received,
             expected: release.dmg_size,
-        })
-    } else {
-        hasher.verify(&expected).map_err(DownloadError::from)
-    };
-    if let Err(err) = verified {
-        let _ = async_fs::remove_file(&partial).await;
-        return Err(err);
+        });
     }
-
-    async_fs::rename(&partial, &dmg).await?;
-    Ok(dmg)
+    hasher.verify(expected)?;
+    Ok(())
 }
 
-/// Runs the blocking copy-and-verify on its own thread.
+/// Whether `path` exists and has the SHA-256 `expected`, such as a download kept from a failed
+/// attempt.
+async fn file_has_digest(path: &Path, expected: &[u8; 32]) -> bool {
+    let path = path.to_owned();
+    let expected = *expected;
+    blocking::unblock(move || {
+        let Ok(mut file) = std::fs::File::open(&path) else {
+            return false;
+        };
+        let mut hasher = Sha256Hasher::default();
+        let mut buffer = vec![0u8; 1 << 20];
+        loop {
+            match std::io::Read::read(&mut file, &mut buffer) {
+                Ok(0) => break,
+                Ok(read) => hasher.update(&buffer[..read]),
+                Err(_) => return false,
+            }
+        }
+        hasher.verify(&expected).is_ok()
+    })
+    .await
+}
+
+/// Runs the blocking copy-and-verify off the main thread.
 async fn prepare_off_main_thread(
     dmg: PathBuf,
     version: WarpiumVersion,
     bundle: PathBuf,
     mountpoint: PathBuf,
 ) -> Result<Prepared, InstallError> {
-    let (sender, receiver) = futures::channel::oneshot::channel();
-    std::thread::spawn(move || {
-        let result = warpium_self_update::prepare(
+    blocking::unblock(move || {
+        warpium_self_update::prepare(
             &warpium_self_update::PrepareRequest {
                 dmg: &dmg,
                 version: &version,
@@ -959,12 +998,9 @@ async fn prepare_off_main_thread(
                 process_id: std::process::id(),
             },
             &warpium_self_update::MacTools,
-        );
-        let _ = sender.send(result);
-    });
-    receiver
-        .await
-        .unwrap_or_else(|_| Err(InstallError::Copy("the install thread stopped".to_owned())))
+        )
+    })
+    .await
 }
 
 /// The running app bundle, or a message for the user when there is none to replace.
@@ -1036,12 +1072,6 @@ fn remove_paths(paths: &[PathBuf]) -> bool {
     all_removed
 }
 
-fn remove_in_background(paths: Vec<PathBuf>) {
-    std::thread::spawn(move || {
-        remove_paths(&paths);
-    });
-}
-
 fn capitalize(message: &str) -> String {
     let mut chars = message.chars();
     match chars.next() {
@@ -1050,12 +1080,7 @@ fn capitalize(message: &str) -> String {
     }
 }
 
-/// Warpium updates are a Warpium feature; Warpium is the OSS channel.
-fn is_supported_channel() -> bool {
-    matches!(ChannelState::channel(), Channel::Oss)
-}
-
 /// Releases ship arm64 macOS disk images only.
 fn is_supported_platform() -> bool {
-    is_supported_channel() && cfg!(all(target_os = "macos", target_arch = "aarch64"))
+    is_warpium_channel() && cfg!(all(target_os = "macos", target_arch = "aarch64"))
 }

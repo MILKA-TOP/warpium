@@ -5,7 +5,10 @@ use std::future::Future;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use warpium_upstream_check::{HttpRequest, HttpResponse, Trigger, backoff_delay, rate_limit_until};
+use warpium_upstream_check::{
+    HttpRequest, HttpResponse, Trigger, blocked_until, rate_limit_until, retry_after_failure,
+    scheduled_delay,
+};
 
 use crate::release::{Release, ReleaseError, latest_release_api_url, parse_latest_release};
 
@@ -68,17 +71,13 @@ pub enum CheckOutcome {
 /// otherwise whatever remains of `interval` since the last successful check (at once when there
 /// has been none).
 pub fn next_check_delay(state: &CheckState, now: u64, interval: Duration) -> Duration {
-    let wait_until = state.retry_at.max(state.rate_limited_until);
-    if let Some(until) = wait_until.filter(|&until| until > now) {
-        return Duration::from_secs(until - now);
-    }
-    match state.last_success {
-        Some(last_success) => {
-            let due = last_success.saturating_add(interval.as_secs());
-            Duration::from_secs(due.saturating_sub(now).min(interval.as_secs()))
-        }
-        None => Duration::ZERO,
-    }
+    scheduled_delay(
+        state.retry_at,
+        state.rate_limited_until,
+        state.last_success,
+        now,
+        interval,
+    )
 }
 
 /// Runs one check for the latest Warpium release and returns the updated state with the outcome.
@@ -94,11 +93,7 @@ where
     F: Fn(HttpRequest) -> Fut,
     Fut: Future<Output = Result<HttpResponse, String>>,
 {
-    let blocked_until = match trigger {
-        Trigger::Scheduled => state.retry_at.max(state.rate_limited_until),
-        Trigger::Manual => state.rate_limited_until,
-    };
-    if let Some(until) = blocked_until.filter(|&until| until > now) {
+    if let Some(until) = blocked_until(trigger, state.retry_at, state.rate_limited_until, now) {
         return (state, CheckOutcome::Deferred { until });
     }
 
@@ -113,13 +108,19 @@ where
         }
         Err(err) => {
             state.consecutive_failures = state.consecutive_failures.saturating_add(1);
-            let mut retry_at =
-                now + backoff_delay(state.consecutive_failures, max_backoff).as_secs();
-            if let CheckError::RateLimited { until } = err {
-                state.rate_limited_until = Some(until);
-                retry_at = retry_at.max(until);
+            let rate_limited_until = match err {
+                CheckError::RateLimited { until } => Some(until),
+                CheckError::Transport(_) | CheckError::Http { .. } | CheckError::Release(_) => None,
+            };
+            if rate_limited_until.is_some() {
+                state.rate_limited_until = rate_limited_until;
             }
-            state.retry_at = Some(retry_at);
+            state.retry_at = Some(retry_after_failure(
+                state.consecutive_failures,
+                rate_limited_until,
+                now,
+                max_backoff,
+            ));
             CheckOutcome::Failed(err)
         }
     };

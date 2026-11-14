@@ -42,7 +42,7 @@ Warpium is a lightweight IDE for AI-driven mobile development, built on [Warp](h
 **Good to know**
 
 - Only Apple silicon (arm64) Macs are supported for now.
-- New Warpium releases are offered in the app: a banner shows **Update now**, which downloads the release from GitHub and checks it in the background, then **Restart now** switches to it (Warpium never restarts on its own). Apple silicon only. You can also run **Check for Warpium updates** from the command palette, or turn the checks off with `warpium.update_check = false` in `settings.toml`. Official Warp updates are never offered. Your settings are kept.
+- New Warpium releases are offered in the app: a banner shows **Update now**, which downloads the release from GitHub and checks it in the background, then **Restart now** switches to it; otherwise it is installed when you quit (Warpium never restarts on its own). Apple silicon only. You can also run **Check for Warpium updates** from the command palette, or turn the checks off with `warpium.update_check = false` in `settings.toml`. Official Warp updates are never offered. Your settings are kept.
 - If Warpium can't replace itself (for example when it isn't in a folder you can write to), the banner offers the downloaded `.dmg` to install by hand.
 - Downloaded builds don't include the built-in `modify-settings` agent skill yet; builds from source do.
 - Warpium can be installed next to the official Warp app; their app data and preferences are separate.

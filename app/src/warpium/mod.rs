@@ -102,3 +102,11 @@ pub(crate) async fn fetch_github(
         body,
     })
 }
+
+/// Whether this is a Warpium build: Warpium is Warp's OSS channel.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn is_warpium_channel() -> bool {
+    use crate::channel::{Channel, ChannelState};
+
+    matches!(ChannelState::channel(), Channel::Oss)
+}

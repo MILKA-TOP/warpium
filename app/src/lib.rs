@@ -2827,7 +2827,7 @@ pub(crate) fn app_callbacks(
             app_services::teardown(ctx);
             autoupdate::spawn_child_if_necessary(ctx);
             #[cfg(not(target_family = "wasm"))]
-            warpium::self_update::spawn_relaunch_if_requested();
+            warpium::self_update::finish_update_on_quit(ctx);
 
             // Tear down any application profilers that are running, writing
             // results to disk.

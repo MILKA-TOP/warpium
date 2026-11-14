@@ -11,7 +11,8 @@ mod notice;
 
 pub use check::{
     CheckError, CheckOutcome, CheckState, Comparison, HttpRequest, HttpResponse, Trigger,
-    UpstreamHead, UpstreamStatus, backoff_delay, next_check_delay, run_check,
+    UpstreamHead, UpstreamStatus, backoff_delay, blocked_until, next_check_delay,
+    retry_after_failure, run_check, scheduled_delay,
 };
 pub use github::{
     FORK_REPO, FORK_URL, UPSTREAM_BRANCH, UPSTREAM_REPO, compare_web_url, parse_commit_sha,

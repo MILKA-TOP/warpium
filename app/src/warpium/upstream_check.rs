@@ -19,8 +19,7 @@ use warpui_extras::user_preferences::UserPreferences as _;
 use super::sync_settings::{
     UPSTREAM_CHECK_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent,
 };
-use super::{fetch_github, show_toast, unix_now};
-use crate::channel::{Channel, ChannelState};
+use super::{fetch_github, is_warpium_channel, show_toast, unix_now};
 use crate::settings_view::ToggleSettingActionPair;
 use crate::util::bindings::BindingGroup;
 use crate::view_components::{DismissibleToast, ToastLink};
@@ -105,7 +104,7 @@ impl UpstreamChecker {
     fn new(polling: bool, ctx: &mut ModelContext<Self>) -> Self {
         let runtime_override = std::env::var(BASE_OVERRIDE_ENV).ok();
         let base = warpium_upstream_check::resolve_base(runtime_override.as_deref(), EMBEDDED_BASE);
-        if base.is_none() && is_supported_channel() {
+        if base.is_none() && is_warpium_channel() {
             log::info!(
                 "[Upstream check] This build has no upstream base commit; upstream checks are off"
             );
@@ -166,7 +165,7 @@ impl UpstreamChecker {
 
     /// Checks now and reports the result in a toast, whatever it is.
     pub(crate) fn check_now(&mut self, ctx: &mut ModelContext<Self>) {
-        if !is_supported_channel() {
+        if !is_warpium_channel() {
             show_toast(
                 DismissibleToast::default(
                     "Upstream Warp checks are only available in Warpium builds".to_owned(),
@@ -199,9 +198,7 @@ impl UpstreamChecker {
     }
 
     fn is_enabled(&self, ctx: &AppContext) -> bool {
-        is_supported_channel()
-            && self.base.is_some()
-            && *WarpiumSettings::as_ref(ctx).upstream_check
+        is_warpium_channel() && self.base.is_some() && *WarpiumSettings::as_ref(ctx).upstream_check
     }
 
     /// Replaces any pending scheduled check with one at the next due time, or none when checks
@@ -336,9 +333,4 @@ impl UpstreamChecker {
             log::warn!("[Upstream check] Failed to save the check state: {err:#}");
         }
     }
-}
-
-/// Upstream checks are a Warpium feature; Warpium is the OSS channel.
-fn is_supported_channel() -> bool {
-    matches!(ChannelState::channel(), Channel::Oss)
 }
