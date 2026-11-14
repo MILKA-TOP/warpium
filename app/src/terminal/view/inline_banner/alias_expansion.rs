@@ -1,3 +1,4 @@
+use warp_core::channel::ChannelState;
 use warpui::Element;
 use warpui::elements::{MouseStateHandle, Text};
 
@@ -88,7 +89,10 @@ pub fn render_alias_expansion_banner(
         InlineBannerStyle::VeryLowPriority,
         appearance,
         InlineBannerContent {
-            title: "Warp can auto-expand aliases.".into(),
+            title: format!(
+                "{} can auto-expand aliases.",
+                ChannelState::channel().app_display_name()
+            ),
             buttons,
             content: Some(content),
             close_button: Some(close_button),

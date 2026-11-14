@@ -1,6 +1,9 @@
 use warp_core::channel::Channel;
+use warp_core::ui::theme::ColorScheme;
 
-use super::{customize_title, welcome_subtitle, welcome_title};
+use super::{
+    customize_title, get_started_label, warpium_mark_path, welcome_subtitle, welcome_title,
+};
 
 #[test]
 fn oss_channel_is_branded_as_warpium() {
@@ -20,4 +23,46 @@ fn stable_channel_keeps_warp_branding() {
         "A modern terminal with state of the art agents built in."
     );
     assert_eq!(customize_title(Channel::Stable), "Customize your Warp");
+}
+
+#[test]
+fn oss_channel_get_started_button_drops_get_warping() {
+    assert_eq!(get_started_label(Channel::Oss), "Get started");
+}
+
+#[test]
+fn stable_channel_get_started_button_keeps_get_warping() {
+    assert_eq!(get_started_label(Channel::Stable), "Get Warping");
+}
+
+#[test]
+fn warpium_mark_uses_the_lifted_variant_on_dark_themes() {
+    assert_eq!(
+        warpium_mark_path(ColorScheme::LightOnDark),
+        "bundled/svg/warpium-mark-on-dark.svg"
+    );
+}
+
+#[test]
+fn warpium_mark_uses_the_standard_variant_on_light_themes() {
+    assert_eq!(
+        warpium_mark_path(ColorScheme::DarkOnLight),
+        "bundled/svg/warpium-mark.svg"
+    );
+}
+
+/// `Icon` tints by the red channel of the rasterized SVG, so a black monochrome mark (used by the
+/// get-started page) renders as nothing.
+#[test]
+fn neutral_warpium_mark_is_a_white_icon_mask() {
+    let svg = include_str!("../../../app/assets/bundled/svg/warpium-mark-neutral.svg");
+
+    assert!(
+        !svg.contains("#000000"),
+        "neutral mark must not be black: {svg}"
+    );
+    assert!(
+        svg.contains(r##"fill="#FFFFFF""##),
+        "neutral mark must be white: {svg}"
+    );
 }

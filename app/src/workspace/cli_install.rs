@@ -71,8 +71,9 @@ fn create_symlink_with_admin(source: &Path, target: &Path) -> Result<()> {
     let escaped_target = ShellFamily::Posix.shell_escape(target_str);
 
     // Use osascript to run the ln command with admin privileges, with a custom prompt
+    let app = ChannelState::channel().app_display_name();
     let script = format!(
-        "do shell script \"ln -sf {escaped_source} {escaped_target}\" with prompt \"Warp needs administrator privileges to install the command in /usr/local/bin.\" with administrator privileges"
+        "do shell script \"ln -sf {escaped_source} {escaped_target}\" with prompt \"{app} needs administrator privileges to install the command in /usr/local/bin.\" with administrator privileges"
     );
 
     log::debug!("Creating symlink with admin privileges");
@@ -107,8 +108,9 @@ fn remove_file_with_admin(target: &Path) -> Result<()> {
 
     let escaped_target = ShellFamily::Posix.shell_escape(target_str);
 
+    let app = ChannelState::channel().app_display_name();
     let script = format!(
-        "do shell script \"rm {escaped_target}\" with prompt \"Warp needs administrator privileges to uninstall the command from /usr/local/bin.\" with administrator privileges"
+        "do shell script \"rm {escaped_target}\" with prompt \"{app} needs administrator privileges to uninstall the command from /usr/local/bin.\" with administrator privileges"
     );
 
     log::debug!("Removing file with admin privileges");

@@ -1,5 +1,6 @@
 use anyhow::anyhow;
 use lazy_static::lazy_static;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::DEFAULT_COMMAND_PALETTE_FONT_SIZE;
 use warp_core::ui::builder::UiBuilder;
@@ -637,10 +638,10 @@ impl AuthViewBody {
         };
 
         let text = match self.variant {
-            AuthViewVariant::Initial => "Welcome to Warp!",
+            AuthViewVariant::Initial => welcome_text(),
             AuthViewVariant::RequireLoginCloseable
             | AuthViewVariant::HitDriveObjectLimitCloseable
-            | AuthViewVariant::ShareRequirementCloseable => "Sign up for Warp",
+            | AuthViewVariant::ShareRequirementCloseable => "Sign up for Warp".to_owned(),
         };
 
         ui_builder
@@ -829,6 +830,10 @@ pub enum AuthViewBodyEvent {
     Close,
 }
 
+fn welcome_text() -> String {
+    format!("Welcome to {}!", ChannelState::channel().app_display_name())
+}
+
 impl Entity for AuthViewBody {
     type Event = AuthViewBodyEvent;
 }
@@ -992,7 +997,7 @@ impl View for AuthViewBody {
 
     fn accessibility_contents(&self, _: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new(
-            "Welcome to Warp!",
+            welcome_text(),
             "Press enter to open your browser to Sign Up or Sign In.",
             WarpA11yRole::HelpRole,
         ))

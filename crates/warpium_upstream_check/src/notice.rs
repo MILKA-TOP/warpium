@@ -23,16 +23,17 @@ pub fn should_notify(
         && dismissed_head != Some(status.head_sha.as_str())
 }
 
+/// The banner's bold lead. Kept short because the banner shares one line with its three actions
+/// and elides from the end.
 pub fn banner_heading(status: &UpstreamStatus) -> String {
-    format!("{} since this build.", commits_phrase(status.ahead_by))
+    format!("{}.", commits_phrase(status.ahead_by))
 }
 
+/// The banner's secondary text, elided first when the window is narrow.
 pub fn banner_description(status: &UpstreamStatus) -> String {
     match date_part(&status.head_date) {
-        Some(date) => format!(
-            "Latest upstream commit: {date}. Source changes for the fork to merge; nothing to install."
-        ),
-        None => "Source changes for the fork to merge; nothing to install.".to_owned(),
+        Some(date) => format!("Latest: {date}. Source changes to merge; nothing to install."),
+        None => "Source changes to merge; nothing to install.".to_owned(),
     }
 }
 
@@ -56,8 +57,8 @@ pub fn manual_report(outcome: &CheckOutcome, now: u64) -> String {
 
 fn commits_phrase(ahead_by: u32) -> String {
     match ahead_by {
-        1 => "Upstream Warp has 1 new commit".to_owned(),
-        n => format!("Upstream Warp has {n} new commits"),
+        1 => "1 new upstream Warp commit".to_owned(),
+        n => format!("{n} new upstream Warp commits"),
     }
 }
 

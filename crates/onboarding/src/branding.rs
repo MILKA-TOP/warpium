@@ -3,20 +3,36 @@
 
 use warp_core::channel::Channel;
 use warp_core::ui::Icon;
-use warp_core::ui::theme::Fill;
-use warpui_core::elements::Icon as WarpUiIcon;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::ColorScheme;
+use warp_core::ui::theme::color::internal_colors;
+use warpui_core::Element;
+use warpui_core::assets::asset_cache::AssetSource;
+use warpui_core::elements::{CacheOption, Image};
 
-const WARPIUM_MARK_PATH: &str = "bundled/svg/warpium-mark-neutral.svg";
-
-/// The app's logo mark, tinted with `fill`.
-pub(crate) fn logo_mark(channel: Channel, fill: Fill) -> WarpUiIcon {
+/// The app's logo mark. Warpium shows its full-colour mark, which reads on any theme; Warp shows
+/// its mark as a faint foreground tint.
+pub(crate) fn logo_mark(channel: Channel, appearance: &Appearance) -> Box<dyn Element> {
     match channel {
-        Channel::Oss => WarpUiIcon::new(WARPIUM_MARK_PATH, fill.into_solid()),
+        Channel::Oss => {
+            let path = warpium_mark_path(appearance.theme().inferred_color_scheme());
+            Image::new(AssetSource::Bundled { path }, CacheOption::BySize).finish()
+        }
         Channel::Stable
         | Channel::Preview
         | Channel::Dev
         | Channel::Local
-        | Channel::Integration => Icon::WarpLogoLight.to_warpui_icon(fill),
+        | Channel::Integration => Icon::WarpLogoLight
+            .to_warpui_icon(internal_colors::fg_overlay_4(appearance.theme()))
+            .finish(),
+    }
+}
+
+/// The full-colour Warpium mark for a theme with `color_scheme`.
+pub fn warpium_mark_path(color_scheme: ColorScheme) -> &'static str {
+    match color_scheme {
+        ColorScheme::LightOnDark => "bundled/svg/warpium-mark-on-dark.svg",
+        ColorScheme::DarkOnLight => "bundled/svg/warpium-mark.svg",
     }
 }
 
@@ -37,6 +53,18 @@ pub(crate) fn welcome_subtitle(channel: Channel) -> &'static str {
 
 pub(crate) fn customize_title(channel: Channel) -> String {
     format!("Customize your {}", channel.app_display_name())
+}
+
+/// The label of the button that finishes setup and opens the app.
+pub fn get_started_label(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Oss => "Get started",
+        Channel::Stable
+        | Channel::Preview
+        | Channel::Dev
+        | Channel::Local
+        | Channel::Integration => "Get Warping",
+    }
 }
 
 #[cfg(test)]

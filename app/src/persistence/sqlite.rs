@@ -1056,6 +1056,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                         .group_id
                         .and_then(|group_id| tab_group_row_ids.get(&group_id).copied()),
                     pinned: tab.pinned,
+                    pinned_explorer_root: tab.pinned_explorer_root.clone().map(encode_path),
                 })
                 .collect();
 
@@ -2610,6 +2611,7 @@ fn read_sqlite_data(
                                 right_panel,
                                 group_id,
                                 pinned: tab.pinned,
+                                pinned_explorer_root: tab.pinned_explorer_root.map(decode_path),
                             })
                         })
                         .collect();

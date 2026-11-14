@@ -53,7 +53,8 @@ VM_INSTRUCTIONS = """
 VM mode is on: this server runs in a throwaway macOS VM guest. screenshot(window='screen')
 captures the whole display; list_system_dialogs finds system alerts/permission prompts; pass
 window='id:<id>' (a dialog) or target='screen' to screenshot/click/type_text/press_keys to see
-and answer them.
+and answer them. app_reset_data(confirm=true) quits the app and deletes Warpium's user data
+in the guest, to test first-run onboarding again.
 """
 
 SCREENSHOT_VM_DOC = """PNG of a Warpium window, downscaled to max_width. VM mode also allows
@@ -289,9 +290,14 @@ def create_server(s: Services) -> FastMCP:
     ) -> dict:
         """Launch Warpium: source="build" runs target/<profile>/warp-oss from the workspace clone,
         "artifact" runs the app installed by install_artifact. env accepts only RUST_LOG,
-        RUST_BACKTRACE, RUST_LIB_BACKTRACE. args accepts only --flag[=value]. The server always
-        sets WARP_DATA_PROFILE=mcp-test; debug builds honor it (own settings, keychain items and
-        data). Release builds and artifacts ignore it and share oss-channel data."""
+        RUST_BACKTRACE, RUST_LIB_BACKTRACE and the Warpium test overrides
+        WARPIUM_UPSTREAM_BASE_OVERRIDE (40-hex commit sha),
+        WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE (e.g. v0.2026.06.03.09.49.stable_00.1; only
+        builds that include the self-updater read it) and
+        WARPIUM_IMPORT_DRY_RUN ('0' or '1'); other values are refused. args accepts only
+        --flag[=value]. The server always sets WARP_DATA_PROFILE=mcp-test; debug builds honor
+        it (own settings, keychain items and data). Release builds and artifacts ignore it and
+        share oss-channel data."""
         return await _thread(s.app.launch, source, env, args, profile)
 
     @mcp.tool()
@@ -299,6 +305,21 @@ def create_server(s: Services) -> FastMCP:
     async def app_quit() -> dict:
         """Quit the Warpium process(es) under test (SIGTERM, then SIGKILL after 10 s)."""
         return await _thread(s.app.quit)
+
+    if cfg.vm_mode:
+
+        @mcp.tool()
+        @A()
+        async def app_reset_data(confirm: bool = False) -> dict:
+            """VM mode only. Quit the Warpium under test and delete Warpium's user data in the
+            guest so first-run onboarding can be tested again: ~/.warp-oss(-mcp-test),
+            ~/Library/Application Support/dev.milka.Warpium(-mcp-test) (also inside the
+            2BBY89MBSN.dev.warp group container, if present), its Preferences plist (plus
+            `defaults delete`), ~/Library/Logs/warp-oss.log and its rotated/in-session files, and
+            the dev.milka.Warpium(-mcp-test) keychain items. Requires confirm=true. Refused,
+            without quitting anything, while another Warpium process is running. Check `ok`:
+            false means the data is only partly deleted (see `errors`)."""
+            return await _thread(s.app.reset_data, confirm)
 
     @mcp.tool()
     @A()

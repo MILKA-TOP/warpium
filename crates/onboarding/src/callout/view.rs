@@ -1,4 +1,5 @@
 use ui_components::Component;
+use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
 use warpui_core::elements::Empty;
 use warpui_core::keymap::macros::*;
@@ -30,7 +31,7 @@ use crate::components::onboarding_callout::{self, Button, StepStatus};
 
 /// Options for rendering a callout.
 struct CalloutOptions {
-    title: &'static str,
+    title: String,
     /// Pre-built text with keybindings already embedded
     text: String,
     step: StepStatus,
@@ -59,7 +60,7 @@ fn get_universal_input_callout_options(
 ) -> Option<CalloutOptions> {
     match state {
         UniversalInputCalloutState::MeetInput => Some(CalloutOptions {
-            title: "Meet the Warp input",
+            title: format!("Meet the {} input", ChannelState::channel().app_display_name()),
             text: format!(
                 "Your terminal input accepts both terminal commands and agent prompts and automatically detects which you're using. Use {} to lock the input to Agent mode (natural language) or Terminal mode (commands).",
                 keybindings.toggle_input_mode
@@ -74,7 +75,7 @@ fn get_universal_input_callout_options(
             checkbox: None,
         }),
         UniversalInputCalloutState::TalkToAgent => Some(CalloutOptions {
-            title: "Talk to the agent",
+            title: "Talk to the agent".to_owned(),
             text: "You can type in natural language to engage the agent. Submit the query below to start: What tests exist in this repo, how are they structured, and what do they cover?".to_string(),
             step: StepStatus::new(1, 2),
             left_button: if has_project {
@@ -117,9 +118,10 @@ fn get_agent_modality_callout_options(
             if initial_natural_language_detection_enabled {
                 // NL detection was already enabled - show simpler "overrides" callout without checkbox
                 Some(CalloutOptions {
-                    title: "Welcome to terminal mode",
+                    title: "Welcome to terminal mode".to_owned(),
                     text: format!(
-                        "Run commands here, just like a regular terminal. If you type a question or task using natural language, Warp can suggest opening it in agent mode. You can always override using {}.",
+                        "Run commands here, just like a regular terminal. If you type a question or task using natural language, {} can suggest opening it in agent mode. You can always override using {}.",
+                        ChannelState::channel().app_display_name(),
                         keybindings.toggle_input_mode
                     ),
                     step: StepStatus::new(0, total_steps),
@@ -134,9 +136,10 @@ fn get_agent_modality_callout_options(
             } else {
                 // NL detection was disabled - show full explanation with checkbox to enable
                 Some(CalloutOptions {
-                    title: "You’re in terminal mode",
+                    title: "You’re in terminal mode".to_owned(),
                     text: format!(
-                        "Run commands here, just like a regular terminal. If you type a question or task using natural language, Warp can suggest opening it in agent mode. You can always override using {}.",
+                        "Run commands here, just like a regular terminal. If you type a question or task using natural language, {} can suggest opening it in agent mode. You can always override using {}.",
+                        ChannelState::channel().app_display_name(),
                         keybindings.toggle_input_mode
                     ),
                     step: StepStatus::new(0, total_steps),
@@ -156,7 +159,7 @@ fn get_agent_modality_callout_options(
         AgentModalityCalloutState::AgentMode => {
             if has_project {
                 Some(CalloutOptions {
-                    title: "You're in agent mode",
+                    title: "You're in agent mode".to_owned(),
                     text: "Agent mode gives your questions and tasks their own conversation, so you can ask follow-ups without leaving your terminal workflow.\n\nSubmit the query below to have the agent initialize this project, or ⊗ to clear the input and start your own!".to_string(),
                     step: StepStatus::new(1, total_steps),
                     left_button: Some(ButtonOptions {
@@ -173,7 +176,7 @@ fn get_agent_modality_callout_options(
                 })
             } else {
                 Some(CalloutOptions {
-                    title: "You're in agent mode",
+                    title: "You're in agent mode".to_owned(),
                     text: format!(
                         "Agent mode gives your questions and tasks their own conversation, so you can ask follow-ups without leaving your terminal workflow. Press {} to return to terminal mode at any point.",
                         keybindings.return_to_terminal_mode
@@ -429,7 +432,7 @@ impl View for OnboardingCalloutView {
         self.callout_component.render(
             appearance,
             onboarding_callout::Params {
-                title: options.title.to_string().into(),
+                title: options.title.into(),
                 text: options.text.into(),
                 step: options.step,
                 right_button,
