@@ -76,11 +76,13 @@ pub fn merge_settings_toml(
 
     let known: HashSet<&str> = known_setting_paths.iter().map(String::as_str).collect();
     let mut source_units = BTreeMap::new();
+    let mut dotted_keys = Vec::new();
     collect_units(
         source_doc.as_table(),
         &mut Vec::new(),
         &known,
         &mut source_units,
+        &mut dotted_keys,
     );
 
     let mut paths: BTreeSet<String> = source_units.keys().cloned().collect();
@@ -88,9 +90,26 @@ pub fn merge_settings_toml(
 
     let mut new_base = base.clone();
     let mut report = ImportReport::default();
+    report.skipped.extend(dotted_keys.into_iter().map(|path| {
+        (
+            path,
+            "a key in its path contains a dot; set it by hand if wanted".to_owned(),
+        )
+    }));
     let mut changed = false;
     for path in paths {
         if is_denied(&path) {
+            continue;
+        }
+        // A base entry at a different granularity than Warp's current units (the set of known
+        // setting paths changed between versions) is not a removal: drop it and let the
+        // overlapping unit decide.
+        if !source_units.contains_key(&path)
+            && source_units
+                .keys()
+                .any(|unit| is_ancestor(unit, &path) || is_ancestor(&path, unit))
+        {
+            new_base.remove(&path);
             continue;
         }
         let segments: Vec<&str> = path.split('.').collect();
@@ -183,6 +202,12 @@ pub fn path_rewrites(
     rewrites
 }
 
+/// Whether dotted path `ancestor` strictly contains `path`.
+fn is_ancestor(ancestor: &str, path: &str) -> bool {
+    path.strip_prefix(ancestor)
+        .is_some_and(|rest| rest.starts_with('.'))
+}
+
 fn is_denied(path: &str) -> bool {
     SETTINGS_DENYLIST.iter().any(|denied| {
         path == *denied
@@ -198,13 +223,20 @@ fn collect_units(
     prefix: &mut Vec<String>,
     known: &HashSet<&str>,
     out: &mut BTreeMap<String, Item>,
+    dotted_keys: &mut Vec<String>,
 ) {
     for (key, item) in table.iter() {
         prefix.push(key.to_owned());
         let path = prefix.join(".");
+        if key.contains('.') {
+            // Paths are keyed by joining keys with dots, so such a key can't round-trip.
+            dotted_keys.push(path);
+            prefix.pop();
+            continue;
+        }
         match item.as_table_like() {
             Some(child) if !known.contains(path.as_str()) => {
-                collect_units(child, prefix, known, out)
+                collect_units(child, prefix, known, out, dotted_keys)
             }
             _ => {
                 out.insert(path, item.clone());

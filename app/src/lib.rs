@@ -1551,9 +1551,7 @@ pub(crate) fn initialize_app(
 
     // Warpium: import configuration from the official Warp app, off the main thread.
     #[cfg(not(target_family = "wasm"))]
-    if matches!(launch_mode, LaunchMode::App { .. }) {
-        warpium::warp_import::init(ctx);
-    }
+    warpium::warp_import::init(matches!(launch_mode, LaunchMode::App { .. }), ctx);
 
     if FeatureFlag::UIZoom.is_enabled() {
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());

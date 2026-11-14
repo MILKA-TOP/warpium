@@ -22,7 +22,7 @@ pub struct PreparedImport {
     pub settings: Option<Result<SettingsMerge, SettingsMergeError>>,
 }
 
-/// Picks the most recently used Warp installation under `home`, syncs its files into `target`
+/// Picks the Warp installation under `home` to import from (see [`choose_source`]), syncs its files into `target`
 /// and computes the merge of its `settings.toml`. Returns `None` if Warp isn't installed.
 ///
 /// Blocking file IO: run it off the main thread.
@@ -32,31 +32,36 @@ pub fn prepare_import(
     known_setting_paths: &[String],
     options: &ImportOptions,
 ) -> Option<PreparedImport> {
+    let load = Manifest::load(&target.manifest_path());
+    if let ManifestLoad::Unreadable(err) = &load {
+        log::warn!("[Warp import] Ignoring unreadable import manifest: {err}");
+    }
+    let mut initial_import = load.is_initial_import();
+    let mut manifest = load.into_manifest();
+
     let installations = discover_installations(home);
     let found = installations
         .iter()
         .map(|installation| installation.channel.manifest_name())
         .collect::<Vec<_>>()
         .join(", ");
-    let source = most_recently_used(installations)?;
-    log::info!(
-        "[Warp import] Importing from {} (most recently used of: {found})",
-        source.channel.display_name()
-    );
-
-    let load = Manifest::load(&target.manifest_path());
-    if let ManifestLoad::Unreadable(err) = &load {
-        log::warn!("[Warp import] Ignoring unreadable import manifest: {err}");
-    }
-    let initial_import = load.is_initial_import();
-    let mut manifest = load.into_manifest();
-    if let Some(previous) = &manifest.source_channel
-        && previous != source.channel.manifest_name()
-    {
-        log::info!(
-            "[Warp import] Source changed from {previous} to {}",
-            source.channel.manifest_name()
-        );
+    let source = choose_source(installations, manifest.source_channel.as_deref())?;
+    match manifest.source_channel.as_deref() {
+        Some(previous) if previous != source.channel.manifest_name() => {
+            // The previous source is gone. The base describes another install, so start over
+            // as a first import from the new one.
+            log::info!(
+                "[Warp import] Previous source {previous} is no longer installed; importing from {} as a first import",
+                source.channel.manifest_name()
+            );
+            manifest = Manifest::default();
+            initial_import = true;
+        }
+        Some(_) => {}
+        None => log::info!(
+            "[Warp import] Importing from {} (most recently used of: {found})",
+            source.channel.display_name()
+        ),
     }
     manifest.source_channel = Some(source.channel.manifest_name().to_owned());
 
@@ -89,6 +94,23 @@ pub fn prepare_import(
         report,
         settings,
     })
+}
+
+/// Keeps syncing from the installation recorded in the manifest while it exists, so Warpium
+/// doesn't flip between channels that have different settings; otherwise picks the most
+/// recently used one.
+fn choose_source(
+    installations: Vec<WarpInstallation>,
+    previous: Option<&str>,
+) -> Option<WarpInstallation> {
+    if let Some(previous) = previous
+        && let Some(installation) = installations
+            .iter()
+            .find(|installation| installation.channel.manifest_name() == previous)
+    {
+        return Some(installation.clone());
+    }
+    most_recently_used(installations)
 }
 
 /// Reads both `settings.toml` files and merges them. `None` when Warp has no settings file.

@@ -22,19 +22,6 @@ pub enum SyncDecision {
     Conflict,
 }
 
-impl SyncDecision {
-    /// Whether applying this decision writes Warp's version into Warpium.
-    pub fn takes_source(self) -> bool {
-        match self {
-            SyncDecision::Create | SyncDecision::Update | SyncDecision::Overwrite => true,
-            SyncDecision::InSync
-            | SyncDecision::Remove
-            | SyncDecision::KeepLocal
-            | SyncDecision::Conflict => false,
-        }
-    }
-}
-
 /// Applies the 3-way rule. Each argument is a content hash; `None` means the item is absent.
 ///
 /// `initial_import` is true on the very first import, when there is no manifest yet: Warp's

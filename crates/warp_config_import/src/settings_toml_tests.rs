@@ -278,3 +278,48 @@ fn removing_the_last_setting_drops_empty_tables() {
     let merged = result.merged.unwrap();
     assert!(parse(&merged).get("appearance").is_none(), "{merged}");
 }
+
+#[test]
+fn a_setting_becoming_known_does_not_remove_its_old_leaves() {
+    // An older Warpium didn't know `appearance.themes.theme`, so it was merged leaf by leaf.
+    let older_known: Vec<String> = Vec::new();
+    let first = merge_settings_toml(WARP, None, &older_known, &[], &BTreeMap::new(), true).unwrap();
+    assert!(
+        first
+            .base
+            .contains_key("appearance.themes.theme.custom.name")
+    );
+
+    // After an upgrade it's one unit: the leaves aren't treated as removed in Warp.
+    let result = merge(WARP, first.merged.as_deref(), &first.base, false);
+    assert!(
+        result.report.removed.is_empty(),
+        "{:?}",
+        result.report.removed
+    );
+    let merged = result
+        .merged
+        .map(|text| parse(&text))
+        .unwrap_or_else(|| parse(first.merged.as_deref().unwrap()));
+    assert_eq!(
+        merged["appearance"]["themes"]["theme"]["custom"]["name"].as_str(),
+        Some("Dracula")
+    );
+    assert!(
+        !result
+            .base
+            .contains_key("appearance.themes.theme.custom.name")
+    );
+    assert!(result.base.contains_key("appearance.themes.theme"));
+}
+
+#[test]
+fn keys_containing_dots_are_skipped() {
+    let warp = "[x.map]\n\"a.b\" = 1\nc = 2\n";
+    let result = merge(warp, None, &BTreeMap::new(), true);
+    let merged = parse(result.merged.as_deref().unwrap());
+    assert_eq!(merged["x"]["map"]["c"].as_integer(), Some(2));
+    assert!(merged["x"]["map"].get("a").is_none());
+    assert_eq!(result.report.skipped.len(), 1);
+    assert_eq!(result.report.skipped[0].0, "x.map.a.b");
+}

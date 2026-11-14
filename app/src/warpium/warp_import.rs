@@ -48,9 +48,14 @@ impl Entity for WarpConfigImporter {
 
 impl SingletonEntity for WarpConfigImporter {}
 
-/// Registers the importer and starts the launch-time sync when it is enabled.
-pub(crate) fn init(ctx: &mut AppContext) {
+/// Registers the importer and, for `sync_on_launch` launches, starts the launch-time sync when it
+/// is enabled. The importer is registered in every launch mode because the command palette action
+/// is.
+pub(crate) fn init(sync_on_launch: bool, ctx: &mut AppContext) {
     let importer = ctx.add_singleton_model(|_| WarpConfigImporter::default());
+    if !sync_on_launch {
+        return;
+    }
     if *WarpiumSettings::as_ref(ctx).sync_from_warp {
         importer.update(ctx, |importer, ctx| {
             importer.run(ImportTrigger::Startup, ctx)
@@ -89,6 +94,18 @@ impl WarpConfigImporter {
             if trigger == ImportTrigger::Manual {
                 show_toast(
                     DismissibleToast::default("An import from Warp is already running".to_owned()),
+                    ctx,
+                );
+            }
+            return;
+        }
+        // Warp's install layout is only mapped for macOS, the only platform Warpium ships on.
+        if !cfg!(target_os = "macos") {
+            if trigger == ImportTrigger::Manual {
+                show_toast(
+                    DismissibleToast::default(
+                        "Importing from Warp is only supported on macOS".to_owned(),
+                    ),
                     ctx,
                 );
             }
@@ -217,9 +234,19 @@ impl RunContext {
             log::error!("[Warp import] Failed to save the import manifest: {err}");
         }
 
+        let keybindings_changed = !options.dry_run
+            && report
+                .imported
+                .iter()
+                .chain(&report.updated)
+                .any(|item| item == "keybindings.yaml");
+        if keybindings_changed {
+            crate::keyboard::load_custom_keybindings(ctx);
+        }
+
         log_report(&report, initial_import, started);
-        let notable = report.changed_count() > 0 || !report.errors.is_empty();
-        if trigger == ImportTrigger::Manual || notable {
+        // Failures repeat on every launch until fixed, so only the manual command surfaces them.
+        if trigger == ImportTrigger::Manual || report.changed_count() > 0 {
             let toast = if report.errors.is_empty() {
                 DismissibleToast::success(report.summary())
             } else {
@@ -272,8 +299,14 @@ fn apply_settings_merge(
 
     match committed {
         Ok(written) => {
-            if written {
-                reload_settings_file(ctx);
+            if written && !reload_settings_file(ctx) {
+                // The in-memory settings still hold the old file and would write it back on the
+                // next change, so don't record this merge as imported; the next run redoes it.
+                report.errors.push((
+                    "settings.toml".to_owned(),
+                    "written but could not be reloaded".to_owned(),
+                ));
+                return None;
             }
             Some((merge.base, merge.report))
         }
@@ -295,10 +328,11 @@ fn apply_settings_merge(
 
 /// Loads the just-written `settings.toml` into the in-memory settings, as the file watcher would,
 /// so imported values apply at once and a later settings change can't write stale contents back.
-fn reload_settings_file(ctx: &mut ModelContext<WarpConfigImporter>) {
+/// Returns whether the file was reloaded.
+fn reload_settings_file(ctx: &mut ModelContext<WarpConfigImporter>) -> bool {
     if let Err(err) = PublicPreferences::as_ref(ctx).reload_from_disk() {
         log::warn!("[Warp import] Reloading settings.toml after the import failed: {err}");
-        return;
+        return false;
     }
     let failed_keys = SettingsManager::handle(ctx)
         .update(ctx, |manager, ctx| manager.reload_all_public_settings(ctx));
@@ -308,6 +342,7 @@ fn reload_settings_file(ctx: &mut ModelContext<WarpConfigImporter>) {
             failed_keys.join(", ")
         );
     }
+    true
 }
 
 /// Syncs the settings Warp keeps in its user defaults domain rather than `settings.toml`.

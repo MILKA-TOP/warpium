@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::fs_util::{atomic_write, backup_existing, file_mode};
@@ -9,9 +9,9 @@ use crate::sync::{SyncDecision, content_hash, decide};
 use crate::{ImportOptions, WarpiumTarget};
 
 /// Files larger than this are not imported; Warp's config files are a few KB.
-const MAX_FILE_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// Upper bound on files imported per category, so a stray large tree can't stall startup.
-const MAX_FILES_PER_CATEGORY: usize = 5_000;
+const MAX_FILES_PER_CATEGORY: usize = 2_000;
 const MAX_DEPTH: usize = 16;
 /// Entry names never imported: macOS metadata, VCS data and dependency trees inside skills.
 const IGNORED_NAMES: &[&str] = &[".DS_Store", ".git", "node_modules"];
@@ -110,7 +110,14 @@ fn sync_category(
     let mut source_files = BTreeMap::new();
     if category.is_dir {
         let mut truncated = false;
-        walk(&category.source, "", 0, &mut source_files, &mut truncated);
+        walk(
+            &category.source,
+            "",
+            0,
+            &mut HashSet::new(),
+            &mut source_files,
+            &mut truncated,
+        );
         if truncated {
             report.skipped.push((
                 category.key.to_owned(),
@@ -260,10 +267,18 @@ fn walk(
     dir: &Path,
     relative: &str,
     depth: usize,
+    visited: &mut HashSet<PathBuf>,
     out: &mut BTreeMap<String, PathBuf>,
     truncated: &mut bool,
 ) {
-    if depth > MAX_DEPTH {
+    if depth > MAX_DEPTH || *truncated {
+        return;
+    }
+    // Each real directory is walked once, so symlink cycles and links to ancestors terminate.
+    let Ok(canonical) = std::fs::canonicalize(dir) else {
+        return;
+    };
+    if !visited.insert(canonical) {
         return;
     }
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -289,7 +304,10 @@ fn walk(
             continue;
         };
         if meta.is_dir() {
-            walk(&path, &child_relative, depth + 1, out, truncated);
+            walk(&path, &child_relative, depth + 1, visited, out, truncated);
+            if *truncated {
+                return;
+            }
         } else if meta.is_file() {
             if out.len() >= MAX_FILES_PER_CATEGORY {
                 *truncated = true;

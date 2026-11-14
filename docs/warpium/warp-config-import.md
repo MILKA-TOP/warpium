@@ -66,14 +66,18 @@ Because Warpium is built from the same code, every setting has the same `toml_pa
 On every GUI launch while `warpium.sync_from_warp` is `true` (the default), and whenever
 **Import settings from Warp now** runs from the command palette:
 
-1. The source is the most recently used installation among Stable, Preview and Dev, judged by
-   the modification time of its user defaults plist, `settings.toml` and data directory. The
-   choice is logged.
+1. The first import picks the most recently used installation among Stable, Preview and Dev,
+   judged by the modification time of its user defaults plist, `settings.toml` and data
+   directory, and logs the choice. Later runs stay with that installation (recorded in the
+   manifest) so Warpium doesn't flip between channels; if it is uninstalled, the most recent
+   remaining one is imported as a fresh first import. To switch on purpose, delete the manifest.
 2. Off the main thread, each file category is synced, and the `settings.toml` merge is computed.
 3. On the main thread, the merged `settings.toml` is written (only if Warpium's file did not
    change in between; otherwise the merge is recomputed) and immediately reloaded into the
    settings models. Private settings are then synced through `SettingsManager`, so they apply
-   without a restart. Files are picked up by the existing file watchers.
+   without a restart. Keybindings are reloaded when `keybindings.yaml` changed; themes,
+   workflows, launch and tab configs, skills and MCP config are picked up by the existing file
+   watchers.
 4. The manifest `~/.warp-oss/.warp-import-manifest.json` records a content hash of everything
    imported, as the base for the next run.
 
@@ -106,7 +110,11 @@ Safety:
 - All writes are atomic (temporary file and rename).
 - A Warpium `settings.toml` with a syntax error is never touched.
 - `WARPIUM_IMPORT_DRY_RUN=1` logs what would change without writing anything.
-- Files over 5 MB and categories over 5,000 files are skipped.
+- Files over 2 MB and categories over 2,000 files are skipped; symlinked directories are
+  followed, but each real directory only once.
+
+On launch a toast appears only when something was imported or updated; the command palette
+action always shows one. Linux and Windows are not supported (Warp's layout differs there).
 
 Logs use the `[Warp import]` prefix: the summary at info, item names only in dogfood logs or at
 debug level.
@@ -123,3 +131,5 @@ flag would only add an upstream-file edit. The command palette offers
   reading Stable's DB read-only and inserting into Warpium's through its persistence layer).
 - Optional import of keychain items (BYO API keys) on explicit request.
 - A Settings page widget for the toggle.
+- Skip re-hashing unchanged files by recording size and mtime in the manifest (each launch
+  currently reads and hashes every file of every category).

@@ -115,3 +115,25 @@ fn missing_warp_settings_file_skips_the_settings_phase() {
     let prepared = prepare_import(home.path(), &target, &known(), &options("r")).unwrap();
     assert!(prepared.settings.is_none());
 }
+
+#[test]
+fn keeps_syncing_from_the_recorded_source() {
+    let home = tempfile::tempdir().unwrap();
+    let target = target_in(home.path());
+    write(&home.path().join(".warp/themes/a.yaml"), "stable");
+    let first = prepare_import(home.path(), &target, &known(), &options("r1")).unwrap();
+    first.manifest.save(&target.manifest_path()).unwrap();
+
+    // Preview is now the most recently used install, but Stable is still there.
+    write(&home.path().join(".warp-preview/themes/a.yaml"), "preview");
+    let second = prepare_import(home.path(), &target, &known(), &options("r2")).unwrap();
+    assert_eq!(second.source.channel, WarpChannel::Stable);
+    assert!(!second.initial_import);
+
+    // Once Stable is gone, Preview becomes the source as a fresh first import.
+    second.manifest.save(&target.manifest_path()).unwrap();
+    std::fs::remove_dir_all(home.path().join(".warp")).unwrap();
+    let third = prepare_import(home.path(), &target, &known(), &options("r3")).unwrap();
+    assert_eq!(third.source.channel, WarpChannel::Preview);
+    assert!(third.initial_import);
+}

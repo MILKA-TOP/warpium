@@ -297,3 +297,18 @@ fn follows_symlinked_directories_and_keeps_executable_bits() {
         .mode();
     assert_eq!(mode & 0o777, 0o755);
 }
+
+#[cfg(unix)]
+#[test]
+fn symlink_cycles_are_walked_once() {
+    let fixture = Fixture::new();
+    fixture.write_source("skills/tool/SKILL.md", "# Tool");
+    std::os::unix::fs::symlink(
+        fixture.home.path().join(".warp/skills"),
+        fixture.home.path().join(".warp/skills/tool/loop"),
+    )
+    .unwrap();
+
+    let report = fixture.sync(false, "run1");
+    assert_eq!(report.imported, vec!["skills/tool/SKILL.md"]);
+}
