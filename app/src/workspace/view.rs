@@ -4163,11 +4163,11 @@ impl Workspace {
                         let pane_group = self.tabs[tab_index].pane_group.clone();
 
                         if let Some(pinned_root) = &saved_tab.pinned_explorer_root {
+                            // Roots are computed once the restored sessions report their
+                            // directories, which reads the pin.
                             pane_group.update(ctx, |pane_group, _| {
                                 pane_group.set_pinned_explorer_root(pinned_root.clone())
                             });
-                            // Adding the tab may already have computed its roots without the pin.
-                            self.refresh_working_directories_for_pane_group(&pane_group, ctx);
                         }
 
                         if let Some(left_panel_snapshot) = &saved_tab.left_panel {

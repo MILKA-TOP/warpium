@@ -6,6 +6,8 @@ use ai::workspace::WorkspaceMetadata;
 use chrono::{Local, Utc};
 use cloud_object_persistence::to_cloud_object_permissions;
 use diesel::connection::SimpleConnection;
+use diesel::migration::{Migration, MigrationSource};
+use diesel::sqlite::Sqlite;
 use diesel_migrations::MigrationHarness;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
@@ -487,9 +489,6 @@ fn test_sqlite_round_trips_pinned_explorer_root() {
 /// A session saved before the `pinned_explorer_root` column existed still restores, unpinned.
 #[test]
 fn test_sqlite_restores_tabs_saved_before_pinned_explorer_root() {
-    use diesel::migration::{Migration, MigrationSource};
-    use diesel::sqlite::Sqlite;
-
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let database_path = tempdir.path().join("warp.sqlite");
     let mut conn = setup_database(&database_path).expect("database should initialize");

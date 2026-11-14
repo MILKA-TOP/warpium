@@ -23,7 +23,7 @@ impl std::fmt::Display for OnboardingIntention {
     }
 }
 
-pub use branding::get_started_label;
+pub use branding::{get_started_label, warpium_mark_path};
 pub use callout::{OnboardingCalloutView, OnboardingKeybindings};
 
 /// User-facing descriptions of the AI features enabled when the agent intention is selected.

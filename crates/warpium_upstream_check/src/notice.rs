@@ -26,10 +26,7 @@ pub fn should_notify(
 /// The banner's bold lead. Kept short because the banner shares one line with its three actions
 /// and elides from the end.
 pub fn banner_heading(status: &UpstreamStatus) -> String {
-    match status.ahead_by {
-        1 => "1 new upstream Warp commit".to_owned(),
-        n => format!("{n} new upstream Warp commits"),
-    }
+    format!("{}.", commits_phrase(status.ahead_by))
 }
 
 /// The banner's secondary text, elided first when the window is narrow.
@@ -60,8 +57,8 @@ pub fn manual_report(outcome: &CheckOutcome, now: u64) -> String {
 
 fn commits_phrase(ahead_by: u32) -> String {
     match ahead_by {
-        1 => "Upstream Warp has 1 new commit".to_owned(),
-        n => format!("Upstream Warp has {n} new commits"),
+        1 => "1 new upstream Warp commit".to_owned(),
+        n => format!("{n} new upstream Warp commits"),
     }
 }
 

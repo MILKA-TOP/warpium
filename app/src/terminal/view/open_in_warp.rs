@@ -10,6 +10,7 @@ use warp_completer::parsers::classify_command;
 use warp_completer::parsers::hir::{Command, Expression};
 use warp_completer::parsers::simple::all_parsed_commands;
 use warp_completer::signatures::CommandRegistry;
+use warp_core::channel::ChannelState;
 use warp_errors::report_if_error;
 use warp_util::path::EscapeChar;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
@@ -228,7 +229,11 @@ impl TerminalView {
                 match &self.inline_banners_state.open_in_warp_banner {
                     Some(banner_state) => {
                         ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
-                            format!("Open {} in Warp", banner_state.target.path.display()),
+                            format!(
+                                "Open {} in {}",
+                                banner_state.target.path.display(),
+                                ChannelState::channel().app_display_name()
+                            ),
                             WarpA11yRole::UserAction,
                         ))
                     }
@@ -237,14 +242,20 @@ impl TerminalView {
             }
             OpenInWarpBannerAction::Close => {
                 ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
-                    "Close View in Warp banner",
+                    format!(
+                        "Close View in {} banner",
+                        ChannelState::channel().app_display_name()
+                    ),
                     WarpA11yRole::UserAction,
                 ))
             }
             OpenInWarpBannerAction::LearnMore => {
                 ActionAccessibilityContent::Custom(AccessibilityContent::new(
                     "Learn more",
-                    "Learn more about opening Markdown files in Warp",
+                    format!(
+                        "Learn more about opening Markdown files in {}",
+                        ChannelState::channel().app_display_name()
+                    ),
                     WarpA11yRole::UserAction,
                 ))
             }

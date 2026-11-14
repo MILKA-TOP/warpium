@@ -36,7 +36,7 @@ Warpium is Warp's `oss` channel with its own bundle name (`Warpium`) and bundle 
 
 User-visible names come from `Channel::app_display_name()` (`"Warpium"` on Oss). The first-run
 onboarding slides take their OSS logo (the full-colour mark), welcome title and subtitle,
-"Customize your …" title, "Get started" button and input callout title from
+"Customize your …" title and "Get started" button from
 `crates/onboarding/src/branding.rs`. Text that refers to Warp's own service keeps the Warp name: its
 account, Terms of Service, AI features and plans, Warp Agent, Warp Drive and the Warp plugins for
 CLI agents.

@@ -60,10 +60,13 @@ fn check_interval_is_clamped() {
 
 #[test]
 fn banner_heading_counts_commits() {
-    assert_eq!(banner_heading(&status(1, "")), "1 new upstream Warp commit");
+    assert_eq!(
+        banner_heading(&status(1, "")),
+        "1 new upstream Warp commit."
+    );
     assert_eq!(
         banner_heading(&status(29, "")),
-        "29 new upstream Warp commits"
+        "29 new upstream Warp commits."
     );
 }
 
@@ -92,7 +95,7 @@ fn manual_report_says_up_to_date() {
 fn manual_report_counts_new_commits() {
     assert_eq!(
         manual_report(&CheckOutcome::Checked(status(7, "")), 0),
-        "Upstream Warp has 7 new commits since this build."
+        "7 new upstream Warp commits since this build."
     );
 }
 

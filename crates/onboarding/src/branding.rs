@@ -28,7 +28,8 @@ pub(crate) fn logo_mark(channel: Channel, appearance: &Appearance) -> Box<dyn El
     }
 }
 
-fn warpium_mark_path(color_scheme: ColorScheme) -> &'static str {
+/// The full-colour Warpium mark for a theme with `color_scheme`.
+pub fn warpium_mark_path(color_scheme: ColorScheme) -> &'static str {
     match color_scheme {
         ColorScheme::LightOnDark => "bundled/svg/warpium-mark-on-dark.svg",
         ColorScheme::DarkOnLight => "bundled/svg/warpium-mark.svg",
@@ -63,17 +64,6 @@ pub fn get_started_label(channel: Channel) -> &'static str {
         | Channel::Dev
         | Channel::Local
         | Channel::Integration => "Get Warping",
-    }
-}
-
-pub(crate) fn input_callout_title(channel: Channel) -> &'static str {
-    match channel {
-        Channel::Oss => "Meet the Warpium input",
-        Channel::Stable
-        | Channel::Preview
-        | Channel::Dev
-        | Channel::Local
-        | Channel::Integration => "Meet the Warp input",
     }
 }
 

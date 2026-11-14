@@ -2,8 +2,7 @@ use warp_core::channel::Channel;
 use warp_core::ui::theme::ColorScheme;
 
 use super::{
-    customize_title, get_started_label, input_callout_title, warpium_mark_path, welcome_subtitle,
-    welcome_title,
+    customize_title, get_started_label, warpium_mark_path, welcome_subtitle, welcome_title,
 };
 
 #[test]
@@ -27,15 +26,13 @@ fn stable_channel_keeps_warp_branding() {
 }
 
 #[test]
-fn oss_channel_buttons_and_callouts_name_warpium() {
+fn oss_channel_get_started_button_drops_get_warping() {
     assert_eq!(get_started_label(Channel::Oss), "Get started");
-    assert_eq!(input_callout_title(Channel::Oss), "Meet the Warpium input");
 }
 
 #[test]
-fn stable_channel_buttons_and_callouts_keep_warp_branding() {
+fn stable_channel_get_started_button_keeps_get_warping() {
     assert_eq!(get_started_label(Channel::Stable), "Get Warping");
-    assert_eq!(input_callout_title(Channel::Stable), "Meet the Warp input");
 }
 
 #[test]
