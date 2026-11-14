@@ -2,6 +2,8 @@
 
 use serde::Deserialize;
 
+use crate::check::UpstreamHead;
+
 /// The upstream repository Warpium is forked from.
 pub const UPSTREAM_REPO: &str = "warpdotdev/warp";
 pub const UPSTREAM_BRANCH: &str = "master";
@@ -42,13 +44,6 @@ pub(crate) fn compare_api_url(base: &str, head: &str) -> String {
     format!("{API_ROOT}/repos/{UPSTREAM_REPO}/compare/{base}...{head}?per_page=1&page=2")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BranchHead {
-    pub sha: String,
-    /// ISO 8601 committer date of the head commit.
-    pub date: String,
-}
-
 #[derive(Deserialize)]
 struct BranchResponse {
     commit: BranchCommit,
@@ -72,7 +67,7 @@ struct Signature {
 }
 
 /// Parses a `GET /repos/{repo}/branches/{branch}` response body.
-pub(crate) fn parse_branch(body: &[u8]) -> Result<BranchHead, String> {
+pub(crate) fn parse_branch(body: &[u8]) -> Result<UpstreamHead, String> {
     let response: BranchResponse =
         serde_json::from_slice(body).map_err(|err| format!("branch response: {err}"))?;
     let sha = parse_commit_sha(&response.commit.sha)
@@ -83,7 +78,7 @@ pub(crate) fn parse_branch(body: &[u8]) -> Result<BranchHead, String> {
         .flatten()
         .find_map(|signature| signature.date)
         .unwrap_or_default();
-    Ok(BranchHead { sha, date })
+    Ok(UpstreamHead { sha, date })
 }
 
 #[derive(Deserialize)]

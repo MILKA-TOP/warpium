@@ -373,13 +373,55 @@ fn backoff_delay_is_capped() {
 }
 
 #[test]
-fn next_check_delay_is_the_interval_after_a_success() {
+fn next_check_delay_is_the_interval_right_after_a_success() {
     let state = CheckState {
         last_success: Some(NOW),
-        ..Default::default()
+        ..known_head_state()
     };
 
-    assert_eq!(next_check_delay(&state, NOW, MAX_BACKOFF), MAX_BACKOFF);
+    assert_eq!(
+        next_check_delay(&state, BASE, NOW, MAX_BACKOFF),
+        MAX_BACKOFF
+    );
+}
+
+#[test]
+fn next_check_delay_counts_the_interval_from_the_last_success() {
+    let state = CheckState {
+        last_success: Some(NOW - 60 * 60),
+        ..known_head_state()
+    };
+
+    assert_eq!(
+        next_check_delay(&state, BASE, NOW, MAX_BACKOFF),
+        Duration::from_secs(5 * 60 * 60)
+    );
+}
+
+#[test]
+fn next_check_delay_is_zero_once_the_interval_has_passed() {
+    let state = CheckState {
+        last_success: Some(NOW - 7 * 60 * 60),
+        ..known_head_state()
+    };
+
+    assert_eq!(
+        next_check_delay(&state, BASE, NOW, MAX_BACKOFF),
+        Duration::ZERO
+    );
+}
+
+#[test]
+fn next_check_delay_is_zero_without_a_result_for_this_base() {
+    let state = CheckState {
+        last_success: Some(NOW),
+        ..known_head_state()
+    };
+
+    assert_eq!(
+        next_check_delay(&state, "1111111", NOW, MAX_BACKOFF),
+        Duration::ZERO
+    );
 }
 
 #[test]
@@ -391,9 +433,54 @@ fn next_check_delay_waits_for_the_later_of_backoff_and_rate_limit() {
     };
 
     assert_eq!(
-        next_check_delay(&state, NOW, MAX_BACKOFF),
+        next_check_delay(&state, BASE, NOW, MAX_BACKOFF),
         Duration::from_secs(900)
     );
+}
+
+#[test]
+fn cached_status_restores_the_last_result_for_the_same_base() {
+    assert_eq!(
+        known_head_state().cached_status(BASE),
+        Some(UpstreamStatus {
+            base: BASE.to_owned(),
+            head_sha: HEAD.to_owned(),
+            head_date: "2026-11-14T07:36:23Z".to_owned(),
+            ahead_by: 29,
+        })
+    );
+}
+
+#[test]
+fn cached_status_is_none_for_another_base() {
+    assert_eq!(known_head_state().cached_status("1111111"), None);
+}
+
+#[test]
+fn cached_status_is_none_when_the_comparison_is_for_an_older_head() {
+    let state = CheckState {
+        comparison: Some(Comparison {
+            base: BASE.to_owned(),
+            head_sha: "2222222".to_owned(),
+            ahead_by: 3,
+        }),
+        ..known_head_state()
+    };
+
+    assert_eq!(state.cached_status(BASE), None);
+}
+
+#[test]
+fn base_equal_to_the_head_is_up_to_date_without_a_compare_request() {
+    let body = format!(
+        r#"{{"commit": {{"sha": "{BASE}", "commit": {{"committer": {{"date": "2026-11-01T00:00:00Z"}}}}}}}}"#
+    );
+    let github = FakeGitHub::new(vec![ok(&body, None)]);
+
+    let (_, outcome) = github.run(CheckState::default(), Trigger::Scheduled);
+
+    assert_eq!(github.requests().len(), 1);
+    assert!(matches!(outcome, CheckOutcome::Checked(status) if status.ahead_by == 0));
 }
 
 #[test]

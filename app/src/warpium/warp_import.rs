@@ -19,11 +19,12 @@ use warp_core::{safe_info, safe_warn};
 use warpui::keymap::EditableBinding;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+use super::show_toast;
 use super::sync_settings::{SYNC_FROM_WARP_CONTEXT_FLAG, WarpiumSettings};
 use crate::settings_view::ToggleSettingActionPair;
 use crate::util::bindings::BindingGroup;
 use crate::view_components::DismissibleToast;
-use crate::workspace::{ToastStack, WorkspaceAction};
+use crate::workspace::WorkspaceAction;
 
 /// Set to `1` to log what an import would do without writing anything.
 const DRY_RUN_ENV: &str = "WARPIUM_IMPORT_DRY_RUN";
@@ -459,20 +460,4 @@ fn log_report(report: &ImportReport, initial_import: bool, started: Instant) {
         report.updated,
         report.removed
     );
-}
-
-fn show_toast(
-    toast: DismissibleToast<WorkspaceAction>,
-    ctx: &mut ModelContext<WarpConfigImporter>,
-) {
-    let window_id = ctx
-        .windows()
-        .active_window()
-        .or_else(|| ctx.windows().ordered_window_ids().first().copied());
-    let Some(window_id) = window_id else {
-        return;
-    };
-    ToastStack::handle(ctx).update(ctx, |stack, ctx| {
-        stack.add_ephemeral_toast(toast, window_id, ctx);
-    });
 }

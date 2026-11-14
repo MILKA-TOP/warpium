@@ -68,7 +68,7 @@ fn parse_branch_reads_head_sha_and_committer_date() {
 
     assert_eq!(
         head,
-        BranchHead {
+        UpstreamHead {
             sha: "c6f07bb451657e6fbce72c69ed90cfd4f86c2344".to_owned(),
             date: "2026-11-14T07:36:23Z".to_owned(),
         }

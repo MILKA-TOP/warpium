@@ -22521,8 +22521,8 @@ impl Workspace {
         Some(WorkspaceBannerFields {
             banner_type: WorkspaceBanner::UpstreamWarpUpdate,
             severity: BannerSeverity::Warning,
-            heading: Some(warpium_upstream_check::banner_heading(status)),
-            description: warpium_upstream_check::banner_description(status),
+            heading: Some(warpium_upstream_check::banner_heading(&status)),
+            description: warpium_upstream_check::banner_description(&status),
             secondary_button: Some(WorkspaceBannerButtonDetails {
                 text: "View changes".to_owned(),
                 action: WorkspaceAction::ViewUpstreamWarpChanges,
@@ -22918,10 +22918,13 @@ impl Workspace {
                 self.settings_error_banner_dismissed = true;
                 self.sync_settings_error_state_into_settings_pane(ctx);
             }
-            WorkspaceBanner::UpstreamWarpUpdate => {
+            WorkspaceBanner::UpstreamWarpUpdate =>
+            {
                 #[cfg(not(target_family = "wasm"))]
-                crate::warpium::upstream_check::UpstreamChecker::handle(ctx)
-                    .update(ctx, |checker, ctx| checker.dismiss(ctx));
+                if ctx.has_singleton_model::<crate::warpium::upstream_check::UpstreamChecker>() {
+                    crate::warpium::upstream_check::UpstreamChecker::handle(ctx)
+                        .update(ctx, |checker, ctx| checker.dismiss(ctx));
+                }
             }
         }
         ctx.notify();
@@ -24613,8 +24616,10 @@ impl TypedActionView for Workspace {
             }
             CheckForUpstreamWarpUpdates => {
                 #[cfg(not(target_family = "wasm"))]
-                crate::warpium::upstream_check::UpstreamChecker::handle(ctx)
-                    .update(ctx, |checker, ctx| checker.check_now(ctx));
+                if ctx.has_singleton_model::<crate::warpium::upstream_check::UpstreamChecker>() {
+                    crate::warpium::upstream_check::UpstreamChecker::handle(ctx)
+                        .update(ctx, |checker, ctx| checker.check_now(ctx));
+                }
             }
             ToggleUpstreamCheck => {
                 crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
@@ -24627,7 +24632,7 @@ impl TypedActionView for Workspace {
             }
             ViewUpstreamWarpChanges => {
                 #[cfg(not(target_family = "wasm"))]
-                {
+                if ctx.has_singleton_model::<crate::warpium::upstream_check::UpstreamChecker>() {
                     let url =
                         crate::warpium::upstream_check::UpstreamChecker::as_ref(ctx).compare_url();
                     if let Some(url) = url {

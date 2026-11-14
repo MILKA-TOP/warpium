@@ -18,6 +18,7 @@ use warpui::keymap::EditableBinding;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 use warpui_extras::user_preferences::UserPreferences as _;
 
+use super::show_toast;
 use super::sync_settings::{
     UPSTREAM_CHECK_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent,
 };
@@ -25,12 +26,13 @@ use crate::channel::{Channel, ChannelState};
 use crate::settings_view::ToggleSettingActionPair;
 use crate::util::bindings::BindingGroup;
 use crate::view_components::{DismissibleToast, ToastLink};
-use crate::workspace::{ToastStack, WorkspaceAction};
+use crate::workspace::WorkspaceAction;
 
 /// The upstream commit this build is based on, set by CI (see `script/warpium/upstream_base`).
 const EMBEDDED_BASE: Option<&str> = option_env!("WARPIUM_UPSTREAM_BASE");
-/// Overrides [`EMBEDDED_BASE`] at runtime, e.g. to try the notification with an older commit.
-const BASE_OVERRIDE_ENV: &str = "WARPIUM_UPSTREAM_BASE";
+/// Overrides [`EMBEDDED_BASE`] at runtime, e.g. to try the notification with an older commit. A
+/// separate name so a value exported for a local build can't leak into later launches.
+const BASE_OVERRIDE_ENV: &str = "WARPIUM_UPSTREAM_BASE_OVERRIDE";
 /// Private-preferences key holding the serialized [`CheckState`].
 const STATE_KEY: &str = "WarpiumUpstreamCheckState";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -39,8 +41,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) struct UpstreamChecker {
     /// The upstream commit to compare against; `None` when the build doesn't know it.
     base: Option<String>,
+    /// Remembered across launches; also holds the latest result.
     state: CheckState,
-    latest: Option<UpstreamStatus>,
     running: bool,
     /// Whether this launch runs scheduled checks.
     polling: bool,
@@ -119,7 +121,6 @@ impl UpstreamChecker {
         Self {
             base,
             state,
-            latest: None,
             running: false,
             polling,
             next_check: None,
@@ -128,18 +129,23 @@ impl UpstreamChecker {
     }
 
     /// The upstream status to notify about, if any.
-    pub(crate) fn notice(&self, ctx: &AppContext) -> Option<&UpstreamStatus> {
+    pub(crate) fn notice(&self, ctx: &AppContext) -> Option<UpstreamStatus> {
         if !self.is_enabled(ctx) {
             return None;
         }
         let min_commits = *WarpiumSettings::as_ref(ctx).upstream_check_min_commits;
-        self.latest.as_ref().filter(|status| {
+        self.latest().filter(|status| {
             warpium_upstream_check::should_notify(
                 status,
                 self.state.dismissed_head.as_deref(),
                 min_commits,
             )
         })
+    }
+
+    /// The latest known result for this build's base, possibly from an earlier launch.
+    fn latest(&self) -> Option<UpstreamStatus> {
+        self.state.cached_status(self.base.as_deref()?)
     }
 
     /// The GitHub page listing the upstream commits this build lacks.
@@ -151,10 +157,10 @@ impl UpstreamChecker {
 
     /// Hides the notification until upstream moves past the current head.
     pub(crate) fn dismiss(&mut self, ctx: &mut ModelContext<Self>) {
-        let Some(status) = &self.latest else {
+        let Some(status) = self.latest() else {
             return;
         };
-        self.state.dismissed_head = Some(status.head_sha.clone());
+        self.state.dismissed_head = Some(status.head_sha);
         self.save_state(ctx);
         ctx.notify();
     }
@@ -208,12 +214,15 @@ impl UpstreamChecker {
         if !self.polling || !self.is_enabled(ctx) {
             return;
         }
-        // The first check of a launch runs at once unless an error back-off is still active.
-        let delay = if self.latest.is_none() && !self.running {
-            warpium_upstream_check::next_check_delay(&self.state, unix_now(), Duration::ZERO)
-        } else {
-            warpium_upstream_check::next_check_delay(&self.state, unix_now(), self.interval(ctx))
+        let Some(base) = &self.base else {
+            return;
         };
+        let delay = warpium_upstream_check::next_check_delay(
+            &self.state,
+            base,
+            unix_now(),
+            self.interval(ctx),
+        );
         self.next_check = Some(ctx.spawn(
             async move {
                 Timer::after(delay).await;
@@ -287,7 +296,6 @@ impl UpstreamChecker {
                     status.base,
                     status.head_sha
                 );
-                self.latest = Some(status.clone());
             }
             CheckOutcome::Failed(err) => {
                 log::warn!(
@@ -386,17 +394,4 @@ async fn fetch(
         rate_limit_reset,
         body,
     })
-}
-
-fn show_toast(toast: DismissibleToast<WorkspaceAction>, ctx: &mut ModelContext<UpstreamChecker>) {
-    let window_id = ctx
-        .windows()
-        .active_window()
-        .or_else(|| ctx.windows().ordered_window_ids().first().copied());
-    let Some(window_id) = window_id else {
-        return;
-    };
-    ToastStack::handle(ctx).update(ctx, |stack, ctx| {
-        stack.add_ephemeral_toast(toast, window_id, ctx);
-    });
 }

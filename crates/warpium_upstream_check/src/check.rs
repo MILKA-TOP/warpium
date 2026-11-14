@@ -82,6 +82,21 @@ impl CheckState {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("check state serializes to JSON")
     }
+
+    /// The result of the last successful check against `base`, as remembered.
+    pub fn cached_status(&self, base: &str) -> Option<UpstreamStatus> {
+        let head = self.head.as_ref()?;
+        let comparison = self
+            .comparison
+            .as_ref()
+            .filter(|comparison| comparison.base == base && comparison.head_sha == head.sha)?;
+        Some(UpstreamStatus {
+            base: base.to_owned(),
+            head_sha: head.sha.clone(),
+            head_date: head.date.clone(),
+            ahead_by: comparison.ahead_by,
+        })
+    }
 }
 
 /// The result of a successful check.
@@ -126,13 +141,20 @@ pub fn backoff_delay(consecutive_failures: u32, max: Duration) -> Duration {
     BASE.saturating_mul(1 << exponent).min(max)
 }
 
-/// Delay before the next scheduled check: the back-off or rate-limit wait while one is active,
-/// otherwise `interval`.
-pub fn next_check_delay(state: &CheckState, now: u64, interval: Duration) -> Duration {
+/// Delay before the next scheduled check against `base`: the back-off or rate-limit wait while
+/// one is active, otherwise whatever remains of `interval` since the last successful check. With
+/// no remembered result for `base` (a first run, or a build with a new base), it is due at once.
+pub fn next_check_delay(state: &CheckState, base: &str, now: u64, interval: Duration) -> Duration {
     let wait_until = state.retry_at.max(state.rate_limited_until);
-    match wait_until {
-        Some(until) if until > now => Duration::from_secs(until - now),
-        _ => interval,
+    if let Some(until) = wait_until.filter(|&until| until > now) {
+        return Duration::from_secs(until - now);
+    }
+    match state.last_success {
+        Some(last_success) if state.cached_status(base).is_some() => {
+            let due = last_success.saturating_add(interval.as_secs());
+            Duration::from_secs(due.saturating_sub(now).min(interval.as_secs()))
+        }
+        _ => Duration::ZERO,
     }
 }
 
@@ -200,6 +222,7 @@ where
         .map(|comparison| comparison.ahead_by);
     let ahead_by = match cached {
         Some(ahead_by) => ahead_by,
+        None if head.sha.starts_with(base) => 0,
         None => {
             let request = HttpRequest {
                 url: compare_api_url(base, &head.sha),
@@ -249,10 +272,6 @@ where
     match response.status {
         200 => {
             let head = parse_branch(&response.body).map_err(CheckError::Parse)?;
-            let head = UpstreamHead {
-                sha: head.sha,
-                date: head.date,
-            };
             state.branch_etag = response.etag;
             state.head = Some(head.clone());
             Ok(head)

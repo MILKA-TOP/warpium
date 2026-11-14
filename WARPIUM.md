@@ -56,12 +56,14 @@ unit-tested with `cargo test -p warpium_upstream_check`) and `app/src/warpium/up
   GitHub compare API. Builds without it (a failed lookup, or a local build that didn't export it)
   never check. Commits are compared rather than tags because upstream stopped publishing public
   release tags after June 2026.
-- **Check.** On launch and then every `warpium.upstream_check_interval_hours` (default 6, 1–168),
-  unauthenticated: `GET /repos/warpdotdev/warp/branches/master` revalidated with its `ETag`, then,
-  only when the head moved, `GET /repos/warpdotdev/warp/compare/<base>...<head>` (page 2, which
+- **Check.** Every `warpium.upstream_check_interval_hours` (default 6, 1–168), counted across
+  launches, and at launch when the build's base has no saved result; unauthenticated:
+  `GET /repos/warpdotdev/warp/branches/master` revalidated with its `ETag`, then, only when the
+  head moved, `GET /repos/warpdotdev/warp/compare/<base>...<head>` (page 2, which
   leaves out the changed-files list) for the commit count. Errors back off from 15 minutes,
   doubling up to the interval; GitHub's rate-limit headers are honored. State, including the
-  dismissed head, is kept in private preferences under `WarpiumUpstreamCheckState`.
+  last result (so the banner survives a relaunch) and the dismissed head, is kept in private
+  preferences under `WarpiumUpstreamCheckState`.
 - **Notification.** A workspace banner, "Upstream Warp has N new commits since this build", with
   **View changes** (the GitHub compare page from the base), **Sync fork** (opens the fork's GitHub
   page, which has GitHub's **Sync fork** button) and a close button that hides it until upstream
@@ -76,11 +78,12 @@ unit-tested with `cargo test -p warpium_upstream_check`) and `app/src/warpium/up
   so they are for the owner, not agents. On conflicts, merge `warpdotdev/warp` `master` in a branch
   and a pull request instead. Either way, then follow [After merging upstream
   Warp](#after-merging-upstream-warp).
-- **Trying it:** run a build with an older upstream commit as its base. `WARPIUM_UPSTREAM_BASE` set
-  at runtime overrides the embedded one:
+- **Trying it:** run a build with an older upstream commit as its base.
+  `WARPIUM_UPSTREAM_BASE_OVERRIDE` set at runtime overrides the embedded one; a base with no saved
+  result is checked at launch:
 
   ```bash
-  WARPIUM_UPSTREAM_BASE=<older upstream sha> /Applications/Warpium.app/Contents/MacOS/warp-oss
+  WARPIUM_UPSTREAM_BASE_OVERRIDE=<older upstream sha> /Applications/Warpium.app/Contents/MacOS/warp-oss
   ```
 
 ### Upstream issue (GitHub Actions)
