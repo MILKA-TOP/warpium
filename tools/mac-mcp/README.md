@@ -126,9 +126,20 @@ answer macOS alerts and permission prompts there: `list_system_dialogs`, then
 or `screenshot(window="screen")` and `target="screen"` for the whole display. See SECURITY.md
 ("VM mode relaxations"); a host-mode server never has these.
 
+**First-run onboarding again:** `app_reset_data(confirm=true)` (VM mode only) quits the app
+and deletes Warpium's settings, data, logs and keychain items in the guest, so the next
+`app_launch` starts like a fresh install without resetting the whole VM.
+
 `reset.sh` gives every test session a clean macOS with the server and permissions already in
 place. After `git pull`, run `vm/provision.sh` (with the VM started) and, if you like,
-`vm/snapshot.sh --force` to refresh the golden copy.
+`vm/snapshot.sh --force` to refresh the golden copy. To update the guest server from `master`:
+
+```sh
+cd ~/src/warpium-mcp && git checkout master && git pull --ff-only
+cd tools/mac-mcp
+vm/start.sh   # provision.sh needs the VM running
+WARPIUM_VM_REUSE_HOST_TOKEN=1 vm/provision.sh
+```
 
 ### Troubleshooting
 
@@ -401,8 +412,9 @@ have, so use `install_artifact(run_id)` and `app_launch(source="artifact")` inst
 | `job_status(job_id?)`, `job_logs(job_id, tail, grep)`, `job_cancel(job_id)` | Inspect and cancel background jobs. |
 | `install_artifact(run_id, artifact_name?)` | `gh run download` of the Warpium .dmg from a successful fork `warpium-build.yml` run, e.g. run `43262238821` gives `Warpium-a70e8571-macos-arm64`. The artifact is picked from the run's listing. Mounts the .dmg read-only and copies the .app into `~/warpium-mac-test/apps/` (job). |
 | `run_integration_test(name, real_display)` | `cargo run -p integration --bin integration -- <name>` (job). |
-| `app_launch(source, env, args, profile)` | Runs the dev binary (`build`) or the installed artifact (`artifact`). env accepts `RUST_LOG`/`RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` only. Always sets `WARP_DATA_PROFILE=mcp-test`. |
+| `app_launch(source, env, args, profile)` | Runs the dev binary (`build`) or the installed artifact (`artifact`). env accepts `RUST_LOG`/`RUST_BACKTRACE`/`RUST_LIB_BACKTRACE` and the Warpium test overrides below, nothing else. Always sets `WARP_DATA_PROFILE=mcp-test`. |
 | `app_quit`, `app_status` | Stops the app under test, or reports its pid, windows, frontmost state and warpctrl instance. |
+| `app_reset_data(confirm=true)` | **VM mode only.** Quits the app under test and deletes Warpium's user data in the guest so first-run onboarding can be tested again without `vm/reset.sh`: `~/.warp-oss`, `~/Library/Application Support/dev.milka.Warpium`, `~/Library/Preferences/dev.milka.Warpium.plist` (plus `defaults delete`), `~/Library/Logs/warp-oss.log` (and rotated `.old*`), and the `dev.milka.Warpium` keychain items; each also with the `-mcp-test` suffix that debug builds use. Refused while another Warpium runs. |
 | `app_logs(tail, grep, since, source)` | `~/Library/Logs/warp-oss.log`, or the launched app's stdout/stderr. |
 | `list_windows` | Warpium windows with ids and bounds. |
 | `screenshot(window, max_width)` | PNG of one Warpium window (max 1600 px wide by default) plus bounds and scale. |
@@ -422,6 +434,16 @@ captures the whole display and `screenshot(window="id:<id>")` a system dialog;
 `click`, `scroll`, `type_text` and `press_keys` take `window="id:<id>"` (a dialog: its process is
 brought to the front, coordinates are dialog-relative) or `target="screen"` (screen points;
 keys go to whatever has keyboard focus).
+
+Warpium test overrides accepted by `app_launch(env=...)`; any other value is refused:
+
+| Variable | Accepted value | Used by |
+|---|---|---|
+| `WARPIUM_UPSTREAM_BASE_OVERRIDE` | full 40-hex commit sha | upstream-commits notifier: compare against an older upstream commit |
+| `WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE` | Warpium version tag, e.g. `v0.2026.06.03.09.49.stable_00.1` | self-updater: pretend an older version is installed |
+| `WARPIUM_IMPORT_DRY_RUN` | `0` or `1` | Warp config import: `1` logs what would change without writing |
+
+Example: `app_launch(source="artifact", env={"WARPIUM_IMPORT_DRY_RUN": "1", "RUST_LOG": "info"})`.
 
 Coordinates: `click` and `scroll` take **window-relative points**. `screenshot` returns
 `image_px_per_window_point`; divide pixel coordinates by it, or pass `from_screenshot=true`

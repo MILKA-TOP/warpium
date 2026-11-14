@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -15,14 +16,22 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .config import Config, scrubbed_env
+from .config import OSS_APP_ID, OSS_CONFIG_DIR_NAME, Config, scrubbed_env
 from .pathjail import PathJail
+from .ui import VmModeRequiredError
 from .validation import ValidationError, validate_app_args, validate_env
 from .workspace import Workspace, WorkspaceError
 
 SOURCES = ("build", "artifact")
 # The app creates (rotates) warp-oss.log during startup.
 LOG_CREATE_WINDOW_S = 120
+# `security delete-generic-password -s` removes one matching item per call.
+MAX_KEYCHAIN_ITEMS = 64
+# Bounds each `defaults`/`security` call, e.g. if a keychain dialog appears.
+RESET_CMD_TIMEOUT_S = 15
+# Suffix of the TUI front-end's keychain service (TUI_SECURE_STORAGE_SERVICE_SUFFIX
+# in app/src/lib.rs).
+TUI_KEYCHAIN_SUFFIX = ".tui"
 
 
 @dataclass
@@ -79,12 +88,16 @@ class AppManager:
         *,
         processes: Callable[[], list[tuple[int, str]]] = list_processes,
         base_env: Callable[[], dict[str, str]] | None = None,
+        home: Path | None = None,
+        run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     ):
         self.cfg = cfg
         self.ws = workspace
         self.jail = jail
         self._processes = processes
         self._base_env = base_env or scrubbed_env
+        self._home = home
+        self._run = run
         self._launched: Launched | None = None
         self._lock = threading.Lock()
 
@@ -147,7 +160,7 @@ class AppManager:
                     f"Warpium is already running (pid {self._launched.proc.pid}); app_quit first"
                 )
             full_env = self._base_env()
-            full_env.update(env_over)  # only RUST_* logging vars (validate_env)
+            full_env.update(env_over)  # only allowlisted, value-checked vars (validate_env)
             # Always set (not client-controllable): honored by debug builds,
             # isolates UserDefaults, Application Support, keychain items and
             # ~/.warp-oss-<profile> from the owner's normal Warpium data.
@@ -230,6 +243,99 @@ class AppManager:
                 "args": self._launched.args,
             }
         return {"launched": launched, "target_pids": sorted(self.target_pids())}
+
+    # --- reset (VM mode only) ----------------------------------------------
+    def data_domains(self) -> list[str]:
+        """UserDefaults domains, Application Support names and keychain services of
+        the app under test: the release/artifact one, and the debug one that our
+        WARP_DATA_PROFILE selects."""
+        return [OSS_APP_ID, f"{OSS_APP_ID}-{self.cfg.data_profile}"]
+
+    def user_data_paths(self) -> list[Path]:
+        home = self._home or Path.home()
+        lib = home / "Library"
+        paths = [
+            home / OSS_CONFIG_DIR_NAME,
+            home / f"{OSS_CONFIG_DIR_NAME}-{self.cfg.data_profile}",
+        ]
+        for domain in self.data_domains():
+            paths.append(lib / "Application Support" / domain)
+            paths.append(lib / "Preferences" / f"{domain}.plist")
+        for log_file in self.cfg.log_files:
+            paths.append(log_file)
+            # Rotated logs: warp-oss.log.old.N (crates/warp_logging/src/native.rs).
+            if log_file.parent.is_dir():
+                paths.extend(sorted(log_file.parent.glob(f"{log_file.name}.old*")))
+        return paths
+
+    def reset_data(self, confirm: bool = False) -> dict:
+        """Quits the app under test and deletes Warpium's user data so first-run
+        onboarding can be tested again. VM mode only: on a host it would wipe the
+        owner's own Warpium settings, login and keychain items."""
+        if not self.cfg.vm_mode:
+            raise VmModeRequiredError(
+                "app_reset_data is only available in VM mode (server started with --vm-mode "
+                "inside a macOS VM guest); it deletes Warpium settings and keychain items"
+            )
+        if confirm is not True:
+            raise ValidationError("app_reset_data deletes all Warpium user data; pass confirm=true")
+        quit_result = self.quit()
+        with self._lock:  # app_launch takes the lock too, so nothing starts mid-reset
+            still = self.target_pids() | self.other_warpium_pids()
+            if still:
+                raise WorkspaceError(
+                    f"Warpium processes are still running (pids {sorted(still)}); quit them first"
+                )
+            defaults = {d: self._defaults_delete(d) for d in self.data_domains()}
+            removed: list[str] = []
+            errors: dict[str, str] = {}
+            for path in self.user_data_paths():
+                try:
+                    if _remove_path(path):
+                        removed.append(str(path))
+                except OSError as e:
+                    errors[str(path)] = str(e)
+            keychain: dict[str, int | str] = {}
+            for domain in self.data_domains():
+                for service in (domain, domain + TUI_KEYCHAIN_SUFFIX):
+                    keychain[service] = self._delete_keychain_items(service)
+        return {
+            "quit": quit_result,
+            "defaults_delete": defaults,
+            "removed": removed,
+            "errors": errors,
+            "keychain_items_deleted": keychain,
+        }
+
+    def _reset_cmd(self, argv: list[str]) -> subprocess.CompletedProcess:
+        return self._run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=RESET_CMD_TIMEOUT_S,
+            env=scrubbed_env(),
+        )
+
+    def _defaults_delete(self, domain: str) -> str:
+        # Deleting the plist alone is not enough: cfprefsd caches the domain and
+        # can write it back. Exit status 1 means the domain doesn't exist.
+        try:
+            r = self._reset_cmd(["defaults", "delete", domain])
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return f"error: {e}"
+        return "deleted" if r.returncode == 0 else "absent"
+
+    def _delete_keychain_items(self, service: str) -> int | str:
+        count = 0
+        for _ in range(MAX_KEYCHAIN_ITEMS):
+            try:
+                r = self._reset_cmd(["security", "delete-generic-password", "-s", service])
+            except (OSError, subprocess.TimeoutExpired) as e:
+                return f"error after {count} deleted: {e}"
+            if r.returncode != 0:  # 44: no (more) items for this service
+                return count
+            count += 1
+        return f"stopped after {count} deleted (limit {MAX_KEYCHAIN_ITEMS})"
 
     # --- logs --------------------------------------------------------------
     def other_warpium_pids(self) -> set[int]:
@@ -345,6 +451,17 @@ def filter_log_lines(
             if needle is None or needle in line.lower():
                 out.append(line)
     return "\n".join(out)
+
+
+def _remove_path(path: Path) -> bool:
+    """Deletes a file or directory tree; a symlink itself is removed, never followed."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return True
+    if path.is_dir():
+        shutil.rmtree(path)
+        return True
+    return False
 
 
 def _is_debug(source: str, profile: str) -> bool:

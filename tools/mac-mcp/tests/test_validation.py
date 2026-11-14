@@ -111,6 +111,57 @@ def test_env():
     assert validate_env(None) == {}
 
 
+SHA = "c6f07bb451657e6fbce72c69ed90cfd4f86c2344"
+
+
+def test_env_warpium_test_overrides():
+    good = {
+        "WARPIUM_UPSTREAM_BASE_OVERRIDE": SHA,
+        "WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE": "v0.2026.06.03.09.49.stable_00.1",
+        "WARPIUM_IMPORT_DRY_RUN": "1",
+        "RUST_LOG": "warp=debug",
+    }
+    assert validate_env(good) == good
+    assert validate_env({"WARPIUM_UPSTREAM_BASE_OVERRIDE": SHA.upper()})
+    assert validate_env({"WARPIUM_IMPORT_DRY_RUN": "0"})
+    assert validate_env(
+        {"WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE": "v1.2025.12.31.23.59.preview_12.42"}
+    )
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("WARPIUM_UPSTREAM_BASE_OVERRIDE", SHA[:7]),
+        ("WARPIUM_UPSTREAM_BASE_OVERRIDE", SHA + "0"),
+        ("WARPIUM_UPSTREAM_BASE_OVERRIDE", SHA[:-1] + "g"),
+        ("WARPIUM_UPSTREAM_BASE_OVERRIDE", SHA + "\n"),
+        ("WARPIUM_UPSTREAM_BASE_OVERRIDE", " " + SHA),
+        ("WARPIUM_UPSTREAM_BASE_OVERRIDE", "master"),
+        ("WARPIUM_UPSTREAM_BASE_OVERRIDE", ""),
+        ("WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE", "v0.2026.06.03.09.49.stable_00"),
+        ("WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE", "v0.2026.06.03.09.49.stable_00.0"),
+        ("WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE", "0.2026.06.03.09.49.stable_00.1"),
+        ("WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE", "v0.2026.06.03.09.49.Stable_00.1"),
+        ("WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE", "v0.2026.06.03.09.49.stable_00.1\n"),
+        ("WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE", "v0.2026.06.03.09.49.stable_00.1;id"),
+        ("WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE", "v0.٢026.06.03.09.49.stable_00.1"),
+        ("WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE", "../../etc/passwd"),
+        ("WARPIUM_IMPORT_DRY_RUN", "true"),
+        ("WARPIUM_IMPORT_DRY_RUN", "2"),
+        ("WARPIUM_IMPORT_DRY_RUN", ""),
+        ("WARPIUM_IMPORT_DRY_RUN", "1 "),
+        ("WARPIUM_IMPORT_DRY_RUN", 1),
+        ("WARPIUM_FOO", "1"),
+        ("WARPIUM_UPDATE_URL", "https://evil.example"),
+        ("warpium_import_dry_run", "1"),
+    ],
+)
+def test_env_warpium_test_overrides_reject(name, value):
+    with pytest.raises(ValidationError):
+        validate_env({name: value})
+
+
 def test_app_args():
     assert validate_app_args(["--foo", "--bar=1"]) == ["--foo", "--bar=1"]
     for bad in [

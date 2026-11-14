@@ -71,7 +71,7 @@ other apps.
 | Build | `cargo build -p warp --bin warp-oss [--release] [--features ...]` | Fixed command. Profile, bin and feature names are allowlisted or validated against `app/Cargo.toml`. `CARGO_TARGET_DIR` is forced into the clone. |
 | Tests | `cargo run -p integration --bin integration -- <name>` | Test name must be registered in `crates/integration/src/bin/integration.rs`. |
 | Artifacts | `gh run download <run_id> --repo MILKA-TOP/warpium`, mount the .dmg read-only, copy the .app to `~/warpium-mac-test/apps/` | Numeric run id. The run must be a successful run of `.github/workflows/warpium-build.yml` whose head repository is `MILKA-TOP/warpium`, so pull requests from other forks are refused. The artifact is chosen from the run's artifact listing. Never writes to `/Applications`. Clears quarantine only on that private copy. Disabled by `--no-build`. |
-| App | Launch `target/<profile>/warp-oss` from the clone, or the installed test app; quit (SIGTERM/SIGKILL) | Env limited to exactly `RUST_LOG`, `RUST_BACKTRACE`, `RUST_LIB_BACKTRACE`. Args limited to `--flag[=value]`, with no positionals and no `--warpctrl`. Only processes whose executable is inside the workspace are ever targeted or killed. Your daily Warpium in `/Applications` is never touched. |
+| App | Launch `target/<profile>/warp-oss` from the clone, or the installed test app; quit (SIGTERM/SIGKILL) | Env limited to exactly `RUST_LOG`, `RUST_BACKTRACE`, `RUST_LIB_BACKTRACE` and the three value-checked `WARPIUM_*` test overrides (see below). Args limited to `--flag[=value]`, with no positionals and no `--warpctrl`. Only processes whose executable is inside the workspace are ever targeted or killed. Your daily Warpium in `/Applications` is never touched. |
 | Logs | Read `~/Library/Logs/warp-oss.log`, the launched app's stdout capture, job logs | Path jail (see below). `warp-oss.log` is shared by every oss-channel app, so it is only returned while the app this server launched is still running, no other Warpium/WarpOss process is running, and the file was created within 2 minutes of that launch (each app rotates the log at startup). `file.open` can't open it, because paths handed to the app are jailed to the workspace only. |
 | Screen | Capture **one Warpium window** at a time (`screencapture -l <window id>`) | Window must belong to a target PID. There is no full-screen capture. |
 | Input | Mouse click/scroll, key combos and text, only into Warpium | See "Input guard". Can be disabled with `--no-input`. |
@@ -83,9 +83,15 @@ TLS trust variables (`SSL_CERT_FILE`, ...) are kept too. API keys, cloud credent
 in the server's environment are not passed on. `GH_TOKEN`/`GITHUB_TOKEN` go only to the `gh`
 calls of `install_artifact`. Code
 compiled from the fork can still read your files as you; this only keeps secrets in env vars
-out of reach. `app_launch(env=...)` accepts only the three `RUST_*` logging variables. A
-`WARP_*` prefix rule would not be safe: the app reads variables that name an executable to
-spawn (`WARP_SHELL_PATH`), redirect its data (`WARP_DATA_PROFILE`) or carry secrets.
+out of reach. `app_launch(env=...)` accepts only the three `RUST_*` logging variables and
+three Warpium test overrides, each with a strict, ASCII-only value pattern matched in full:
+`WARPIUM_UPSTREAM_BASE_OVERRIDE` (exactly 40 hex digits), `WARPIUM_UPDATE_CURRENT_VERSION_OVERRIDE`
+(a version tag `vN.YYYY.MM.DD.HH.MM.channel_NN.N`) and `WARPIUM_IMPORT_DRY_RUN` (`0` or `1`).
+None of them can carry a path, URL or command; they only change which commit, version or
+dry-run mode the app's own checks use. A `WARP_*` or `WARPIUM_*` prefix rule would not be
+safe: the app reads variables that name an executable to spawn (`WARP_SHELL_PATH`), redirect
+its data (`WARP_DATA_PROFILE`) or carry secrets. The overrides are recorded in the audit log
+(the `app_launch` arguments) and in `app_status`.
 
 ## What it cannot do
 
@@ -189,6 +195,20 @@ nothing of yours on it, so inside it, and only there, the server can lift the re
   they are refused unless the dialog became frontmost, so typed text can't fall through into
   Warpium. A `window="id:<id>"` naming a Warpium window that is not the frontmost one is
   refused for keys, since keys go to the focused window.
+- **`app_reset_data(confirm=true)`:** quits the app under test, then deletes Warpium's user
+  data in the guest so first-run onboarding can be tested again: `~/.warp-oss`,
+  `~/Library/Application Support/dev.milka.Warpium`, `~/Library/Preferences/dev.milka.Warpium.plist`
+  (after `defaults delete dev.milka.Warpium`, since cfprefsd caches the domain),
+  `~/Library/Logs/warp-oss.log` and its rotated `.old*` files, each also in the `-mcp-test`
+  variant that debug builds use, and the login-keychain items of the services
+  `dev.milka.Warpium`, `dev.milka.Warpium-mcp-test` and their `.tui` variants
+  (`security delete-generic-password -s`, at most 64 per service, each call with a timeout).
+  The paths and service names are fixed in the server; the only argument is `confirm`, which
+  must be `true`. It is refused while any other Warpium/WarpOss process runs, a symlink at one
+  of the paths is removed without being followed, and nothing outside this list (Warp's own
+  data, the server's token and audit log, the workspace) is touched. Without `--vm-mode` the
+  tool does not exist, and the method refuses on its own too, because on a real Mac it would
+  delete the owner's Warpium settings, login and keychain items.
 - **What stays the same:** input to Warpium windows keeps every check of the input guard,
   system shortcuts stay refused, `--no-input` still disables all input, and every call,
   including the VM-only ones, is in the audit log. Without `--vm-mode` the tool list, tool
