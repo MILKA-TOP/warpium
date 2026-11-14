@@ -1,0 +1,24 @@
+[package]
+name = "warpium_self_update"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: checks GitHub for new Warpium releases and installs them on macOS"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+command.workspace = true
+hex.workspace = true
+libc.workspace = true
+log.workspace = true
+plist = "1"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+warpium_upstream_check.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+tempfile.workspace = true

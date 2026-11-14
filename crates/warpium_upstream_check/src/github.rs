@@ -98,7 +98,7 @@ pub(crate) fn parse_compare(body: &[u8]) -> Result<u32, String> {
 ///
 /// GitHub answers 403 or 429 when rate limited and documents `Retry-After` (seconds) and
 /// `X-RateLimit-Reset` (Unix seconds) with `X-RateLimit-Remaining: 0` as the signals.
-pub(crate) fn rate_limit_until(
+pub fn rate_limit_until(
     status: u16,
     retry_after: Option<&str>,
     remaining: Option<&str>,

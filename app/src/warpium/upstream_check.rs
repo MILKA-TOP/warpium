@@ -7,22 +7,19 @@
 //! module supplies the HTTP client, the schedule, persistence and the UI hooks.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use warp_core::user_preferences::GetUserPreferences as _;
-use warpium_upstream_check::{
-    CheckOutcome, CheckState, HttpRequest, HttpResponse, Trigger, UpstreamStatus,
-};
+use warpium_upstream_check::{CheckOutcome, CheckState, Trigger, UpstreamStatus};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::keymap::EditableBinding;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 use warpui_extras::user_preferences::UserPreferences as _;
 
-use super::show_toast;
 use super::sync_settings::{
     UPSTREAM_CHECK_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent,
 };
-use crate::channel::{Channel, ChannelState};
+use super::{fetch_github, is_warpium_channel, show_toast, unix_now};
 use crate::settings_view::ToggleSettingActionPair;
 use crate::util::bindings::BindingGroup;
 use crate::view_components::{DismissibleToast, ToastLink};
@@ -35,7 +32,6 @@ const EMBEDDED_BASE: Option<&str> = option_env!("WARPIUM_UPSTREAM_BASE");
 const BASE_OVERRIDE_ENV: &str = "WARPIUM_UPSTREAM_BASE_OVERRIDE";
 /// Private-preferences key holding the serialized [`CheckState`].
 const STATE_KEY: &str = "WarpiumUpstreamCheckState";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Checks upstream Warp for new commits and holds the latest result.
 pub(crate) struct UpstreamChecker {
@@ -69,7 +65,9 @@ pub(crate) fn init(poll: bool, ctx: &mut AppContext) {
                     ctx.notify();
                 }
                 WarpiumSettingsChangedEvent::UpstreamCheckMinCommits { .. } => ctx.notify(),
-                WarpiumSettingsChangedEvent::SyncFromWarp { .. } => {}
+                WarpiumSettingsChangedEvent::SyncFromWarp { .. }
+                | WarpiumSettingsChangedEvent::UpdateCheck { .. }
+                | WarpiumSettingsChangedEvent::UpdateCheckIntervalHours { .. } => {}
             },
         );
         UpstreamChecker::new(poll, ctx)
@@ -106,7 +104,7 @@ impl UpstreamChecker {
     fn new(polling: bool, ctx: &mut ModelContext<Self>) -> Self {
         let runtime_override = std::env::var(BASE_OVERRIDE_ENV).ok();
         let base = warpium_upstream_check::resolve_base(runtime_override.as_deref(), EMBEDDED_BASE);
-        if base.is_none() && is_supported_channel() {
+        if base.is_none() && is_warpium_channel() {
             log::info!(
                 "[Upstream check] This build has no upstream base commit; upstream checks are off"
             );
@@ -167,7 +165,7 @@ impl UpstreamChecker {
 
     /// Checks now and reports the result in a toast, whatever it is.
     pub(crate) fn check_now(&mut self, ctx: &mut ModelContext<Self>) {
-        if !is_supported_channel() {
+        if !is_warpium_channel() {
             show_toast(
                 DismissibleToast::default(
                     "Upstream Warp checks are only available in Warpium builds".to_owned(),
@@ -200,9 +198,7 @@ impl UpstreamChecker {
     }
 
     fn is_enabled(&self, ctx: &AppContext) -> bool {
-        is_supported_channel()
-            && self.base.is_some()
-            && *WarpiumSettings::as_ref(ctx).upstream_check
+        is_warpium_channel() && self.base.is_some() && *WarpiumSettings::as_ref(ctx).upstream_check
     }
 
     /// Replaces any pending scheduled check with one at the next due time, or none when checks
@@ -260,7 +256,7 @@ impl UpstreamChecker {
                     now,
                     max_backoff,
                     trigger,
-                    |request| fetch(client.clone(), request),
+                    |request| fetch_github(client.clone(), request),
                 )
                 .await;
                 (state, outcome, now)
@@ -337,61 +333,4 @@ impl UpstreamChecker {
             log::warn!("[Upstream check] Failed to save the check state: {err:#}");
         }
     }
-}
-
-/// Upstream checks are a Warpium feature; Warpium is the OSS channel.
-fn is_supported_channel() -> bool {
-    matches!(ChannelState::channel(), Channel::Oss)
-}
-
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default()
-}
-
-async fn fetch(
-    client: Arc<http_client::Client>,
-    request: HttpRequest,
-) -> Result<HttpResponse, String> {
-    let mut builder = client
-        .get(request.url.as_str())
-        // GitHub's REST API requires a User-Agent and recommends pinning the media type and
-        // version: https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .header("User-Agent", "Warpium")
-        .timeout(REQUEST_TIMEOUT);
-    if let Some(etag) = &request.if_none_match {
-        builder = builder.header("If-None-Match", etag.as_str());
-    }
-    let response = builder.send().await.map_err(|err| format!("{err:#}"))?;
-    let status = response.status().as_u16();
-    let [etag, retry_after, rate_limit_remaining, rate_limit_reset] = [
-        "etag",
-        "retry-after",
-        "x-ratelimit-remaining",
-        "x-ratelimit-reset",
-    ]
-    .map(|name| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned)
-    });
-    let body = response
-        .bytes()
-        .await
-        .map_err(|err| format!("{err:#}"))?
-        .to_vec();
-    Ok(HttpResponse {
-        status,
-        etag,
-        retry_after,
-        rate_limit_remaining,
-        rate_limit_reset,
-        body,
-    })
 }

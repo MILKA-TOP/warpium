@@ -74,7 +74,7 @@ fn banner_heading_counts_commits() {
 fn banner_description_shows_the_latest_commit_date() {
     assert_eq!(
         banner_description(&status(2, "2026-11-14T07:36:23Z")),
-        "Latest upstream commit: 2026-11-14. Merge them into the fork."
+        "Latest upstream commit: 2026-11-14. Source changes for the fork to merge; nothing to install."
     );
 }
 
@@ -82,7 +82,7 @@ fn banner_description_shows_the_latest_commit_date() {
 fn banner_description_omits_a_malformed_date() {
     assert_eq!(
         banner_description(&status(2, "yesterday")),
-        "Merge them into the fork."
+        "Source changes for the fork to merge; nothing to install."
     );
 }
 

@@ -183,7 +183,8 @@ For Macs with Apple silicon (arm64) only.
    or try to open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
 4. Launch **Warpium** from Applications or Spotlight.
 
-To update, download the new release and replace the app in Applications. Your settings are kept.
+Builds from this release on offer new Warpium releases in the app (**Update now**); you can also
+download the new release and replace the app in Applications. Your settings are kept.
 EOF
 
 if [[ -n "$checksum" ]]; then
@@ -208,7 +209,7 @@ cat <<'EOF'
 
 - Only Apple silicon (arm64) Macs are supported, and the app is ad-hoc signed, not notarized.
 - The built-in `modify-settings` agent skill is missing from downloaded builds; builds from source include it.
-- There are no automatic updates: "Check for updates" is not available, so get new versions from Releases.
+- Updates are offered in the app from GitHub Releases only; official Warp updates are never offered or installed.
 - Warpium shares `~/.warp-oss` (settings, themes, skills) with upstream Warp's open-source build.
 - Don't install it next to an upstream `WarpOss.app`: both handle `warposs://` links, so sign-in may open the wrong app.
 EOF
