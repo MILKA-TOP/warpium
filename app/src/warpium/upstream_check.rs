@@ -7,21 +7,19 @@
 //! module supplies the HTTP client, the schedule, persistence and the UI hooks.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use warp_core::user_preferences::GetUserPreferences as _;
-use warpium_upstream_check::{
-    CheckOutcome, CheckState, HttpRequest, HttpResponse, Trigger, UpstreamStatus,
-};
+use warpium_upstream_check::{CheckOutcome, CheckState, Trigger, UpstreamStatus};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::keymap::EditableBinding;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 use warpui_extras::user_preferences::UserPreferences as _;
 
-use super::show_toast;
 use super::sync_settings::{
     UPSTREAM_CHECK_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent,
 };
+use super::{fetch_github, show_toast, unix_now};
 use crate::channel::{Channel, ChannelState};
 use crate::settings_view::ToggleSettingActionPair;
 use crate::util::bindings::BindingGroup;
@@ -35,7 +33,6 @@ const EMBEDDED_BASE: Option<&str> = option_env!("WARPIUM_UPSTREAM_BASE");
 const BASE_OVERRIDE_ENV: &str = "WARPIUM_UPSTREAM_BASE_OVERRIDE";
 /// Private-preferences key holding the serialized [`CheckState`].
 const STATE_KEY: &str = "WarpiumUpstreamCheckState";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Checks upstream Warp for new commits and holds the latest result.
 pub(crate) struct UpstreamChecker {
@@ -262,7 +259,7 @@ impl UpstreamChecker {
                     now,
                     max_backoff,
                     trigger,
-                    |request| fetch(client.clone(), request),
+                    |request| fetch_github(client.clone(), request),
                 )
                 .await;
                 (state, outcome, now)
@@ -344,56 +341,4 @@ impl UpstreamChecker {
 /// Upstream checks are a Warpium feature; Warpium is the OSS channel.
 fn is_supported_channel() -> bool {
     matches!(ChannelState::channel(), Channel::Oss)
-}
-
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default()
-}
-
-async fn fetch(
-    client: Arc<http_client::Client>,
-    request: HttpRequest,
-) -> Result<HttpResponse, String> {
-    let mut builder = client
-        .get(request.url.as_str())
-        // GitHub's REST API requires a User-Agent and recommends pinning the media type and
-        // version: https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api
-        .header("Accept", "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .header("User-Agent", "Warpium")
-        .timeout(REQUEST_TIMEOUT);
-    if let Some(etag) = &request.if_none_match {
-        builder = builder.header("If-None-Match", etag.as_str());
-    }
-    let response = builder.send().await.map_err(|err| format!("{err:#}"))?;
-    let status = response.status().as_u16();
-    let [etag, retry_after, rate_limit_remaining, rate_limit_reset] = [
-        "etag",
-        "retry-after",
-        "x-ratelimit-remaining",
-        "x-ratelimit-reset",
-    ]
-    .map(|name| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned)
-    });
-    let body = response
-        .bytes()
-        .await
-        .map_err(|err| format!("{err:#}"))?
-        .to_vec();
-    Ok(HttpResponse {
-        status,
-        etag,
-        retry_after,
-        rate_limit_remaining,
-        rate_limit_reset,
-        body,
-    })
 }

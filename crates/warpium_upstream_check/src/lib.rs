@@ -18,5 +18,5 @@ pub use github::{
     rate_limit_until, resolve_base,
 };
 pub use notice::{
-    banner_description, banner_heading, check_interval, manual_report, should_notify,
+    banner_description, banner_heading, check_interval, manual_report, should_notify, wait_phrase,
 };

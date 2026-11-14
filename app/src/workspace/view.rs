@@ -22596,7 +22596,7 @@ impl Workspace {
                 None,
                 None,
             ),
-            UpdateBannerKind::Installed => (
+            UpdateBannerKind::Ready => (
                 WorkspaceBanner::WarpiumUpdateStatus,
                 BannerSeverity::Warning,
                 None,
@@ -22609,16 +22609,22 @@ impl Workspace {
             UpdateBannerKind::Failed { can_reveal_dmg } => (
                 WorkspaceBanner::WarpiumUpdateStatus,
                 BannerSeverity::Error,
-                can_reveal_dmg.then(|| {
+                Some(if can_reveal_dmg {
                     button(
                         "Reveal DMG",
                         WorkspaceAction::RevealWarpiumUpdateDmg,
                         BannerButtonVariant::Naked,
                     )
+                } else {
+                    button(
+                        "Try again",
+                        WorkspaceAction::InstallWarpiumUpdate,
+                        BannerButtonVariant::Naked,
+                    )
                 }),
                 Some(button(
                     "Download manually",
-                    WorkspaceAction::DownloadWarpiumUpdateManually,
+                    WorkspaceAction::OpenWarpiumReleaseNotes,
                     BannerButtonVariant::Outlined,
                 )),
             ),
@@ -24834,10 +24840,6 @@ impl TypedActionView for Workspace {
             RevealWarpiumUpdateDmg => {
                 #[cfg(not(target_family = "wasm"))]
                 Self::update_self_updater(ctx, |updater, _| updater.reveal_dmg());
-            }
-            DownloadWarpiumUpdateManually => {
-                #[cfg(not(target_family = "wasm"))]
-                Self::update_self_updater(ctx, |updater, ctx| updater.download_manually(ctx));
             }
             OpenLocalToCloudHandoffPane {
                 launch,

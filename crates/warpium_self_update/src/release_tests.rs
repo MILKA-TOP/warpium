@@ -24,17 +24,26 @@ fn parses_the_recorded_latest_release() {
         release,
         Release {
             tag: TAG.to_owned(),
-            dmg: ReleaseAsset {
-                name: "Warpium-v0.2026.06.03.09.49.stable_00.1-arm64.dmg".to_owned(),
-                url: "https://github.com/MILKA-TOP/warpium/releases/download/v0.2026.06.03.09.49.stable_00.1/Warpium-v0.2026.06.03.09.49.stable_00.1-arm64.dmg".to_owned(),
-                size: 162_767_155,
-            },
-            checksum: ReleaseAsset {
-                name: "Warpium-v0.2026.06.03.09.49.stable_00.1-arm64.dmg.sha256".to_owned(),
-                url: "https://github.com/MILKA-TOP/warpium/releases/download/v0.2026.06.03.09.49.stable_00.1/Warpium-v0.2026.06.03.09.49.stable_00.1-arm64.dmg.sha256".to_owned(),
-                size: 116,
-            },
+            dmg_size: 162_767_155,
         }
+    );
+}
+
+#[test]
+fn derives_the_asset_names_and_download_urls_from_the_tag() {
+    let release = parse_latest_release(LATEST_FIXTURE.as_bytes()).unwrap();
+
+    assert_eq!(
+        release.dmg_name(),
+        "Warpium-v0.2026.06.03.09.49.stable_00.1-arm64.dmg"
+    );
+    assert_eq!(
+        release.dmg_url(),
+        "https://github.com/MILKA-TOP/warpium/releases/download/v0.2026.06.03.09.49.stable_00.1/Warpium-v0.2026.06.03.09.49.stable_00.1-arm64.dmg"
+    );
+    assert_eq!(
+        release.checksum_url(),
+        "https://github.com/MILKA-TOP/warpium/releases/download/v0.2026.06.03.09.49.stable_00.1/Warpium-v0.2026.06.03.09.49.stable_00.1-arm64.dmg.sha256"
     );
 }
 
@@ -129,10 +138,7 @@ fn picks_the_assets_of_the_release_tag_among_others() {
 
     let release = parse_latest_release(&body).unwrap();
 
-    assert_eq!(
-        release.dmg.name,
-        "Warpium-v0.2026.06.03.09.49.stable_00.1-arm64.dmg"
-    );
+    assert_eq!(release.dmg_size, 10);
 }
 
 #[test]
@@ -166,7 +172,7 @@ fn download_urls_ignore_the_urls_in_the_response() {
     let release = parse_latest_release(body.to_string().as_bytes()).unwrap();
 
     assert_eq!(
-        release.dmg.url,
+        release.dmg_url(),
         "https://github.com/MILKA-TOP/warpium/releases/download/v0.2026.06.03.09.49.stable_00.1/Warpium-v0.2026.06.03.09.49.stable_00.1-arm64.dmg"
     );
 }

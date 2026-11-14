@@ -61,7 +61,8 @@ fn commits_phrase(ahead_by: u32) -> String {
     }
 }
 
-fn wait_phrase(seconds: u64) -> String {
+/// How long to wait, rounded up to minutes or hours, for a message.
+pub fn wait_phrase(seconds: u64) -> String {
     let minutes = seconds.div_ceil(60).max(1);
     match minutes {
         1 => "1 minute".to_owned(),

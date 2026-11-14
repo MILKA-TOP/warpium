@@ -1,9 +1,9 @@
 //! Installs a downloaded, checksum-verified Warpium disk image over the running app bundle.
 //!
-//! The new bundle is copied out of the read-only mounted image to a hidden sibling of the running
-//! bundle (same volume, so the swap is a rename), verified, and atomically swapped into place.
-//! The old bundle is kept next to it as a backup until the new version has launched. Any failure
-//! before the swap leaves the running app untouched.
+//! [`prepare`] copies the new bundle out of the read-only mounted image to a hidden sibling of the
+//! running bundle (same volume, so the swap is a rename) and verifies it; any failure leaves the
+//! running app untouched. [`swap_bundles`] atomically exchanges the two right before the app
+//! relaunches, and the old bundle is kept as a backup until the new version has launched.
 
 use command::blocking::Command;
 use std::fs::{self, OpenOptions};
@@ -16,7 +16,7 @@ use crate::version::WarpiumVersion;
 pub const BUNDLE_ID: &str = "dev.milka.Warpium";
 
 const BACKUP_SUFFIX: &str = "-previous.app";
-const STAGING_SUFFIX: &str = "-update.app";
+const STAGING_INFIX: &str = "-update-";
 
 /// The external tools an install uses. [`MacTools`] runs the real macOS commands.
 pub trait InstallTools {
@@ -85,7 +85,7 @@ fn run(command: &mut Command) -> Result<(), String> {
     ))
 }
 
-pub struct InstallRequest<'a> {
+pub struct PrepareRequest<'a> {
     /// The downloaded disk image, already checked against the release's SHA-256.
     pub dmg: &'a Path,
     /// The release being installed; the new bundle must carry its version.
@@ -94,12 +94,14 @@ pub struct InstallRequest<'a> {
     pub bundle: &'a Path,
     /// Where to mount the image; it must not be in use.
     pub mountpoint: &'a Path,
+    /// Distinguishes this process's staged copy from another running instance's.
+    pub process_id: u32,
 }
 
+/// A verified copy of the new app next to the running bundle, ready for [`swap_bundles`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Installed {
-    /// The previous app bundle, to delete once the new version has launched.
-    pub backup: PathBuf,
+pub struct Prepared {
+    pub staged: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -152,11 +154,12 @@ impl InstallError {
     }
 }
 
-/// Installs the disk image over the running bundle. Blocking; run it off the main thread.
-pub fn install(
-    request: &InstallRequest,
+/// Copies the new app out of the disk image to a hidden sibling of the running bundle and
+/// verifies it, leaving the running app untouched. Blocking; run it off the main thread.
+pub fn prepare(
+    request: &PrepareRequest,
     tools: &dyn InstallTools,
-) -> Result<Installed, InstallError> {
+) -> Result<Prepared, InstallError> {
     let bundle = request.bundle;
     let (parent, stem) = bundle_location(bundle)?;
     check_writable(parent, bundle)?;
@@ -171,7 +174,7 @@ pub fn install(
     let source = find_app(mount.mountpoint, request.version)?;
 
     let mut staged = StagedBundle {
-        path: parent.join(format!(".{stem}{STAGING_SUFFIX}")),
+        path: parent.join(format!(".{stem}{STAGING_INFIX}{}.app", request.process_id)),
         armed: true,
     };
     remove_dir_if_exists(&staged.path)
@@ -186,39 +189,97 @@ pub fn install(
     if let Err(err) = tools.clear_quarantine(&staged.path) {
         log::warn!("[Warpium update] Couldn't clear the quarantine attribute: {err}");
     }
+    staged.armed = false;
+    Ok(Prepared {
+        staged: staged.path.clone(),
+    })
+}
 
-    swap(&staged.path, bundle).map_err(|err| match err.kind() {
+/// Atomically exchanges the staged copy with the running bundle: afterwards the bundle path holds
+/// the new version and `staged` the previous one. Calling it again undoes it.
+pub fn swap_bundles(staged: &Path, bundle: &Path) -> Result<(), InstallError> {
+    let (parent, _) = bundle_location(bundle)?;
+    swap(staged, bundle).map_err(|err| match err.kind() {
         io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => {
             InstallError::NotWritable(parent.to_owned())
         }
         _ => InstallError::Swap(err.to_string()),
-    })?;
-    // The staged path now holds the previous version.
-    staged.armed = false;
-
-    let backup = parent.join(format!(".{stem}{BACKUP_SUFFIX}"));
-    let backup = match replace_dir(&staged.path, &backup) {
-        Ok(()) => backup,
-        Err(err) => {
-            log::warn!("[Warpium update] Couldn't rename the previous version's backup: {err}");
-            staged.path.clone()
-        }
-    };
-    drop(mount);
-    Ok(Installed { backup })
+    })
 }
 
-/// Deletes a backup made by [`install`]. Refuses paths that aren't one, so a corrupted saved
-/// path can't delete anything else.
+/// Where the previous version is kept after an update, until the new one has launched.
+pub fn backup_path(bundle: &Path) -> Option<PathBuf> {
+    let (parent, stem) = bundle_location(bundle).ok()?;
+    Some(parent.join(format!(".{stem}{BACKUP_SUFFIX}")))
+}
+
+/// Renames the previous version (at the staged path after [`swap_bundles`]) to
+/// [`backup_path`], replacing an older backup.
+pub fn keep_as_backup(previous: &Path, bundle: &Path) -> io::Result<PathBuf> {
+    let backup = backup_path(bundle)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not an app bundle"))?;
+    replace_dir(previous, &backup)?;
+    Ok(backup)
+}
+
+/// Staged copies next to `bundle` left by processes that are no longer running (a failed or
+/// abandoned update). `is_running` tells whether a process id is alive.
+pub fn abandoned_staged_copies(bundle: &Path, is_running: impl Fn(u32) -> bool) -> Vec<PathBuf> {
+    let Ok((parent, stem)) = bundle_location(bundle) else {
+        return Vec::new();
+    };
+    let prefix = format!(".{stem}{STAGING_INFIX}");
+    let Ok(entries) = fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let mut abandoned: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.strip_prefix(&prefix))
+                .and_then(|rest| rest.strip_suffix(".app"))
+                .and_then(|pid| pid.parse::<u32>().ok())
+                .is_some_and(|pid| !is_running(pid))
+        })
+        .map(|entry| entry.path())
+        .collect();
+    abandoned.sort();
+    abandoned
+}
+
+/// Whether a process with this id is alive. Errs on the side of "running" where it can't tell,
+/// so nothing that might be in use is deleted.
+pub fn process_is_running(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return true;
+        };
+        // SAFETY: signal 0 only checks whether the process exists; nothing is sent.
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+/// Deletes a backup or staged copy made by this module. Refuses paths that aren't one, so a
+/// corrupted path can't delete anything else.
 pub fn remove_backup(path: &Path) -> io::Result<()> {
-    let is_backup = path
+    let is_ours = path
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| {
             name.starts_with('.')
-                && (name.ends_with(BACKUP_SUFFIX) || name.ends_with(STAGING_SUFFIX))
+                && name.ends_with(".app")
+                && (name.ends_with(BACKUP_SUFFIX) || name.contains(STAGING_INFIX))
         });
-    if !is_backup {
+    if !is_ours {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "not a Warpium update backup",

@@ -15,15 +15,15 @@ mod version;
 pub use check::{CheckError, CheckOutcome, CheckState, next_check_delay, run_check};
 pub use checksum::{ChecksumError, Sha256Hasher, parse_checksum_file};
 pub use install::{
-    BUNDLE_ID, InstallError, InstallRequest, InstallTools, Installed, MacTools, install,
-    remove_backup,
+    BUNDLE_ID, InstallError, InstallTools, MacTools, PrepareRequest, Prepared,
+    abandoned_staged_copies, backup_path, keep_as_backup, prepare, process_is_running,
+    remove_backup, swap_bundles,
 };
 pub use notice::{
     banner_description, banner_heading, manual_report, progress_percent, update_to_offer,
 };
 pub use release::{
-    RELEASE_REPO, Release, ReleaseAsset, ReleaseError, dmg_asset_name, parse_latest_release,
-    release_page_url,
+    RELEASE_REPO, Release, ReleaseError, dmg_asset_name, parse_latest_release, release_page_url,
 };
 pub use version::{WarpiumVersion, resolve_current_version};
 pub use warpium_upstream_check::{HttpRequest, HttpResponse, Trigger, check_interval};

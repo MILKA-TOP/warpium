@@ -1,5 +1,7 @@
 //! What the app tells the user about a check.
 
+use warpium_upstream_check::wait_phrase;
+
 use crate::check::{CheckError, CheckOutcome};
 use crate::release::Release;
 use crate::version::WarpiumVersion;
@@ -23,7 +25,7 @@ pub fn banner_heading(current: &WarpiumVersion, release: &Release) -> String {
 }
 
 pub fn banner_description() -> &'static str {
-    "Install it now; Warpium restarts when it's done."
+    "Update now downloads and checks it in the background; you choose when to restart."
 }
 
 /// The result of a manual check, phrased for a toast.
@@ -47,18 +49,6 @@ pub fn manual_report(current: &WarpiumVersion, outcome: &CheckOutcome, now: u64)
 /// Download progress as a whole percentage, or `None` when the total size is unknown.
 pub fn progress_percent(received: u64, total: u64) -> Option<u8> {
     (total > 0).then(|| (received.min(total) * 100 / total) as u8)
-}
-
-fn wait_phrase(seconds: u64) -> String {
-    let minutes = seconds.div_ceil(60).max(1);
-    match minutes {
-        1 => "1 minute".to_owned(),
-        m if m < 60 => format!("{m} minutes"),
-        m => match m.div_ceil(60) {
-            1 => "1 hour".to_owned(),
-            hours => format!("{hours} hours"),
-        },
-    }
 }
 
 #[cfg(test)]

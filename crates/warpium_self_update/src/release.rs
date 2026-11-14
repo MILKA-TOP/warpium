@@ -18,29 +18,22 @@ pub fn release_page_url(tag: &str) -> String {
     format!("https://github.com/{RELEASE_REPO}/releases/tag/{tag}")
 }
 
-/// A downloadable release asset.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReleaseAsset {
-    pub name: String,
-    /// Built from the tag and the name rather than taken from the response, so a download can
-    /// only ever come from this repository's releases.
-    pub url: String,
-    /// Size in bytes as reported by GitHub; 0 when unknown.
-    pub size: u64,
-}
-
 /// A published Warpium release that can be installed.
+///
+/// Asset names and download URLs are derived from the tag rather than taken from GitHub's
+/// response (or from saved state), so a download can only ever come from this repository's
+/// releases. Callers download only releases whose [`Release::version`] parses, which limits the
+/// tag to the characters of a Warpium version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Release {
     pub tag: String,
-    pub dmg: ReleaseAsset,
-    /// The `shasum -a 256` file for [`Release::dmg`].
-    pub checksum: ReleaseAsset,
+    /// Size of the disk image in bytes as reported by GitHub; 0 when unknown.
+    pub dmg_size: u64,
 }
 
 impl Release {
     /// The parsed version. Always `Some` for a release produced by [`parse_latest_release`];
-    /// `None` only for a hand-edited saved state.
+    /// `None` only for a corrupted saved state.
     pub fn version(&self) -> Option<WarpiumVersion> {
         WarpiumVersion::parse(&self.tag)
     }
@@ -48,6 +41,27 @@ impl Release {
     pub fn page_url(&self) -> String {
         release_page_url(&self.tag)
     }
+
+    pub fn dmg_name(&self) -> String {
+        dmg_asset_name(&self.tag)
+    }
+
+    /// The disk image's `shasum -a 256` file.
+    pub fn checksum_name(&self) -> String {
+        format!("{}.sha256", self.dmg_name())
+    }
+
+    pub fn dmg_url(&self) -> String {
+        asset_url(&self.tag, &self.dmg_name())
+    }
+
+    pub fn checksum_url(&self) -> String {
+        asset_url(&self.tag, &self.checksum_name())
+    }
+}
+
+fn asset_url(tag: &str, name: &str) -> String {
+    format!("https://github.com/{RELEASE_REPO}/releases/download/{tag}/{name}")
 }
 
 /// Why a `releases/latest` response doesn't describe an installable release.
@@ -114,31 +128,32 @@ pub fn parse_latest_release(body: &[u8]) -> Result<Release, ReleaseError> {
     }
     let version = WarpiumVersion::parse(&response.tag_name)
         .ok_or_else(|| ReleaseError::MalformedTag(response.tag_name.clone()))?;
-    let tag = version.tag().to_owned();
-
-    let dmg_name = dmg_asset_name(&tag);
-    let checksum_name = format!("{dmg_name}.sha256");
-    let dmg = select_asset(&tag, &response.assets, &dmg_name)?;
-    let checksum = select_asset(&tag, &response.assets, &checksum_name)?;
-    Ok(Release { tag, dmg, checksum })
+    let release = Release {
+        tag: version.tag().to_owned(),
+        dmg_size: 0,
+    };
+    let dmg = select_asset(&release.tag, &response.assets, &release.dmg_name())?;
+    select_asset(&release.tag, &response.assets, &release.checksum_name())?;
+    Ok(Release {
+        dmg_size: dmg.size,
+        ..release
+    })
 }
 
-fn select_asset(
+fn select_asset<'a>(
     tag: &str,
-    assets: &[AssetResponse],
+    assets: &'a [AssetResponse],
     name: &str,
-) -> Result<ReleaseAsset, ReleaseError> {
+) -> Result<&'a AssetResponse, ReleaseError> {
     assets
         .iter()
         // Assets still uploading are listed with another state and can't be downloaded yet.
-        .find(|asset| asset.name == name && asset.state.as_deref().is_none_or(|s| s == "uploaded"))
-        .map(|asset| ReleaseAsset {
-            name: asset.name.clone(),
-            url: format!(
-                "https://github.com/{RELEASE_REPO}/releases/download/{tag}/{}",
-                asset.name
-            ),
-            size: asset.size,
+        .find(|asset| {
+            asset.name == name
+                && asset
+                    .state
+                    .as_deref()
+                    .is_none_or(|state| state == "uploaded")
         })
         .ok_or_else(|| ReleaseError::MissingAsset {
             tag: tag.to_owned(),

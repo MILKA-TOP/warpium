@@ -1,5 +1,4 @@
 use super::*;
-use crate::release::ReleaseAsset;
 
 const CURRENT: &str = "v0.2026.06.03.09.49.stable_00.2";
 const NOW: u64 = 1_000_000;
@@ -9,15 +8,9 @@ fn version(tag: &str) -> WarpiumVersion {
 }
 
 fn release(tag: &str) -> Release {
-    let asset = |name: &str| ReleaseAsset {
-        name: name.to_owned(),
-        url: format!("https://github.com/MILKA-TOP/warpium/releases/download/{tag}/{name}"),
-        size: 1,
-    };
     Release {
         tag: tag.to_owned(),
-        dmg: asset("Warpium.dmg"),
-        checksum: asset("Warpium.dmg.sha256"),
+        dmg_size: 1,
     }
 }
 

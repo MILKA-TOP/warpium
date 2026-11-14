@@ -128,17 +128,22 @@ impl Fixture {
         self.dir.path().join("mnt")
     }
 
-    fn install(&self, tools: &FakeTools) -> Result<Installed, InstallError> {
+    fn staged(&self) -> PathBuf {
+        self.apps().join(".Warpium-update-42.app")
+    }
+
+    fn prepare(&self, tools: &FakeTools) -> Result<Prepared, InstallError> {
         let version = WarpiumVersion::parse(NEW_TAG).unwrap();
         let bundle = self.bundle();
         let image = self.dir.path().join("image");
         let mountpoint = self.mountpoint();
-        install(
-            &InstallRequest {
+        prepare(
+            &PrepareRequest {
                 dmg: &image,
                 version: &version,
                 bundle: &bundle,
                 mountpoint: &mountpoint,
+                process_id: 42,
             },
             tools,
         )
@@ -155,22 +160,15 @@ impl Fixture {
 }
 
 #[test]
-fn swaps_in_the_new_app_and_keeps_the_old_one_as_a_backup() {
+fn prepares_a_verified_copy_next_to_the_app_without_touching_it() {
     let fixture = Fixture::new(BUNDLE_ID, NEW_PLIST_VERSION);
     let tools = FakeTools::default();
 
-    let installed = fixture.install(&tools).unwrap();
+    let prepared = fixture.prepare(&tools).unwrap();
 
-    assert_eq!(marker(&fixture.bundle()), "new");
-    assert_eq!(
-        installed.backup,
-        fixture.apps().join(".Warpium-previous.app")
-    );
-    assert_eq!(marker(&installed.backup), "old");
-    assert_eq!(
-        fixture.app_dir_entries(),
-        vec![".Warpium-previous.app", "Warpium.app"]
-    );
+    assert_eq!(prepared.staged, fixture.staged());
+    assert_eq!(marker(&prepared.staged), "new");
+    assert_eq!(marker(&fixture.bundle()), "old");
 }
 
 #[test]
@@ -178,13 +176,49 @@ fn clears_quarantine_on_the_new_app_and_detaches_the_image() {
     let fixture = Fixture::new(BUNDLE_ID, NEW_PLIST_VERSION);
     let tools = FakeTools::default();
 
-    fixture.install(&tools).unwrap();
+    fixture.prepare(&tools).unwrap();
 
-    assert_eq!(
-        *tools.unquarantined.borrow(),
-        vec![fixture.apps().join(".Warpium-update.app")]
-    );
+    assert_eq!(*tools.unquarantined.borrow(), vec![fixture.staged()]);
     assert_eq!(*tools.detached.borrow(), vec![fixture.mountpoint()]);
+}
+
+#[test]
+fn swapping_puts_the_new_app_in_place_and_the_old_one_at_the_staged_path() {
+    let fixture = Fixture::new(BUNDLE_ID, NEW_PLIST_VERSION);
+    let prepared = fixture.prepare(&FakeTools::default()).unwrap();
+
+    swap_bundles(&prepared.staged, &fixture.bundle()).unwrap();
+
+    assert_eq!(marker(&fixture.bundle()), "new");
+    assert_eq!(marker(&prepared.staged), "old");
+}
+
+#[test]
+fn swapping_again_restores_the_old_app() {
+    let fixture = Fixture::new(BUNDLE_ID, NEW_PLIST_VERSION);
+    let prepared = fixture.prepare(&FakeTools::default()).unwrap();
+    swap_bundles(&prepared.staged, &fixture.bundle()).unwrap();
+
+    swap_bundles(&prepared.staged, &fixture.bundle()).unwrap();
+
+    assert_eq!(marker(&fixture.bundle()), "old");
+    assert_eq!(marker(&prepared.staged), "new");
+}
+
+#[test]
+fn keeps_the_previous_version_as_the_backup() {
+    let fixture = Fixture::new(BUNDLE_ID, NEW_PLIST_VERSION);
+    let prepared = fixture.prepare(&FakeTools::default()).unwrap();
+    swap_bundles(&prepared.staged, &fixture.bundle()).unwrap();
+
+    let backup = keep_as_backup(&prepared.staged, &fixture.bundle()).unwrap();
+
+    assert_eq!(backup, fixture.apps().join(".Warpium-previous.app"));
+    assert_eq!(marker(&backup), "old");
+    assert_eq!(
+        fixture.app_dir_entries(),
+        vec![".Warpium-previous.app", "Warpium.app"]
+    );
 }
 
 #[test]
@@ -196,10 +230,12 @@ fn replaces_an_earlier_backup() {
         "0.2026.01.01.00.00.00.1",
         "ancient",
     );
+    let prepared = fixture.prepare(&FakeTools::default()).unwrap();
+    swap_bundles(&prepared.staged, &fixture.bundle()).unwrap();
 
-    let installed = fixture.install(&FakeTools::default()).unwrap();
+    let backup = keep_as_backup(&prepared.staged, &fixture.bundle()).unwrap();
 
-    assert_eq!(marker(&installed.backup), "old");
+    assert_eq!(marker(&backup), "old");
 }
 
 #[test]
@@ -207,8 +243,9 @@ fn installs_outside_applications() {
     // The fixture's app folder is a temp dir, not /Applications; this pins that nothing
     // assumes otherwise.
     let fixture = Fixture::new(BUNDLE_ID, NEW_PLIST_VERSION);
+    let prepared = fixture.prepare(&FakeTools::default()).unwrap();
 
-    fixture.install(&FakeTools::default()).unwrap();
+    swap_bundles(&prepared.staged, &fixture.bundle()).unwrap();
 
     assert_eq!(marker(&fixture.bundle()), "new");
 }
@@ -218,7 +255,7 @@ fn refuses_an_image_with_another_bundle_id_and_keeps_the_old_app() {
     let fixture = Fixture::new("dev.warp.Warp-Stable", NEW_PLIST_VERSION);
     let tools = FakeTools::default();
 
-    let err = fixture.install(&tools).unwrap_err();
+    let err = fixture.prepare(&tools).unwrap_err();
 
     assert_eq!(
         err,
@@ -235,7 +272,7 @@ fn refuses_an_image_with_another_bundle_id_and_keeps_the_old_app() {
 fn refuses_an_image_with_another_version_and_keeps_the_old_app() {
     let fixture = Fixture::new(BUNDLE_ID, "0.2026.06.03.09.49.00.3");
 
-    let err = fixture.install(&FakeTools::default()).unwrap_err();
+    let err = fixture.prepare(&FakeTools::default()).unwrap_err();
 
     assert_eq!(
         err,
@@ -252,7 +289,7 @@ fn refuses_an_image_without_an_app() {
     let fixture = Fixture::new(BUNDLE_ID, NEW_PLIST_VERSION);
     fs::remove_dir_all(fixture.dir.path().join("image/Warpium.app")).unwrap();
 
-    let err = fixture.install(&FakeTools::default()).unwrap_err();
+    let err = fixture.prepare(&FakeTools::default()).unwrap_err();
 
     assert_eq!(err, InstallError::AppNotFound);
 }
@@ -265,7 +302,7 @@ fn refuses_an_invalid_signature_and_removes_the_staged_copy() {
         ..Default::default()
     };
 
-    let err = fixture.install(&tools).unwrap_err();
+    let err = fixture.prepare(&tools).unwrap_err();
 
     assert_eq!(
         err,
@@ -283,7 +320,7 @@ fn reports_a_mount_failure_and_keeps_the_old_app() {
         ..Default::default()
     };
 
-    let err = fixture.install(&tools).unwrap_err();
+    let err = fixture.prepare(&tools).unwrap_err();
 
     assert_eq!(
         err,
@@ -299,12 +336,13 @@ fn refuses_to_run_outside_an_app_bundle() {
     let dir = tempfile::tempdir().unwrap();
     let bundle = dir.path().join("target/debug");
 
-    let err = install(
-        &InstallRequest {
+    let err = prepare(
+        &PrepareRequest {
             dmg: &dir.path().join("image"),
             version: &version,
             bundle: &bundle,
             mountpoint: &dir.path().join("mnt"),
+            process_id: 42,
         },
         &FakeTools::default(),
     )
@@ -319,12 +357,13 @@ fn refuses_a_translocated_app() {
     let version = WarpiumVersion::parse(NEW_TAG).unwrap();
     let bundle = PathBuf::from("/private/var/folders/xy/AppTranslocation/1234/d/Warpium.app");
 
-    let err = install(
-        &InstallRequest {
+    let err = prepare(
+        &PrepareRequest {
             dmg: Path::new("/tmp/Warpium.dmg"),
             version: &version,
             bundle: &bundle,
             mountpoint: Path::new("/tmp/mnt"),
+            process_id: 42,
         },
         &FakeTools::default(),
     )
@@ -346,7 +385,7 @@ fn refuses_a_read_only_location_and_keeps_the_old_app() {
     fs::set_permissions(fixture.apps(), fs::Permissions::from_mode(0o555)).unwrap();
     let tools = FakeTools::default();
 
-    let err = fixture.install(&tools).unwrap_err();
+    let err = fixture.prepare(&tools).unwrap_err();
     fs::set_permissions(fixture.apps(), fs::Permissions::from_mode(0o755)).unwrap();
 
     assert_eq!(err, InstallError::NotWritable(fixture.apps()));
@@ -359,6 +398,36 @@ fn refuses_a_read_only_location_and_keeps_the_old_app() {
 }
 
 #[test]
+fn finds_staged_copies_of_processes_that_are_gone() {
+    let fixture = Fixture::new(BUNDLE_ID, NEW_PLIST_VERSION);
+    for name in [
+        ".Warpium-update-7.app",
+        ".Warpium-update-8.app",
+        ".Warpium-previous.app",
+        ".Other-update-7.app",
+    ] {
+        write_app(
+            &fixture.apps().join(name),
+            BUNDLE_ID,
+            OLD_PLIST_VERSION,
+            "x",
+        );
+    }
+
+    let abandoned = abandoned_staged_copies(&fixture.bundle(), |pid| pid == 8);
+
+    assert_eq!(
+        abandoned,
+        vec![fixture.apps().join(".Warpium-update-7.app")]
+    );
+}
+
+#[test]
+fn this_process_is_running() {
+    assert!(process_is_running(std::process::id()));
+}
+
+#[test]
 fn removes_a_backup() {
     let dir = tempfile::tempdir().unwrap();
     let backup = dir.path().join(".Warpium-previous.app");
@@ -367,6 +436,17 @@ fn removes_a_backup() {
     remove_backup(&backup).unwrap();
 
     assert!(!backup.exists());
+}
+
+#[test]
+fn removes_a_staged_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let staged = dir.path().join(".Warpium-update-7.app");
+    write_app(&staged, BUNDLE_ID, NEW_PLIST_VERSION, "new");
+
+    remove_backup(&staged).unwrap();
+
+    assert!(!staged.exists());
 }
 
 #[test]

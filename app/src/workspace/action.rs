@@ -886,18 +886,17 @@ pub enum WorkspaceAction {
     CheckForWarpiumUpdates,
     /// Warpium: toggles the automatic check for new Warpium releases.
     ToggleWarpiumUpdateCheck,
-    /// Warpium: downloads and installs the offered Warpium release, then relaunches.
+    /// Warpium: downloads, verifies and stages the offered (or failed) Warpium release.
     InstallWarpiumUpdate,
-    /// Warpium: opens the release notes of the offered or installing Warpium release.
+    /// Warpium: opens the release page (notes and disk image) of the offered or installing
+    /// Warpium release.
     OpenWarpiumReleaseNotes,
     /// Warpium: stops offering the offered Warpium release.
     SkipWarpiumUpdate,
-    /// Warpium: quits and starts the installed Warpium update.
+    /// Warpium: swaps in the staged Warpium update and relaunches.
     RestartForWarpiumUpdate,
     /// Warpium: shows the downloaded Warpium disk image in Finder after an update failed.
     RevealWarpiumUpdateDmg,
-    /// Warpium: opens the release page to download a Warpium update by hand.
-    DownloadWarpiumUpdateManually,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1244,7 +1243,6 @@ impl WorkspaceAction {
             | SkipWarpiumUpdate
             | RestartForWarpiumUpdate
             | RevealWarpiumUpdateDmg
-            | DownloadWarpiumUpdateManually
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }
