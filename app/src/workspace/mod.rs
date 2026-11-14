@@ -113,6 +113,8 @@ pub fn init(app: &mut AppContext) {
     lsp::init(app);
     #[cfg(not(target_family = "wasm"))]
     crate::warpium::warp_import::init_bindings(app);
+    #[cfg(not(target_family = "wasm"))]
+    crate::warpium::upstream_check::init_bindings(app);
 
     app.register_fixed_bindings([FixedBinding::empty(
         "Dump debug info",

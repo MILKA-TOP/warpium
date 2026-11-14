@@ -874,6 +874,14 @@ pub enum WorkspaceAction {
     ImportSettingsFromWarp,
     /// Warpium: toggles whether configuration is imported from Warp on every launch.
     ToggleSyncFromWarp,
+    /// Warpium: checks upstream Warp for new commits now and reports the result.
+    CheckForUpstreamWarpUpdates,
+    /// Warpium: toggles the automatic check for new upstream Warp commits.
+    ToggleUpstreamCheck,
+    /// Warpium: opens the upstream commits this build lacks on GitHub.
+    ViewUpstreamWarpChanges,
+    /// Warpium: opens the fork on GitHub, where its "Sync fork" button is.
+    OpenWarpiumForkOnGitHub,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1209,6 +1217,10 @@ impl WorkspaceAction {
             | OpenSettingsFile
             | ImportSettingsFromWarp
             | ToggleSyncFromWarp
+            | CheckForUpstreamWarpUpdates
+            | ToggleUpstreamCheck
+            | ViewUpstreamWarpChanges
+            | OpenWarpiumForkOnGitHub
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }

@@ -775,6 +775,8 @@ pub enum WorkspaceBanner {
     WaylandCrashRecovery,
     /// to display when settings.toml has errors (parse failure or invalid values)
     InvalidSettings,
+    /// Warpium: to display when upstream Warp has commits this build lacks
+    UpstreamWarpUpdate,
 }
 
 impl WorkspaceBanner {
@@ -791,6 +793,7 @@ impl WorkspaceBanner {
             #[cfg(target_os = "linux")]
             Self::WaylandCrashRecovery => true,
             Self::InvalidSettings => true,
+            Self::UpstreamWarpUpdate => true,
         }
     }
 }
@@ -2989,6 +2992,14 @@ impl Workspace {
         ctx.observe(&RelaunchModel::handle(ctx), |_, _, ctx| {
             ctx.notify();
         });
+
+        #[cfg(not(target_family = "wasm"))]
+        if ctx.has_singleton_model::<crate::warpium::upstream_check::UpstreamChecker>() {
+            ctx.observe(
+                &crate::warpium::upstream_check::UpstreamChecker::handle(ctx),
+                |_, _, ctx| ctx.notify(),
+            );
+        }
 
         let changelog_model = ChangelogModel::handle(ctx);
         ctx.subscribe_to_model(&changelog_model, |me, _, event, ctx| {
@@ -22455,6 +22466,9 @@ impl Workspace {
             .or_else(|| self.render_settings_error_banner(app))
             .or_else(|| self.render_autoupdate_banner_element(app));
 
+        #[cfg(not(target_family = "wasm"))]
+        let banner_fields = banner_fields.or_else(|| Self::upstream_warp_update_banner(app));
+
         #[cfg(enable_crash_recovery)]
         let banner_fields = banner_fields.or_else(|| crash_recovery::banner_metadata(app));
 
@@ -22488,6 +22502,37 @@ impl Workspace {
             button: Some(WorkspaceBannerButtonDetails {
                 text: "Open file".to_owned(),
                 action: WorkspaceAction::OpenSettingsFile,
+                variant: BannerButtonVariant::Outlined,
+                icon: None,
+                more_info_button_action: None,
+            }),
+        })
+    }
+
+    /// Warpium: offers to sync the fork when upstream Warp has new commits.
+    #[cfg(not(target_family = "wasm"))]
+    fn upstream_warp_update_banner(app: &AppContext) -> Option<WorkspaceBannerFields> {
+        use crate::warpium::upstream_check::UpstreamChecker;
+
+        if !app.has_singleton_model::<UpstreamChecker>() {
+            return None;
+        }
+        let status = UpstreamChecker::as_ref(app).notice(app)?;
+        Some(WorkspaceBannerFields {
+            banner_type: WorkspaceBanner::UpstreamWarpUpdate,
+            severity: BannerSeverity::Warning,
+            heading: Some(warpium_upstream_check::banner_heading(status)),
+            description: warpium_upstream_check::banner_description(status),
+            secondary_button: Some(WorkspaceBannerButtonDetails {
+                text: "View changes".to_owned(),
+                action: WorkspaceAction::ViewUpstreamWarpChanges,
+                variant: BannerButtonVariant::Naked,
+                icon: None,
+                more_info_button_action: None,
+            }),
+            button: Some(WorkspaceBannerButtonDetails {
+                text: "Sync fork".to_owned(),
+                action: WorkspaceAction::OpenWarpiumForkOnGitHub,
                 variant: BannerButtonVariant::Outlined,
                 icon: None,
                 more_info_button_action: None,
@@ -22872,6 +22917,11 @@ impl Workspace {
             WorkspaceBanner::InvalidSettings => {
                 self.settings_error_banner_dismissed = true;
                 self.sync_settings_error_state_into_settings_pane(ctx);
+            }
+            WorkspaceBanner::UpstreamWarpUpdate => {
+                #[cfg(not(target_family = "wasm"))]
+                crate::warpium::upstream_check::UpstreamChecker::handle(ctx)
+                    .update(ctx, |checker, ctx| checker.dismiss(ctx));
             }
         }
         ctx.notify();
@@ -24561,6 +24611,31 @@ impl TypedActionView for Workspace {
                 );
                 ctx.notify();
             }
+            CheckForUpstreamWarpUpdates => {
+                #[cfg(not(target_family = "wasm"))]
+                crate::warpium::upstream_check::UpstreamChecker::handle(ctx)
+                    .update(ctx, |checker, ctx| checker.check_now(ctx));
+            }
+            ToggleUpstreamCheck => {
+                crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.upstream_check.toggle_and_save_value(ctx));
+                    },
+                );
+                ctx.notify();
+            }
+            ViewUpstreamWarpChanges => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    let url =
+                        crate::warpium::upstream_check::UpstreamChecker::as_ref(ctx).compare_url();
+                    if let Some(url) = url {
+                        ctx.open_url(&url);
+                    }
+                }
+            }
+            OpenWarpiumForkOnGitHub => ctx.open_url(warpium_upstream_check::FORK_URL),
             OpenLocalToCloudHandoffPane {
                 launch,
                 environment_id,
@@ -26858,6 +26933,11 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::SYNC_FROM_WARP_CONTEXT_FLAG);
+        }
+        if *crate::warpium::sync_settings::WarpiumSettings::as_ref(app).upstream_check {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::UPSTREAM_CHECK_CONTEXT_FLAG);
         }
 
         if self.team_uid(app).is_some() {

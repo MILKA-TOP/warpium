@@ -1,0 +1,47 @@
+{
+  "name": "master",
+  "commit": {
+    "sha": "c6f07bb451657e6fbce72c69ed90cfd4f86c2344",
+    "node_id": "C_kwDOFua7VtoAKGM2ZjA3YmI0NTE2NTdlNmZiY2U3MmM2OWVkOTBjZmQ0Zjg2YzIzNDQ",
+    "commit": {
+      "author": {
+        "name": "warp-agent-staging[bot]",
+        "email": "dev@example.com",
+        "date": "2026-11-14T07:36:23Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "dev@example.com",
+        "date": "2026-11-14T07:36:23Z"
+      },
+      "message": "Enable LRC activity signals for Preview and Dogfood (#16578)\n\n## Description\nEnable long-running command activity sampling in Preview, so silent but\nactive commands provide liveness evidence before cancellation. Dogfood\ninherits Preview flags; Stable defaults remain unchanged.\n\nCompanion server gate:\nhttps://github.com/warpdotdev/warp-server/pull/20338.\n\n## Linked Issue\nApproved request:\nhttps://warpdev.slack.com/archives/C0BDQDW8V5E/p1792514884544119.\n- [ ] The linked issue is labeled `ready-to-spec` or\n`ready-to-implement`. — Slack-approved rollout; no linked issue.\n- [ ] Where appropriate, screenshots or a short video of the\nimplementation are included below (especially for user-visible or UI\nchanges). — Configuration-only change; approved targeted-test fallback.\n\n## Testing\n- Passed `cargo nextest run -p warp_features`: 1 passed, 1 existing\nignored test.\n- Passed `cargo clippy -p warp_features --all-targets --tests -- -D\nwarnings` and final `./script/format`.\n- No new test for this flag-default-only change. No sampling or UI code\nchanged.\n- [ ] I have manually tested my changes locally with `./script/run` —\nNot run; no visual proof claimed.\n\n## Agent Mode\n- [x] Warp Agent Mode - This PR was created via Warp's AI Agent Mode\n\nCHANGELOG-NONE\n\n<!-- warp:pr-description-artifacts start -->\n<!-- warp:pr-description-artifacts end -->\n\n---------\n\nCo-authored-by: warp-agent-staging[bot] <240773466+warp-agent-staging[bot]@users.noreply.github.com>\nCo-authored-by: Warp Agent <agent@warp.dev>",
+      "tree": {
+        "sha": "fe70bdf6a62abe7f1e8f34cd8c09e61683ea3618",
+        "url": "https://api.github.com/repos/warpdotdev/warp/git/trees/fe70bdf6a62abe7f1e8f34cd8c09e61683ea3618"
+      },
+      "url": "https://api.github.com/repos/warpdotdev/warp/git/commits/c6f07bb451657e6fbce72c69ed90cfd4f86c2344",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": null,
+        "payload": "tree fe70bdf6a62abe7f1e8f34cd8c09e61683ea3618\nparent 7e52e0d491b618a977f42415519bd5f48103c6f2\nauthor warp-agent-staging[bot] <240773466+warp-agent-staging[bot]@users.noreply.github.com> 1794641783 +0000\ncommitter GitHub <noreply@github.com> 1794641783 +0000\n\nEnable LRC activity signals for Preview and Dogfood (#16578)\n\n## Description\nEnable long-running command activity sampling in Preview, so silent but\nactive commands provide liveness evidence before cancellation. Dogfood\ninherits Preview flags; Stable defaults remain unchanged.\n\nCompanion server gate:\nhttps://github.com/warpdotdev/warp-server/pull/20338.\n\n## Linked Issue\nApproved request:\nhttps://warpdev.slack.com/archives/C0BDQDW8V5E/p1792514884544119.\n- [ ] The linked issue is labeled `ready-to-spec` or\n`ready-to-implement`. — Slack-approved rollout; no linked issue.\n- [ ] Where appropriate, screenshots or a short video of the\nimplementation are included below (especially for user-visible or UI\nchanges). — Configuration-only change; approved targeted-test fallback.\n\n## Testing\n- Passed `cargo nextest run -p warp_features`: 1 passed, 1 existing\nignored test.\n- Passed `cargo clippy -p warp_features --all-targets --tests -- -D\nwarnings` and final `./script/format`.\n- No new test for this flag-default-only change. No sampling or UI code\nchanged.\n- [ ] I have manually tested my changes locally with `./script/run` —\nNot run; no visual proof claimed.\n\n## Agent Mode\n- [x] Warp Agent Mode - This PR was created via Warp's AI Agent Mode\n\nCHANGELOG-NONE\n\n<!-- warp:pr-description-artifacts start -->\n<!-- warp:pr-description-artifacts end -->\n\n---------\n\nCo-authored-by: warp-agent-staging[bot] <240773466+warp-agent-staging[bot]@users.noreply.github.com>\nCo-authored-by: Warp Agent <agent@warp.dev>",
+        "verified_at": "2026-11-14T07:36:23Z"
+      }
+    },
+    "url": "https://api.github.com/repos/warpdotdev/warp/commits/c6f07bb451657e6fbce72c69ed90cfd4f86c2344",
+    "html_url": "https://github.com/warpdotdev/warp/commit/c6f07bb451657e6fbce72c69ed90cfd4f86c2344",
+    "parents": [
+      {
+        "sha": "7e52e0d491b618a977f42415519bd5f48103c6f2",
+        "url": "https://api.github.com/repos/warpdotdev/warp/commits/7e52e0d491b618a977f42415519bd5f48103c6f2",
+        "html_url": "https://github.com/warpdotdev/warp/commit/7e52e0d491b618a977f42415519bd5f48103c6f2"
+      }
+    ]
+  },
+  "_links": {
+    "self": "https://api.github.com/repos/warpdotdev/warp/branches/master",
+    "html": "https://github.com/warpdotdev/warp/tree/master"
+  },
+  "protected": true
+}

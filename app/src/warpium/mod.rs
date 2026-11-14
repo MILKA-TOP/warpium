@@ -2,4 +2,6 @@
 
 pub(crate) mod sync_settings;
 #[cfg(not(target_family = "wasm"))]
+pub(crate) mod upstream_check;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod warp_import;
