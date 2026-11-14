@@ -57,7 +57,7 @@ impl SingletonEntity for UpstreamChecker {}
 /// Registers the checker and, for `poll` launches, starts the scheduled checks. The checker is
 /// registered in every launch mode because the command palette action is.
 pub(crate) fn init(poll: bool, ctx: &mut AppContext) {
-    let checker = ctx.add_singleton_model(|ctx| {
+    let checker = ctx.add_singleton_model(|ctx: &mut ModelContext<UpstreamChecker>| {
         ctx.subscribe_to_model(
             &WarpiumSettings::handle(ctx),
             |checker, _, event, ctx| match event {
