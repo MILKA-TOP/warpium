@@ -33,6 +33,32 @@ impl ConfigSource {
 pub struct ConfigError {
     pub source: ConfigSource,
     pub message: String,
+    /// Where in the file the problem is, when known.
+    pub location: Option<TextPosition>,
+}
+
+/// A 1-based line and column in a config file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextPosition {
+    pub line: usize,
+    /// Counted in characters.
+    pub column: usize,
+}
+
+impl TextPosition {
+    /// The position of byte `offset` in `text`, clamped to the text and to a char boundary.
+    pub fn from_byte_offset(text: &str, offset: usize) -> Self {
+        let mut offset = offset.min(text.len());
+        while !text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        let before = &text[..offset];
+        let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
+        Self {
+            line: before.matches('\n').count() + 1,
+            column: before[line_start..].chars().count() + 1,
+        }
+    }
 }
 
 impl ConfigError {
@@ -40,7 +66,13 @@ impl ConfigError {
         Self {
             source,
             message: message.into(),
+            location: None,
         }
+    }
+
+    fn at(mut self, location: Option<TextPosition>) -> Self {
+        self.location = location;
+        self
     }
 }
 
@@ -179,7 +211,7 @@ impl ParsedConfig {
 #[serde(deny_unknown_fields)]
 struct RawFile {
     #[serde(default)]
-    button: Vec<RawButton>,
+    button: Vec<toml::Spanned<RawButton>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -233,25 +265,35 @@ struct PartialButton {
 /// Parses one `toolbar.toml`. Team entries must be complete buttons; personal entries may be
 /// partial overrides of team buttons.
 pub fn parse_config(text: &str, source: ConfigSource) -> Result<ParsedConfig, ConfigError> {
-    let raw: RawFile = toml::from_str(text)
-        .map_err(|err| ConfigError::new(source, err.to_string().trim_end().to_owned()))?;
+    let raw: RawFile = toml::from_str(text).map_err(|err| {
+        let location = err
+            .span()
+            .map(|span| TextPosition::from_byte_offset(text, span.start));
+        ConfigError::new(source, err.to_string().trim_end().to_owned()).at(location)
+    })?;
     let mut seen = HashSet::new();
     let mut entries = Vec::with_capacity(raw.button.len());
     for (index, raw_button) in raw.button.into_iter().enumerate() {
-        let entry = parse_entry(raw_button, source).map_err(|message| {
-            ConfigError::new(source, format!("button {}: {message}", index + 1))
+        // Errors in a button that parsed as TOML point at the start of its table.
+        let button_location = Some(TextPosition::from_byte_offset(
+            text,
+            raw_button.span().start,
+        ));
+        let entry = parse_entry(raw_button.into_inner(), source).map_err(|message| {
+            ConfigError::new(source, format!("button {}: {message}", index + 1)).at(button_location)
         })?;
         if !seen.insert(entry.id.clone()) {
             return Err(ConfigError::new(
                 source,
                 format!("button id `{}` is used more than once", entry.id),
-            ));
+            )
+            .at(button_location));
         }
         if source == ConfigSource::Team && !entry.hidden && entry.action.is_none() {
-            return Err(ConfigError::new(
-                source,
-                format!("button `{}` has no action", entry.id),
-            ));
+            return Err(
+                ConfigError::new(source, format!("button `{}` has no action", entry.id))
+                    .at(button_location),
+            );
         }
         entries.push(entry);
     }

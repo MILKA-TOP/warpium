@@ -17,7 +17,7 @@ mod trust;
 pub use action::{BuiltinAction, ShellFamily, resolve_cwd, shell_line};
 pub use config::{
     ButtonAction, CommandAction, CommandTarget, ConfigError, ConfigSource, ParsedConfig,
-    ToolbarButton, merge, parse_config,
+    TextPosition, ToolbarButton, merge, parse_config,
 };
 pub use icons::{BUNDLED_ICONS, ButtonIcon, bundled_icon_path, parse_icon};
 pub use project::{
@@ -29,4 +29,7 @@ pub use run_configs::{
     selected_run_config, toolbar_buttons,
 };
 pub use template::{PERSONAL_TEMPLATE, TEAM_TEMPLATE};
-pub use trust::{ToolbarUserState, TrustListing, content_hash, needs_trust, trust_listings};
+pub use trust::{
+    ToolbarUserState, TrustChange, TrustListing, TrustReview, command_signatures, content_hash,
+    needs_trust, trust_review,
+};

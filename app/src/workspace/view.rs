@@ -16601,6 +16601,10 @@ impl Workspace {
             }
             pane_group::Event::PaneTitleUpdated => {
                 self.update_window_title(ctx);
+                // An editor's title changes with its file, which can move the project toolbar to
+                // another project.
+                #[cfg(not(target_family = "wasm"))]
+                self.refresh_project_toolbar(ctx);
                 ctx.notify();
             }
             pane_group::Event::ShowCommandSearch(options) => {
@@ -16955,6 +16959,9 @@ impl Workspace {
             // If focused pane contains an object, then set selected state in WD to that object
             pane_group::Event::PaneFocused => {
                 self.current_workspace_state.close_all_modals();
+                // An editor pane gives the project toolbar its file's project.
+                #[cfg(not(target_family = "wasm"))]
+                self.refresh_project_toolbar(ctx);
 
                 // Re-evaluate which region is focused and update pane dimming accordingly.
                 self.update_pane_dimming_for_current_focus_region(ctx);

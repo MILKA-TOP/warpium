@@ -23,15 +23,16 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpium_project_toolbar::{
     ButtonIcon, ConfigError, ConfigSource, ProjectContext, RunConfigItem, RunConfigKind,
-    ToolbarButton, ToolbarUserState, TrustListing, content_hash, detect_project, merge,
-    needs_trust, parse_config, personal_config_path, run_config_items, selected_run_config,
-    team_config_path, toolbar_buttons, trust_listings,
+    TextPosition, ToolbarButton, ToolbarUserState, TrustChange, TrustListing, TrustReview,
+    content_hash, detect_project, merge, needs_trust, parse_config, personal_config_path,
+    run_config_items, selected_run_config, team_config_path, toolbar_buttons, trust_review,
 };
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
-    Border, CacheOption, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Empty, Flex, Icon as WarpUiIcon, Image, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect, Stack, Text,
+    Border, CacheOption, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Empty, Fill, Flex,
+    Icon as WarpUiIcon, Image, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Rect, ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::vec2f;
@@ -66,8 +67,8 @@ const FONT_SIZE: f32 = 12.;
 const RUN_CHIP_MAX_LABEL_WIDTH: f32 = 160.;
 const MENU_WIDTH: f32 = 240.;
 const TRUST_PROMPT_WIDTH: f32 = 420.;
-/// Commands listed in the trust prompt before the rest are summarized.
-const MAX_TRUST_LISTINGS: usize = 8;
+/// The trust prompt's command list scrolls past this height, keeping its buttons in view.
+const TRUST_LIST_MAX_HEIGHT: f32 = 320.;
 
 /// Holds the toolbar state shared by all windows: trust and run-configuration selections
 /// (persisted in private preferences, never in the project) and the file watcher.
@@ -223,6 +224,20 @@ pub(crate) fn is_enabled(ctx: &AppContext) -> bool {
     is_warpium_channel() && *WarpiumSettings::as_ref(ctx).project_toolbar
 }
 
+/// The project of a tab with this pinned Project Explorer root and location; an
+/// [`ProjectLocation::Unknown`] location counts as no working directory.
+fn detect_tab_project(
+    pinned_root: Option<PathBuf>,
+    location: ProjectLocation,
+) -> Option<ProjectContext> {
+    let canonical = |path: PathBuf| dunce::canonicalize(&path).unwrap_or(path);
+    let dir = match location {
+        ProjectLocation::Directory(dir) => Some(canonical(dir)),
+        ProjectLocation::NoProject | ProjectLocation::Unknown => None,
+    };
+    detect_project(pinned_root.map(canonical).as_deref(), dir.as_deref())
+}
+
 /// The personal overrides file of a project, when the home config directory is known.
 pub(crate) fn personal_path(root: &Path) -> Option<PathBuf> {
     warp_core::paths::warp_home_config_dir().map(|home| personal_config_path(&home, root))
@@ -252,7 +267,11 @@ pub(crate) enum ProjectToolbarEvent {
     EditConfig {
         personal: bool,
     },
-    OpenFile(PathBuf),
+    /// Open a config file, at the problem in it when known.
+    OpenFile {
+        path: PathBuf,
+        location: Option<TextPosition>,
+    },
     /// The toolbar's menu closed, so focus can go back to the session.
     MenuClosed,
     /// [`ProjectToolbarView::has_content`] changed, so its title-bar slot appears or goes away.
@@ -264,6 +283,8 @@ enum LoadedConfig {
         buttons: Vec<ToolbarButton>,
         /// The [`content_hash`] of the team file, when there is one.
         team_hash: Option<String>,
+        /// The team file's buttons without the personal overrides: what trusting it covers.
+        team_buttons: Vec<ToolbarButton>,
     },
     Invalid {
         error: ConfigError,
@@ -281,7 +302,8 @@ struct TrustPrompt {
     /// The button to run once the user trusts the toolbar.
     pending_button_id: String,
     team_hash: String,
-    listings: Vec<TrustListing>,
+    review: TrustReview,
+    list_scroll: ClippedScrollStateHandle,
 }
 
 #[derive(Default)]
@@ -294,12 +316,26 @@ struct MouseStates {
     trust_cancel: MouseStateHandle,
 }
 
+/// Where the active tab is working, besides its pinned Project Explorer root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProjectLocation {
+    /// The folder of the focused editor's file, or the working directory of a local session.
+    Directory(PathBuf),
+    /// A remote session, which has no project.
+    NoProject,
+    /// Nothing to go by, such as a tab showing only settings: the toolbar keeps its project.
+    Unknown,
+}
+
 /// The toolbar of one window, following its active tab.
 pub(crate) struct ProjectToolbarView {
-    /// The last pinned explorer root and working directory, so the toolbar can be recomputed
-    /// when it is turned back on.
-    inputs: (Option<PathBuf>, Option<PathBuf>),
+    /// The last pinned explorer root and location, so the toolbar can be recomputed when it is
+    /// turned back on.
+    inputs: (Option<PathBuf>, ProjectLocation),
     project: Option<ProjectContext>,
+    /// The project last detected from a tab's inputs, even while the toolbar is off, which a tab
+    /// with an unknown location keeps.
+    last_detected: Option<ProjectContext>,
     loaded: Option<LoadedConfig>,
     run_configs: Vec<RunConfigItem>,
     watched_dirs: Vec<PathBuf>,
@@ -345,8 +381,8 @@ impl ProjectToolbarView {
         );
         ctx.subscribe_to_model(&WarpiumSettings::handle(ctx), |me, _, event, ctx| {
             if let WarpiumSettingsChangedEvent::ProjectToolbar { .. } = event {
-                let (pinned_root, cwd) = me.inputs.clone();
-                me.update_context(pinned_root, cwd, true, ctx);
+                let (pinned_root, location) = me.inputs.clone();
+                me.update_context(pinned_root, location, true, ctx);
             }
         });
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), |me, _, event, ctx| {
@@ -355,8 +391,9 @@ impl ProjectToolbarView {
             }
         });
         Self {
-            inputs: (None, None),
+            inputs: (None, ProjectLocation::Unknown),
             project: None,
+            last_detected: None,
             loaded: None,
             run_configs: Vec::new(),
             watched_dirs: Vec::new(),
@@ -387,37 +424,42 @@ impl ProjectToolbarView {
         self.project.as_ref().map(|project| project.root.as_path())
     }
 
-    /// Follows the active tab: its pinned Project Explorer root and its session's working
-    /// directory (local sessions only).
+    /// The project of the tab it last followed, whether or not the toolbar is on.
+    pub(crate) fn detected_project_root(&self) -> Option<&Path> {
+        self.last_detected
+            .as_ref()
+            .map(|project| project.root.as_path())
+    }
+
+    /// Follows the active tab: its pinned Project Explorer root and where its focused pane is.
     pub(crate) fn set_context(
         &mut self,
         pinned_root: Option<PathBuf>,
-        cwd: Option<PathBuf>,
+        location: ProjectLocation,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.update_context(pinned_root, cwd, false, ctx);
+        self.update_context(pinned_root, location, false, ctx);
     }
 
     fn update_context(
         &mut self,
         pinned_root: Option<PathBuf>,
-        cwd: Option<PathBuf>,
+        location: ProjectLocation,
         force: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !force && self.inputs == (pinned_root.clone(), cwd.clone()) {
+        let inputs = (pinned_root, location);
+        if !force && self.inputs == inputs {
             return;
         }
-        self.inputs = (pinned_root.clone(), cwd.clone());
-        let project = if is_enabled(ctx) {
-            let canonical = |path: PathBuf| dunce::canonicalize(&path).unwrap_or(path);
-            detect_project(
-                pinned_root.map(canonical).as_deref(),
-                cwd.map(canonical).as_deref(),
-            )
-        } else {
-            None
-        };
+        self.inputs = inputs.clone();
+        let (pinned_root, location) = inputs;
+        if pinned_root.is_some() || location != ProjectLocation::Unknown {
+            self.last_detected = detect_tab_project(pinned_root, location);
+        }
+        let project = is_enabled(ctx)
+            .then(|| self.last_detected.clone())
+            .flatten();
         if project == self.project {
             return;
         }
@@ -462,6 +504,13 @@ impl ProjectToolbarView {
 
     fn button(&self, id: &str) -> Option<&ToolbarButton> {
         self.buttons().iter().find(|button| button.id == id)
+    }
+
+    fn team_buttons(&self) -> &[ToolbarButton] {
+        match &self.loaded {
+            Some(LoadedConfig::Buttons { team_buttons, .. }) => team_buttons,
+            Some(LoadedConfig::Invalid { .. }) | None => &[],
+        }
     }
 
     fn team_hash(&self) -> Option<&str> {
@@ -558,7 +607,8 @@ impl ProjectToolbarView {
                 self.trust_prompt = Some(TrustPrompt {
                     pending_button_id: id.to_owned(),
                     team_hash,
-                    listings: trust_listings(self.buttons()),
+                    review: trust_review(self.team_buttons(), state.trusted_commands(&root)),
+                    list_scroll: ClippedScrollStateHandle::default(),
                 });
             }
             ctx.notify();
@@ -581,8 +631,12 @@ impl ProjectToolbarView {
             ctx.notify();
             return;
         }
+        let team_buttons = self.team_buttons();
         ProjectToolbarStore::handle(ctx).update(ctx, |store, ctx| {
-            store.update_state(|state| state.trust(&root, &prompt.team_hash), ctx);
+            store.update_state(
+                |state| state.trust(&root, &prompt.team_hash, team_buttons),
+                ctx,
+            );
         });
         self.click_button(&prompt.pending_button_id, ctx);
     }
@@ -694,7 +748,13 @@ impl ProjectToolbarView {
             ConfigSource::Team => "Invalid .warpium/toolbar.toml".to_owned(),
             ConfigSource::Personal => "Invalid personal toolbar overrides".to_owned(),
         };
-        let detail = format!("{}\nClick to open the file.", error.message);
+        let detail = match error.location {
+            Some(location) => format!(
+                "{}\nClick to open the file at line {}.",
+                error.message, location.line
+            ),
+            None => format!("{}\nClick to open the file.", error.message),
+        };
         toolbar_button(
             self.mouse_states.invalid_config_button.clone(),
             label,
@@ -913,6 +973,19 @@ impl ProjectToolbarView {
             .map(|root| root.display().to_string())
             .unwrap_or_default();
 
+        let review = &prompt.review;
+        let intro = if review.is_update {
+            format!(
+                "{root}/.warpium/toolbar.toml changed since you trusted it ({}). Its commands run \
+                 in your shell. Warpium asks again whenever the file changes.",
+                trust_change_summary(review)
+            )
+        } else {
+            format!(
+                "These commands from {root}/.warpium/toolbar.toml run in your shell. Warpium asks \
+                 again whenever the file changes."
+            )
+        };
         let mut column = Flex::column()
             .with_child(
                 Text::new(
@@ -926,63 +999,62 @@ impl ProjectToolbarView {
             )
             .with_child(
                 Container::new(
-                    Text::new(
-                        format!(
-                            "These commands from {root}/.warpium/toolbar.toml run in your shell. \
-                             Warpium asks again whenever the file changes."
-                        ),
-                        appearance.ui_font_family(),
-                        FONT_SIZE,
-                    )
-                    .with_color(sub_text)
-                    .finish(),
+                    Text::new(intro, appearance.ui_font_family(), FONT_SIZE)
+                        .with_color(sub_text)
+                        .finish(),
                 )
                 .with_margin_top(6.)
                 .with_margin_bottom(8.)
                 .finish(),
             );
-        for listing in prompt.listings.iter().take(MAX_TRUST_LISTINGS) {
-            column.add_child(
-                Container::new(
-                    Flex::column()
-                        .with_child(
-                            Text::new(
-                                format!("{} · {}", listing.label, listing.details),
-                                appearance.ui_font_family(),
-                                FONT_SIZE,
-                            )
-                            .with_color(sub_text)
-                            .finish(),
+
+        let has_changes = review
+            .listings
+            .iter()
+            .any(|listing| listing.change != TrustChange::Unchanged);
+        let mut list = Flex::column();
+        let mut shown_unchanged_heading = false;
+        for listing in &review.listings {
+            if review.is_update
+                && has_changes
+                && listing.change == TrustChange::Unchanged
+                && !shown_unchanged_heading
+            {
+                shown_unchanged_heading = true;
+                list.add_child(
+                    Container::new(
+                        Text::new_inline(
+                            "Unchanged since you trusted it",
+                            appearance.ui_font_family(),
+                            FONT_SIZE,
                         )
-                        .with_child(
-                            Text::new(
-                                listing.command.clone(),
-                                appearance.monospace_font_family(),
-                                FONT_SIZE,
-                            )
-                            .with_color(main_text)
-                            .finish(),
-                        )
+                        .with_color(sub_text)
+                        .with_style(Properties::default().weight(Weight::Semibold))
                         .finish(),
-                )
-                .with_margin_bottom(6.)
-                .finish(),
-            );
+                    )
+                    .with_margin_top(4.)
+                    .with_margin_bottom(6.)
+                    .finish(),
+                );
+            }
+            list.add_child(render_trust_listing(listing, review.is_update, appearance));
         }
-        if prompt.listings.len() > MAX_TRUST_LISTINGS {
-            column.add_child(
-                Text::new(
-                    format!(
-                        "…and {} more. Open the file to review them all.",
-                        prompt.listings.len() - MAX_TRUST_LISTINGS
-                    ),
-                    appearance.ui_font_family(),
-                    FONT_SIZE,
+        column.add_child(
+            ConstrainedBox::new(
+                ClippedScrollable::vertical(
+                    prompt.list_scroll.clone(),
+                    list.finish(),
+                    ScrollbarWidth::Auto,
+                    theme.nonactive_ui_detail().into(),
+                    theme.active_ui_detail().into(),
+                    Fill::None,
                 )
-                .with_color(sub_text)
+                .with_overlayed_scrollbar()
                 .finish(),
-            );
-        }
+            )
+            .with_max_height(TRUST_LIST_MAX_HEIGHT)
+            .finish(),
+        );
         let button_style = UiComponentStyles {
             font_size: Some(FONT_SIZE),
             font_weight: Some(Weight::Semibold),
@@ -1044,6 +1116,80 @@ impl ProjectToolbarView {
     }
 }
 
+/// One command in the trust prompt, marked "New" or "Changed" when `mark_changes`.
+fn render_trust_listing(
+    listing: &TrustListing,
+    mark_changes: bool,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let background = theme.surface_2();
+    let main_text = theme.main_text_color(background).into_solid();
+    let sub_text = theme.sub_text_color(background).into_solid();
+    let mut heading = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+    let badge = match listing.change {
+        TrustChange::New => Some(("New", theme.accent().into_solid())),
+        TrustChange::Changed => Some(("Changed", theme.ui_warning_color())),
+        TrustChange::Unchanged => None,
+    };
+    if let Some((badge, color)) = badge.filter(|_| mark_changes) {
+        heading.add_child(
+            Container::new(
+                Text::new_inline(badge, appearance.ui_font_family(), FONT_SIZE)
+                    .with_color(color)
+                    .with_style(Properties::default().weight(Weight::Semibold))
+                    .finish(),
+            )
+            .with_margin_right(6.)
+            .finish(),
+        );
+    }
+    heading.add_child(
+        Shrinkable::new(
+            1.,
+            Text::new(
+                format!("{} · {}", listing.label, listing.details),
+                appearance.ui_font_family(),
+                FONT_SIZE,
+            )
+            .with_color(sub_text)
+            .finish(),
+        )
+        .finish(),
+    );
+    Container::new(
+        Flex::column()
+            .with_child(heading.finish())
+            .with_child(
+                Text::new(
+                    listing.command.clone(),
+                    appearance.monospace_font_family(),
+                    FONT_SIZE,
+                )
+                .with_color(main_text)
+                .finish(),
+            )
+            .finish(),
+    )
+    .with_margin_bottom(6.)
+    .finish()
+}
+
+/// Such as `2 new, 1 changed, 5 unchanged`.
+fn trust_change_summary(review: &TrustReview) -> String {
+    [
+        (review.count(TrustChange::New), "new"),
+        (review.count(TrustChange::Changed), "changed"),
+        (review.count(TrustChange::Unchanged), "unchanged"),
+        (review.removed, "removed"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, kind)| format!("{count} {kind}"))
+    .collect::<Vec<_>>()
+    .join(", ")
+}
+
 /// Reads and merges the team and personal configs of the project at `root`.
 fn load(root: &Path) -> LoadedConfig {
     let team_path = team_config_path(root);
@@ -1067,11 +1213,25 @@ fn load(root: &Path) -> LoadedConfig {
         None => None,
     };
     let team_hash = team.as_ref().map(|(_, hash)| hash.clone());
+    let team_only = team.as_ref().map(|(config, _)| merge(Some(config), None));
     match merge(
         team.as_ref().map(|(config, _)| config),
         personal_config.as_ref().map(|(config, _)| config),
     ) {
-        Ok(buttons) => LoadedConfig::Buttons { buttons, team_hash },
+        Ok(buttons) => {
+            let team_buttons = match team_only {
+                Some(Ok(team_buttons)) => team_buttons,
+                // The team file alone always merges when it merges with overrides; if not, the
+                // merged buttons are a superset to review.
+                Some(Err(_)) => buttons.clone(),
+                None => Vec::new(),
+            };
+            LoadedConfig::Buttons {
+                buttons,
+                team_hash,
+                team_buttons,
+            }
+        }
         Err(error) => invalid(error),
     }
 }
@@ -1088,6 +1248,7 @@ fn read_config(
             return Err(ConfigError {
                 source,
                 message: format!("couldn't read the file: {err}"),
+                location: None,
             });
         }
     };
@@ -1095,6 +1256,7 @@ fn read_config(
     let text = String::from_utf8(bytes).map_err(|_| ConfigError {
         source,
         message: "the file is not valid UTF-8".to_owned(),
+        location: None,
     })?;
     parse_config(&text, source).map(|config| Some((config, hash)))
 }
@@ -1219,8 +1381,11 @@ impl TypedActionView for ProjectToolbarView {
             }
             ProjectToolbarAction::RunSelectedRunConfig => self.run_selected_run_config(ctx),
             ProjectToolbarAction::OpenInvalidConfig => {
-                if let Some(LoadedConfig::Invalid { path, .. }) = &self.loaded {
-                    ctx.emit(ProjectToolbarEvent::OpenFile(path.clone()));
+                if let Some(LoadedConfig::Invalid { path, error }) = &self.loaded {
+                    ctx.emit(ProjectToolbarEvent::OpenFile {
+                        path: path.clone(),
+                        location: error.location,
+                    });
                 }
             }
             ProjectToolbarAction::ConfirmTrust => self.confirm_trust(ctx),
