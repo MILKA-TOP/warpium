@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+#
+# Phase 0 benchmark of the Warpium code index (crates/code_index) on a fixed open-source corpus.
+#
+# Usage: script/warpium/code_index_bench [--fetch-only] [--combined] [corpus...]
+#   corpus        any of: nowinandroid thunderbird duckduckgo signal (default: all)
+#   --fetch-only  only clone the corpus
+#   --combined    also index all fetched corpora as one root (a ~300k-symbol stress case)
+#
+# Repositories are shallow-cloned at pinned commits into $CODE_INDEX_BENCH_DIR (default: the user
+# cache dir, never the Warpium checkout). Extra arguments for the bench binary go in
+# $CODE_INDEX_BENCH_ARGS (for example "--threads 4"). Building runs with CARGO_BUILD_JOBS
+# (default 4).
+#
+# To time a private project, run the bench binary on it directly and label it, so its path stays
+# out of the output:
+#   cargo run --release -p code_index --example bench -- --name private /path/to/project
+
+set -euo pipefail
+
+declare -A REPOS=(
+  [nowinandroid]="https://github.com/android/nowinandroid 2982e63cb691ad49cd009aab43dc206fee6699c2"
+  [thunderbird]="https://github.com/thunderbird/thunderbird-android d2ecc5cc940a36476f9d3608b311eb28b650dd6b"
+  [duckduckgo]="https://github.com/duckduckgo/Android 39ec2e53ae4e2e5a76e889f11938e2d087261ebc"
+  [signal]="https://github.com/signalapp/Signal-Android 5e03b75f0239fcc03f0afa0746b223feafb934bd"
+)
+ORDER=(nowinandroid thunderbird duckduckgo signal)
+
+if [[ "$(uname)" == "Darwin" ]]; then
+  default_cache="$HOME/Library/Caches"
+else
+  default_cache="${XDG_CACHE_HOME:-$HOME/.cache}"
+fi
+bench_dir="${CODE_INDEX_BENCH_DIR:-$default_cache/dev.milka.Warpium/code-index-bench}"
+
+fetch_only=false
+combined=false
+selected=()
+for arg in "$@"; do
+  case "$arg" in
+    --fetch-only) fetch_only=true ;;
+    --combined) combined=true ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    *)
+      if [[ -z "${REPOS[$arg]:-}" ]]; then
+        echo "unknown corpus: $arg (expected: ${ORDER[*]})" >&2
+        exit 2
+      fi
+      selected+=("$arg")
+      ;;
+  esac
+done
+[[ ${#selected[@]} -eq 0 ]] && selected=("${ORDER[@]}")
+
+mkdir -p "$bench_dir/corpus"
+roots=()
+for name in "${selected[@]}"; do
+  read -r url sha <<<"${REPOS[$name]}"
+  dir="$bench_dir/corpus/$name"
+  if [[ "$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)" != "$sha" ]]; then
+    echo "Fetching $name at ${sha:0:12}…" >&2
+    rm -rf "$dir"
+    git init -q "$dir"
+    git -C "$dir" fetch -q --depth 1 "$url" "$sha"
+    git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
+  fi
+  roots+=("$dir")
+done
+$combined && roots+=("$bench_dir/corpus")
+$fetch_only && exit 0
+
+cd "$(dirname "$0")/../.."
+# shellcheck disable=SC2086
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
+  cargo run --quiet --release -p code_index --example bench -- ${CODE_INDEX_BENCH_ARGS:-} "${roots[@]}"

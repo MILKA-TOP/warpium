@@ -151,8 +151,7 @@ impl CodeIndex {
     /// Indexes every source file under `root`.
     pub fn build(root: impl Into<PathBuf>, threads: usize) -> Self {
         let mut index = Self::new(root);
-        let update = prepare_refresh(&index.root, &HashMap::new(), threads);
-        index.apply(update);
+        index.refresh(threads);
         index
     }
 
@@ -160,7 +159,7 @@ impl CodeIndex {
         &self.root
     }
 
-    /// `(mtime, size)` of every indexed file, keyed by relative path, for [`prepare_refresh`].
+    /// `(mtime, size)` of every indexed file, keyed by relative path, for [`refresh_in_batches`].
     pub fn stamps(&self) -> HashMap<String, (u64, u64)> {
         self.live_files()
             .map(|file| (file.rel_path.clone(), (file.mtime_ns, file.size)))
@@ -169,8 +168,15 @@ impl CodeIndex {
 
     /// Rescans the root and reparses files whose size or modification time changed.
     pub fn refresh(&mut self, threads: usize) -> UpdateStats {
-        let update = prepare_refresh(&self.root, &self.stamps(), threads);
-        self.apply(update)
+        let root = self.root.clone();
+        let stamps = self.stamps();
+        let mut stats = UpdateStats::default();
+        refresh_in_batches(&root, &stamps, threads, |batch| {
+            let batch_stats = self.apply(batch);
+            stats.files_parsed += batch_stats.files_parsed;
+            stats.files_removed += batch_stats.files_removed;
+        });
+        stats
     }
 
     /// Reindexes the given changed, added or removed paths (files or directories).
@@ -562,22 +568,42 @@ fn encode_match(tier: MatchTier, score: i32) -> u32 {
     ((tier as u32) << 24) | score
 }
 
-/// Walks `root` and parses every file that is new or whose `(mtime, size)` differs from `stamps`.
-pub fn prepare_refresh(
+/// Files parsed per [`PendingUpdate`] batch of a rescan. Batching bounds how many raw parse
+/// results exist at once, which is most of the memory a cold build needs.
+const REFRESH_BATCH: usize = 512;
+
+/// Walks `root` and parses every file that is new or whose `(mtime, size)` differs from `stamps`,
+/// handing the results to `apply` in batches. The first batch also drops indexed files that are
+/// gone. Applying a batch only takes a moment, so a shared index can be locked per batch.
+pub fn refresh_in_batches(
     root: &Path,
     stamps: &HashMap<String, (u64, u64)>,
     threads: usize,
-) -> PendingUpdate {
+    mut apply: impl FnMut(PendingUpdate),
+) {
     let found = scan(root, threads);
-    let present = found.iter().map(|file| file.rel_path.clone()).collect();
-    let to_parse = found
+    let mut present = Some(found.iter().map(|file| file.rel_path.clone()).collect());
+    let to_parse: Vec<FoundFile> = found
         .into_iter()
         .filter(|file| stamps.get(&file.rel_path) != Some(&(file.mtime_ns, file.size)))
         .collect();
-    PendingUpdate {
-        parsed: parse_all(root, to_parse, threads),
-        removed: Vec::new(),
-        present: Some(present),
+    let pool = (to_parse.len() > SERIAL_PARSE_LIMIT)
+        .then(|| worker_pool(threads))
+        .flatten();
+    let mut batches = to_parse.chunks(REFRESH_BATCH).peekable();
+    if batches.peek().is_none() {
+        apply(PendingUpdate {
+            present,
+            ..Default::default()
+        });
+        return;
+    }
+    for batch in batches {
+        apply(PendingUpdate {
+            parsed: parse_all(root, batch.to_vec(), pool.as_ref()),
+            removed: Vec::new(),
+            present: present.take(),
+        });
     }
 }
 
@@ -608,31 +634,45 @@ pub fn prepare_changes(root: &Path, paths: &[PathBuf], threads: usize) -> Pendin
             removed.push(rel_path);
         }
     }
+    let pool = (to_parse.len() > SERIAL_PARSE_LIMIT)
+        .then(|| worker_pool(threads))
+        .flatten();
     PendingUpdate {
-        parsed: parse_all(root, to_parse, threads),
+        parsed: parse_all(root, to_parse, pool.as_ref()),
         removed,
         present: None,
     }
 }
 
-fn parse_all(root: &Path, files: Vec<FoundFile>, threads: usize) -> Vec<(FoundFile, RawFile)> {
+/// Up to this many files are parsed on the calling thread.
+const SERIAL_PARSE_LIMIT: usize = 4;
+
+/// A bounded pool for one build or update, dropped (with its threads) afterwards.
+fn worker_pool(threads: usize) -> Option<rayon::ThreadPool> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads.clamp(1, MAX_THREADS))
+        .thread_name(|i| format!("code-index-{i}"))
+        .build()
+        .inspect_err(|err| {
+            log::warn!("[Code index] Couldn't start worker threads, parsing serially: {err}");
+        })
+        .ok()
+}
+
+fn parse_all(
+    root: &Path,
+    files: Vec<FoundFile>,
+    pool: Option<&rayon::ThreadPool>,
+) -> Vec<(FoundFile, RawFile)> {
     let parse = |file: FoundFile| {
         let raw = parse_file(root, &file).unwrap_or_default();
         (file, raw)
     };
-    if files.len() <= 4 {
-        return files.into_iter().map(parse).collect();
-    }
-    match rayon::ThreadPoolBuilder::new()
-        .num_threads(threads.clamp(1, MAX_THREADS))
-        .thread_name(|i| format!("code-index-{i}"))
-        .build()
-    {
-        Ok(pool) => pool.install(|| files.into_par_iter().map(parse).collect()),
-        Err(err) => {
-            log::warn!("[Code index] Couldn't start worker threads, parsing serially: {err}");
-            files.into_iter().map(parse).collect()
+    match pool {
+        Some(pool) if files.len() > SERIAL_PARSE_LIMIT => {
+            pool.install(|| files.into_par_iter().map(parse).collect())
         }
+        _ => files.into_iter().map(parse).collect(),
     }
 }
 

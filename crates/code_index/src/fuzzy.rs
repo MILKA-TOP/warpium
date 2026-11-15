@@ -6,8 +6,10 @@
 
 use crate::interner::char_bit;
 
-/// Names longer than this are only matched as a prefix or subsequence.
+/// Names longer than this, or queries longer than `MAX_CAMEL_QUERY`, are only matched as a
+/// prefix or subsequence.
 const MAX_CAMEL_LEN: usize = 128;
+const MAX_CAMEL_QUERY: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MatchTier {
@@ -51,9 +53,8 @@ impl Pattern {
     pub fn match_name(&self, name: &str) -> Option<NameMatch> {
         let name = name.as_bytes();
         let query = self.chars.as_slice();
-        if query.len() > name.len() {
-            return None;
-        }
+        // Every tier implies a subsequence match, so this cheap check rejects most names.
+        let gaps = subsequence_gaps(query, name)?;
         let case_bonus = exact_case_prefix_len(query, name) as i32;
         let length_penalty = name.len() as i32;
 
@@ -68,16 +69,15 @@ impl Pattern {
                 score: case_bonus * 4 - length_penalty,
             });
         }
-        if name.len() <= MAX_CAMEL_LEN {
-            let humps = hump_starts(name);
-            if let Some(skipped) = camel_match(query, name, &humps, 0, None) {
+        if let Some(mut camel) = Camel::new(query, name) {
+            if let Some(skipped) = camel.match_from(0) {
                 return Some(NameMatch {
                     tier: MatchTier::Camel,
                     score: -(skipped as i32) * 8 + case_bonus - length_penalty,
                 });
             }
-            for (hump_index, start) in humps.iter().enumerate().skip(1) {
-                if let Some(skipped) = camel_match(query, name, &humps, *start, None) {
+            for hump_index in 1..camel.hump_count {
+                if let Some(skipped) = camel.match_from(hump_index) {
                     return Some(NameMatch {
                         tier: MatchTier::WordStart,
                         score: -((skipped + hump_index) as i32) * 8 - length_penalty,
@@ -85,7 +85,7 @@ impl Pattern {
                 }
             }
         }
-        subsequence_gaps(query, name).map(|gaps| NameMatch {
+        Some(NameMatch {
             tier: MatchTier::Fuzzy,
             score: -(gaps as i32) * 2 - length_penalty,
         })
@@ -98,12 +98,13 @@ impl Pattern {
         if starts_with_ignore_case(bytes, query) {
             return (0..query.len()).collect();
         }
-        if bytes.len() <= MAX_CAMEL_LEN {
-            let humps = hump_starts(bytes);
-            for start in &humps {
-                let mut positions = Vec::with_capacity(query.len());
-                if camel_match(query, bytes, &humps, *start, Some(&mut positions)).is_some() {
-                    return positions;
+        if let Some(mut camel) = Camel::new(query, bytes) {
+            for hump_index in 0..camel.hump_count {
+                if camel.match_from(hump_index).is_some() {
+                    return camel.path[..query.len()]
+                        .iter()
+                        .map(|position| usize::from(*position))
+                        .collect();
                 }
             }
         }
@@ -137,84 +138,103 @@ fn exact_case_prefix_len(query: &[u8], name: &[u8]) -> usize {
         .count()
 }
 
-/// Positions where a hump (word) starts: the first character, an uppercase letter, the first
-/// letter after `_`/`$`/a digit, and the first digit of a run.
-fn hump_starts(name: &[u8]) -> Vec<usize> {
-    let mut starts = Vec::new();
-    for (i, byte) in name.iter().enumerate() {
-        let is_start = match i.checked_sub(1).map(|prev| name[prev]) {
-            None => true,
-            Some(prev) => {
-                byte.is_ascii_uppercase()
-                    || (byte.is_ascii_alphabetic() && !prev.is_ascii_alphabetic())
-                    || (byte.is_ascii_digit() && !prev.is_ascii_digit())
+/// Camel-hump matching of one query against one name, on the stack: this runs for every
+/// candidate name on every keystroke.
+struct Camel<'a> {
+    query: &'a [u8],
+    name: &'a [u8],
+    /// Positions where a hump (word) starts: the first character, an uppercase letter, the first
+    /// letter after `_`/`$`/a digit, and the first digit of a run.
+    humps: [u8; MAX_CAMEL_LEN],
+    hump_count: usize,
+    /// Bit `q * MAX_CAMEL_LEN + p`: `query[q..]` can't match with `query[q]` at `name[p]`. This
+    /// doesn't depend on where the match started, so it's shared by all start humps.
+    failed: [u64; MAX_CAMEL_QUERY * MAX_CAMEL_LEN / 64],
+    path: [u8; MAX_CAMEL_QUERY],
+}
+
+impl<'a> Camel<'a> {
+    fn new(query: &'a [u8], name: &'a [u8]) -> Option<Self> {
+        if name.len() > MAX_CAMEL_LEN || query.len() > MAX_CAMEL_QUERY {
+            return None;
+        }
+        let mut humps = [0; MAX_CAMEL_LEN];
+        let mut hump_count = 0;
+        for (i, byte) in name.iter().enumerate() {
+            let is_start = match i.checked_sub(1).map(|prev| name[prev]) {
+                None => true,
+                Some(prev) => {
+                    byte.is_ascii_uppercase()
+                        || (byte.is_ascii_alphabetic() && !prev.is_ascii_alphabetic())
+                        || (byte.is_ascii_digit() && !prev.is_ascii_digit())
+                }
+            };
+            if is_start && byte.is_ascii_alphanumeric() {
+                humps[hump_count] = i as u8;
+                hump_count += 1;
             }
-        };
-        if is_start && byte.is_ascii_alphanumeric() {
-            starts.push(i);
         }
+        Some(Self {
+            query,
+            name,
+            humps,
+            hump_count,
+            failed: [0; MAX_CAMEL_QUERY * MAX_CAMEL_LEN / 64],
+            path: [0; MAX_CAMEL_QUERY],
+        })
     }
-    starts
-}
 
-/// Matches `query` against `name` starting at hump `start`: each query character either
-/// continues right after the previous match or starts a later hump. Returns how many humps were
-/// skipped, and records match positions in `positions` when given.
-fn camel_match(
-    query: &[u8],
-    name: &[u8],
-    humps: &[usize],
-    start: usize,
-    positions: Option<&mut Vec<usize>>,
-) -> Option<usize> {
-    if !name[start].eq_ignore_ascii_case(&query[0]) {
-        return None;
+    /// Matches the query starting at hump `hump_index`: each query character either continues
+    /// right after the previous match or starts a later hump. Returns how many humps were
+    /// skipped; the matched positions are left in `path`.
+    fn match_from(&mut self, hump_index: usize) -> Option<usize> {
+        let start = usize::from(self.humps[hump_index]);
+        if !self.name[start].eq_ignore_ascii_case(&self.query[0]) {
+            return None;
+        }
+        self.match_at(0, start)
     }
-    // failed[q * len + p]: query[q..] can't match with query[q] at name[p].
-    let mut failed = vec![false; query.len() * name.len()];
-    let mut path = vec![0; query.len()];
-    let skipped = camel_from(query, name, humps, 0, start, &mut failed, &mut path)?;
-    if let Some(positions) = positions {
-        positions.extend_from_slice(&path);
-    }
-    Some(skipped)
-}
 
-fn camel_from(
-    query: &[u8],
-    name: &[u8],
-    humps: &[usize],
-    q: usize,
-    p: usize,
-    failed: &mut [bool],
-    path: &mut [usize],
-) -> Option<usize> {
-    path[q] = p;
-    if q + 1 == query.len() {
-        return Some(0);
-    }
-    let next = query[q + 1];
-    // Prefer continuing the current word, then the nearest later hump.
-    if p + 1 < name.len()
-        && name[p + 1].eq_ignore_ascii_case(&next)
-        && !failed[(q + 1) * name.len() + p + 1]
-    {
-        if let Some(skipped) = camel_from(query, name, humps, q + 1, p + 1, failed, path) {
-            return Some(skipped);
+    fn match_at(&mut self, q: usize, p: usize) -> Option<usize> {
+        self.path[q] = p as u8;
+        if q + 1 == self.query.len() {
+            return Some(0);
         }
-        failed[(q + 1) * name.len() + p + 1] = true;
-    }
-    let first_later = humps.partition_point(|hump| *hump <= p + 1);
-    for (skipped, hump) in humps[first_later..].iter().enumerate() {
-        if !name[*hump].eq_ignore_ascii_case(&next) || failed[(q + 1) * name.len() + hump] {
-            continue;
+        let next = self.query[q + 1];
+        // Prefer continuing the current word, then the nearest later hump.
+        if p + 1 < self.name.len()
+            && self.name[p + 1].eq_ignore_ascii_case(&next)
+            && !self.has_failed(q + 1, p + 1)
+        {
+            if let Some(skipped) = self.match_at(q + 1, p + 1) {
+                return Some(skipped);
+            }
+            self.mark_failed(q + 1, p + 1);
         }
-        if let Some(more) = camel_from(query, name, humps, q + 1, *hump, failed, path) {
-            return Some(skipped + more);
+        let first_later =
+            self.humps[..self.hump_count].partition_point(|hump| usize::from(*hump) <= p + 1);
+        for (skipped, hump_index) in (first_later..self.hump_count).enumerate() {
+            let hump = usize::from(self.humps[hump_index]);
+            if !self.name[hump].eq_ignore_ascii_case(&next) || self.has_failed(q + 1, hump) {
+                continue;
+            }
+            if let Some(more) = self.match_at(q + 1, hump) {
+                return Some(skipped + more);
+            }
+            self.mark_failed(q + 1, hump);
         }
-        failed[(q + 1) * name.len() + hump] = true;
+        None
     }
-    None
+
+    fn has_failed(&self, q: usize, p: usize) -> bool {
+        let bit = q * MAX_CAMEL_LEN + p;
+        self.failed[bit / 64] & (1 << (bit % 64)) != 0
+    }
+
+    fn mark_failed(&mut self, q: usize, p: usize) {
+        let bit = q * MAX_CAMEL_LEN + p;
+        self.failed[bit / 64] |= 1 << (bit % 64);
+    }
 }
 
 /// Total gap between consecutive matched characters of a greedy subsequence match.

@@ -23,7 +23,7 @@ pub use cache::{default_snapshot_path, snapshot_path_in};
 pub use fuzzy::MatchTier;
 pub use index::{
     CodeIndex, IndexStats, PendingUpdate, SearchResult, SearchScope, SymbolInfo, UpdateStats,
-    default_threads, prepare_changes, prepare_refresh,
+    default_threads, prepare_changes, refresh_in_batches,
 };
 pub use interner::Sym;
 pub use model::{Language, Origin, Position, SymbolKind, Visibility, flags};
