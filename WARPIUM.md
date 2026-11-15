@@ -312,9 +312,10 @@ cargo run --release -p code_index --example bench -- --name private /path/to/pro
 Inside the dev container, keep projects for timing off the `/workspace` bind mount. Directory walks
 there are about 40 times slower than on a local disk, which inflates rescan and cold-build times.
 
-## Android devices and Logcat
+## Android devices, run and Logcat
 
-Phase A of running Android apps from Warpium: devices, AVDs and a native Logcat pane. The emulator
+Phase A of running Android apps from Warpium: devices, AVDs, running an app module and a native
+Logcat pane. The emulator
 runs in its own window; embedding it in a pane (and mirroring physical devices) is phase B, see
 [docs/warpium/research/android-emulator-embedding.md](docs/warpium/research/android-emulator-embedding.md).
 Fork-only code lives in `crates/warpium_android` (protoc-free, unit-tested with
@@ -341,7 +342,8 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
   offline, unauthorized and no permissions. Reconnects back off from 1 to 30 s. The selected device
   is remembered in private preferences (`WarpiumAndroidSelectedDevice`). A remembered device that
   hasn't been connected since launch is replaced by the first online one; one unplugged meanwhile
-  stays selected. One-shot requests time out after 10 s of silence. Nothing starts until the Logcat pane, its device menu or an Android
+  stays selected. One-shot requests time out after 10 s of silence. Nothing starts until an Android project opens in the project toolbar, or the Logcat pane, its
+  device menu or an Android
   palette command needs devices.
 - **AVDs.** Listed from `<name>.ini` and `<name>.avd/config.ini` in `ANDROID_AVD_HOME`,
   `ANDROID_USER_HOME/avd`, `ANDROID_SDK_HOME/.android/avd` and `~/.android/avd` (display name and API
@@ -375,6 +377,26 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
   `BarKt` are skipped), prefers a matching file with the frame's file name or that name next to it,
   and otherwise walks the project for `Bar.kt` under `com/foo/` (honoring `.gitignore`, skipping
   `build/`), off the UI thread; then opens the file at the line.
+- **Device picker and run configurations.** When the project toolbar's project has Android
+  application modules (`find_app_modules`: `settings.gradle(.kts)` includes whose build script
+  applies the application plugin directly, through a version catalog or a convention plugin, but
+  not with `apply false`), found on a background thread when the project changes, the toolbar adds
+  a run configuration per module (`RunConfigKind::AndroidApp`, key `android:<gradle path>`) and a
+  device chip before the run-configurations chip. Its menu lists devices and AVDs (picking an AVD
+  launches it) and **Open Logcat**.
+- **Run.** The Run button with an Android run configuration: with no online device but an AVD
+  booting, the run waits for `AndroidEvent::AvdBooted`; with no device at all, a toast and the
+  device menu. Otherwise the workspace types `./gradlew :<module>:installDebug` (`gradle` without a
+  wrapper) into the active session like a toolbar command with `target = "current"` (a busy session
+  falls back to a new tab), with `ANDROID_SERIAL` set, so the build stays visible and works in any
+  shell. Meanwhile a background thread reads the package's `lastUpdateTime` (`dumpsys package`)
+  and polls it every second for up to 20 minutes; when it changes, the app is started with
+  `cmd package resolve-activity --brief` + `am start -n` (Android 7+), falling back to `monkey -p
+  <pkg> -c android.intent.category.LAUNCHER 1`. A failed start shows a toast; a build that never
+  installs is given up silently. The next run replaces the wait. The package is the last build's
+  `build/outputs/apk/debug/output-metadata.json` `applicationId`, else the build script's
+  `applicationId` (or `namespace`) plus the debug `applicationIdSuffix`. Logcat opens (without
+  taking focus) with that package as its filter.
 - **Command palette:** "Open Logcat", "Select Android device", "Launch Android Virtual Device (AVD)"
   (both open the pane's device menu) and "Enable/Disable Android tools (devices, logcat, run)",
   which toggles `warpium.android` (default on, OSS channel only).

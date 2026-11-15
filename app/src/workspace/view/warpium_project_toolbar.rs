@@ -98,6 +98,12 @@ impl Workspace {
             }
             ProjectToolbarEvent::MenuClosed => self.focus_active_tab(ctx),
             ProjectToolbarEvent::ContentChanged => ctx.notify(),
+            ProjectToolbarEvent::RunAndroidApp { root, gradle_path } => {
+                self.run_android_app(root, gradle_path, ctx)
+            }
+            ProjectToolbarEvent::OpenLogcat => {
+                self.open_android_logcat(None, true, ctx);
+            }
         }
     }
 
@@ -136,7 +142,7 @@ impl Workspace {
     }
 
     /// Runs a command as an ordinary block, in the active session or a new tab or split.
-    fn run_project_toolbar_command(
+    pub(super) fn run_project_toolbar_command(
         &mut self,
         root: &Path,
         command: &CommandAction,
@@ -379,7 +385,11 @@ impl Workspace {
         self.add_tab_for_code_file(path, None, ctx);
     }
 
-    fn show_project_toolbar_error(&mut self, message: String, ctx: &mut ViewContext<Self>) {
+    pub(super) fn show_project_toolbar_error(
+        &mut self,
+        message: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.toast_stack.update(ctx, |toast_stack, ctx| {
             toast_stack.add_ephemeral_toast(DismissibleToast::error(message), ctx)
         });

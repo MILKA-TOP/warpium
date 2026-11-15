@@ -17,14 +17,16 @@ use warpium_android::adb::server_port_from_env;
 use warpium_android::avd::{
     Avd, avd_dirs_from_env, launch_avd, list_avds, list_avds_with_emulator, wait_for_avd_boot,
 };
+use warpium_android::run::{LaunchOutcome, spawn_launch_after_install};
 use warpium_android::sdk::{AndroidSdk, SdkEnv, find_sdk};
 use warpium_android::tracker::{TrackerEvent, spawn_device_tracker};
 use warpium_android::{AdbClient, Device, WorkerHandle};
 use warpui::keymap::EditableBinding;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+use warpui::{Action, AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::is_warpium_channel;
 use super::sync_settings::{ANDROID_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent};
+use crate::menu::{MenuItem, MenuItemFields};
 use crate::settings_view::ToggleSettingActionPair;
 use crate::util::bindings::BindingGroup;
 use crate::view_components::DismissibleToast;
@@ -34,6 +36,9 @@ use crate::workspace::WorkspaceAction;
 const SELECTED_DEVICE_KEY: &str = "WarpiumAndroidSelectedDevice";
 const BOOT_TIMEOUT: Duration = Duration::from_secs(300);
 const BOOT_POLL: Duration = Duration::from_secs(1);
+/// How long a run waits for Gradle to install the app before giving up on starting it.
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+const INSTALL_POLL: Duration = Duration::from_secs(1);
 
 /// Whether the adb server could be reached.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,15 +54,10 @@ pub(crate) enum AndroidEvent {
     DevicesChanged,
     SelectionChanged,
     AvdsChanged,
-    /// An AVD launched from Warpium finished booting.
-    AvdBooted {
-        avd: String,
-        serial: String,
-    },
+    /// An AVD launched from Warpium finished booting; it is now the selected device.
+    AvdBooted,
     /// An AVD launched from Warpium didn't boot.
-    AvdLaunchFailed {
-        avd: String,
-    },
+    AvdLaunchFailed,
 }
 
 pub(crate) struct AndroidModel {
@@ -79,6 +79,9 @@ pub(crate) struct AndroidModel {
     avds: Vec<Avd>,
     /// AVDs being launched and waited for.
     launching: HashSet<String>,
+    /// Waits for the last run's install and then starts the app; replaced (and so cancelled) by
+    /// the next run.
+    launcher: Option<WorkerHandle>,
     /// Set to stop pending boot waits when the feature is turned off.
     cancel_launches: Arc<AtomicBool>,
 }
@@ -131,6 +134,7 @@ pub(crate) fn init(ctx: &mut AppContext) {
             project_root: None,
             avds: Vec::new(),
             launching: HashSet::new(),
+            launcher: None,
             cancel_launches: Arc::new(AtomicBool::new(false)),
         }
     });
@@ -197,12 +201,13 @@ impl AndroidModel {
         self.client.as_ref()
     }
 
-    pub(crate) fn sdk(&self) -> Option<&AndroidSdk> {
-        self.sdk.as_ref()
-    }
-
     pub(crate) fn is_launching(&self, avd: &str) -> bool {
         self.launching.contains(avd)
+    }
+
+    /// Whether an AVD is being launched and waited for.
+    pub(crate) fn is_any_launching(&self) -> bool {
+        !self.launching.is_empty()
     }
 
     pub(crate) fn selected_serial(&self) -> Option<&str> {
@@ -285,6 +290,7 @@ impl AndroidModel {
         self.devices.clear();
         self.cancel_launches.store(true, Ordering::Release);
         self.launching.clear();
+        self.launcher = None;
         ctx.emit(AndroidEvent::DevicesChanged);
         ctx.notify();
     }
@@ -379,8 +385,8 @@ impl AndroidModel {
     /// running. [`AndroidEvent::AvdBooted`] follows once it has booted.
     pub(crate) fn launch_avd(&mut self, avd: String, ctx: &mut ModelContext<Self>) {
         if let Some(serial) = self.device_running_avd(&avd).map(|d| d.serial().to_owned()) {
-            self.select(serial.clone(), ctx);
-            ctx.emit(AndroidEvent::AvdBooted { avd, serial });
+            self.select(serial, ctx);
+            ctx.emit(AndroidEvent::AvdBooted);
             return;
         }
         if self.launching.contains(&avd) {
@@ -440,8 +446,8 @@ impl AndroidModel {
                 }
                 match result {
                     Some(Ok(serial)) => {
-                        model.select(serial.clone(), ctx);
-                        ctx.emit(AndroidEvent::AvdBooted { avd, serial });
+                        model.select(serial, ctx);
+                        ctx.emit(AndroidEvent::AvdBooted);
                     }
                     Some(Err(message)) => {
                         log::warn!("[Android] The AVD didn't boot: {message}");
@@ -449,12 +455,115 @@ impl AndroidModel {
                             DismissibleToast::error(format!("{avd}: {message}")),
                             ctx,
                         );
-                        ctx.emit(AndroidEvent::AvdLaunchFailed { avd });
+                        ctx.emit(AndroidEvent::AvdLaunchFailed);
                     }
-                    None => ctx.emit(AndroidEvent::AvdLaunchFailed { avd }),
+                    None => ctx.emit(AndroidEvent::AvdLaunchFailed),
                 }
                 ctx.notify();
             },
         );
     }
+
+    /// Starts `package` on `serial` once Gradle has (re)installed it, replacing the previous run's
+    /// wait. A failure to start shows a toast; a build that never installs is given up silently
+    /// (its terminal shows why).
+    pub(crate) fn launch_after_install(
+        &mut self,
+        serial: String,
+        package: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let (sender, receiver) = oneshot::channel();
+        match spawn_launch_after_install(
+            client,
+            serial,
+            package.clone(),
+            INSTALL_TIMEOUT,
+            INSTALL_POLL,
+            move |outcome| {
+                let _ = sender.send(outcome);
+            },
+        ) {
+            Ok(launcher) => self.launcher = Some(launcher),
+            Err(err) => {
+                log::error!("[Android] Couldn't start waiting for the install: {err}");
+                return;
+            }
+        }
+        ctx.spawn(
+            async move { receiver.await.ok() },
+            move |_, outcome, ctx| match outcome {
+                Some(LaunchOutcome::Launched) | None => {}
+                Some(LaunchOutcome::TimedOut) => {
+                    log::info!("[Android] The app wasn't installed in time; not starting it");
+                }
+                Some(LaunchOutcome::Failed(output)) => super::show_toast(
+                    DismissibleToast::error(format!("Couldn't start {package}: {output}")),
+                    ctx,
+                ),
+            },
+        );
+    }
+}
+
+/// Menu items listing the devices (selectable when online) and the AVDs that aren't running
+/// (launchable), for the device menus of the toolbar and the Logcat pane.
+pub(crate) fn device_menu_items<A: Action + Clone>(
+    android: &AndroidModel,
+    select: impl Fn(String) -> A,
+    launch: impl Fn(String) -> A,
+) -> Vec<MenuItem<A>> {
+    let mut items = vec![MenuItem::Header {
+        fields: MenuItemFields::new("Devices").with_no_interaction_on_hover(),
+        clickable: false,
+        right_side_fields: None,
+    }];
+    if android.devices().is_empty() {
+        let message = match android.status() {
+            AdbStatus::Unavailable(_) => "adb server not reachable",
+            AdbStatus::NotStarted | AdbStatus::Connecting => "Connecting to adb…",
+            AdbStatus::Connected => "No devices connected",
+        };
+        items.push(MenuItem::Item(
+            MenuItemFields::new(message)
+                .with_no_interaction_on_hover()
+                .with_disabled(true),
+        ));
+    }
+    for device in android.devices() {
+        items.push(MenuItem::Item(
+            MenuItemFields::new_with_stacked_label(device.display_name(), device.detail())
+                .with_disabled(!device.entry.state.is_online())
+                .with_on_select_action(select(device.serial().to_owned())),
+        ));
+    }
+    let avds: Vec<_> = android
+        .avds()
+        .iter()
+        .filter(|avd| android.device_running_avd(&avd.name).is_none())
+        .collect();
+    if !avds.is_empty() {
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::Header {
+            fields: MenuItemFields::new("Launch emulator").with_no_interaction_on_hover(),
+            clickable: false,
+            right_side_fields: None,
+        });
+        for avd in avds {
+            let label = if android.is_launching(&avd.name) {
+                format!("{} (starting…)", avd.label())
+            } else {
+                avd.label()
+            };
+            items.push(MenuItem::Item(
+                MenuItemFields::new(label)
+                    .with_disabled(android.is_launching(&avd.name))
+                    .with_on_select_action(launch(avd.name.clone())),
+            ));
+        }
+    }
+    items
 }

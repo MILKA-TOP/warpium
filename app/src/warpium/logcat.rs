@@ -42,7 +42,7 @@ use warpui::{
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-use super::android::{AdbStatus, AndroidEvent, AndroidModel};
+use super::android::{AdbStatus, AndroidEvent, AndroidModel, device_menu_items};
 use super::code_index::CodeIndexModel;
 use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, PropagateHorizontalNavigationKeys, TextOptions,
@@ -658,7 +658,11 @@ impl LogcatView {
             return;
         };
         let items = match menu {
-            LogcatMenu::Devices => device_menu_items(AndroidModel::as_ref(ctx)),
+            LogcatMenu::Devices => device_menu_items(
+                AndroidModel::as_ref(ctx),
+                LogcatAction::SelectDevice,
+                LogcatAction::LaunchAvd,
+            ),
             LogcatMenu::Levels => LogLevel::ALL
                 .iter()
                 .map(|level| {
@@ -1237,59 +1241,6 @@ fn class_files_for_frame(frame: &StackFrame, index: &code_index::CodeIndex) -> V
         }
     }
     Vec::new()
-}
-
-fn device_menu_items(android: &AndroidModel) -> Vec<MenuItem<LogcatAction>> {
-    let mut items = vec![MenuItem::Header {
-        fields: MenuItemFields::new("Devices").with_no_interaction_on_hover(),
-        clickable: false,
-        right_side_fields: None,
-    }];
-    if android.devices().is_empty() {
-        let message = match android.status() {
-            AdbStatus::Unavailable(_) => "adb server not reachable",
-            AdbStatus::NotStarted | AdbStatus::Connecting => "Connecting to adb…",
-            AdbStatus::Connected => "No devices connected",
-        };
-        items.push(MenuItem::Item(
-            MenuItemFields::new(message)
-                .with_no_interaction_on_hover()
-                .with_disabled(true),
-        ));
-    }
-    for device in android.devices() {
-        items.push(MenuItem::Item(
-            MenuItemFields::new_with_stacked_label(device.display_name(), device.detail())
-                .with_disabled(!device.entry.state.is_online())
-                .with_on_select_action(LogcatAction::SelectDevice(device.serial().to_owned())),
-        ));
-    }
-    let avds: Vec<_> = android
-        .avds()
-        .iter()
-        .filter(|avd| android.device_running_avd(&avd.name).is_none())
-        .collect();
-    if !avds.is_empty() {
-        items.push(MenuItem::Separator);
-        items.push(MenuItem::Header {
-            fields: MenuItemFields::new("Launch emulator").with_no_interaction_on_hover(),
-            clickable: false,
-            right_side_fields: None,
-        });
-        for avd in avds {
-            let label = if android.is_launching(&avd.name) {
-                format!("{} (starting…)", avd.label())
-            } else {
-                avd.label()
-            };
-            items.push(MenuItem::Item(
-                MenuItemFields::new(label)
-                    .with_disabled(android.is_launching(&avd.name))
-                    .with_on_select_action(LogcatAction::LaunchAvd(avd.name.clone())),
-            ));
-        }
-    }
-    items
 }
 
 /// A labelled dropdown button styled like the toolbar's other controls.

@@ -16,16 +16,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use futures::channel::oneshot;
 use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::user_preferences::GetUserPreferences as _;
+use warpium_android::project::{AndroidAppModule, find_app_modules};
 use warpium_project_toolbar::{
     ButtonIcon, ConfigError, ConfigSource, ProjectContext, RunConfigItem, RunConfigKind,
-    ToolbarButton, ToolbarUserState, TrustListing, content_hash, detect_project, merge,
-    needs_trust, parse_config, personal_config_path, run_config_items, selected_run_config,
-    team_config_path, toolbar_buttons, trust_listings,
+    ToolbarButton, ToolbarUserState, TrustListing, android_app_run_config, content_hash,
+    detect_project, merge, needs_trust, parse_config, personal_config_path, run_config_items,
+    selected_run_config, team_config_path, toolbar_buttons, trust_listings,
 };
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
@@ -45,6 +47,7 @@ use warpui::{
 };
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
+use super::android::{AndroidEvent, AndroidModel, device_menu_items};
 use super::is_warpium_channel;
 use super::project_toolbar_row::ToolbarRow;
 use super::sync_settings::{
@@ -64,6 +67,7 @@ const BUTTON_HEIGHT: f32 = 24.;
 const ICON_SIZE: f32 = 16.;
 const FONT_SIZE: f32 = 12.;
 const RUN_CHIP_MAX_LABEL_WIDTH: f32 = 160.;
+const DEVICE_CHIP_MAX_LABEL_WIDTH: f32 = 140.;
 const MENU_WIDTH: f32 = 240.;
 const TRUST_PROMPT_WIDTH: f32 = 420.;
 /// Commands listed in the trust prompt before the rest are summarized.
@@ -239,6 +243,10 @@ pub(crate) enum ProjectToolbarAction {
     ConfirmTrust,
     CancelTrust,
     EditConfig { personal: bool },
+    ToggleDeviceMenu,
+    SelectAndroidDevice(String),
+    LaunchAndroidAvd(String),
+    OpenLogcat,
 }
 
 pub(crate) enum ProjectToolbarEvent {
@@ -257,6 +265,13 @@ pub(crate) enum ProjectToolbarEvent {
     MenuClosed,
     /// [`ProjectToolbarView::has_content`] changed, so its title-bar slot appears or goes away.
     ContentChanged,
+    /// Build, install and start the Android app module with this Gradle path on the selected
+    /// device.
+    RunAndroidApp {
+        root: PathBuf,
+        gradle_path: String,
+    },
+    OpenLogcat,
 }
 
 enum LoadedConfig {
@@ -275,6 +290,7 @@ enum LoadedConfig {
 enum OpenMenu {
     RunConfigs,
     Overflow,
+    Devices,
 }
 
 struct TrustPrompt {
@@ -287,6 +303,7 @@ struct TrustPrompt {
 #[derive(Default)]
 struct MouseStates {
     run_config_chip: MouseStateHandle,
+    device_chip: MouseStateHandle,
     run_button: MouseStateHandle,
     overflow_button: MouseStateHandle,
     invalid_config_button: MouseStateHandle,
@@ -313,6 +330,13 @@ pub(crate) struct ProjectToolbarView {
     visible_buttons: Arc<AtomicUsize>,
     /// [`Self::has_content`] when it was last reported to the workspace.
     had_content: bool,
+    /// The project's Android application modules, found off the main thread. When there are
+    /// any, the toolbar shows the device picker and one run configuration per module.
+    android_apps: Vec<AndroidAppModule>,
+    /// Bumped per detection, so results for an earlier project are dropped.
+    android_generation: u64,
+    /// The Gradle path of an Android run waiting for an emulator to finish booting.
+    pending_android_run: Option<String>,
 }
 
 impl ProjectToolbarView {
@@ -343,11 +367,39 @@ impl ProjectToolbarView {
                 }
             },
         );
-        ctx.subscribe_to_model(&WarpiumSettings::handle(ctx), |me, _, event, ctx| {
-            if let WarpiumSettingsChangedEvent::ProjectToolbar { .. } = event {
-                let (pinned_root, cwd) = me.inputs.clone();
-                me.update_context(pinned_root, cwd, true, ctx);
+        ctx.subscribe_to_model(
+            &WarpiumSettings::handle(ctx),
+            |me, _, event, ctx| match event {
+                WarpiumSettingsChangedEvent::ProjectToolbar { .. } => {
+                    let (pinned_root, cwd) = me.inputs.clone();
+                    me.update_context(pinned_root, cwd, true, ctx);
+                }
+                WarpiumSettingsChangedEvent::AndroidTools { .. } => me.detect_android_apps(ctx),
+                WarpiumSettingsChangedEvent::SyncFromWarp { .. }
+                | WarpiumSettingsChangedEvent::UpstreamCheck { .. }
+                | WarpiumSettingsChangedEvent::UpstreamCheckIntervalHours { .. }
+                | WarpiumSettingsChangedEvent::UpstreamCheckMinCommits { .. }
+                | WarpiumSettingsChangedEvent::UpdateCheck { .. }
+                | WarpiumSettingsChangedEvent::UpdateCheckIntervalHours { .. }
+                | WarpiumSettingsChangedEvent::CodeIndex { .. } => {}
+            },
+        );
+        ctx.subscribe_to_model(&AndroidModel::handle(ctx), |me, _, event, ctx| {
+            match event {
+                AndroidEvent::AvdBooted => {
+                    if let Some(gradle_path) = me.pending_android_run.take() {
+                        me.run_android_app(gradle_path, ctx);
+                    }
+                }
+                AndroidEvent::AvdLaunchFailed => me.pending_android_run = None,
+                AndroidEvent::DevicesChanged
+                | AndroidEvent::SelectionChanged
+                | AndroidEvent::AvdsChanged => {}
             }
+            if me.open_menu == Some(OpenMenu::Devices) {
+                me.set_menu_items(OpenMenu::Devices, ctx);
+            }
+            ctx.notify();
         });
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), |me, _, event, ctx| {
             if let WarpConfigUpdateEvent::LaunchConfigs = event {
@@ -367,6 +419,9 @@ impl ProjectToolbarView {
             mouse_states: MouseStates::default(),
             visible_buttons: Arc::new(AtomicUsize::new(usize::MAX)),
             had_content: false,
+            android_apps: Vec::new(),
+            android_generation: 0,
+            pending_android_run: None,
         }
     }
 
@@ -425,6 +480,78 @@ impl ProjectToolbarView {
         self.open_menu = None;
         self.trust_prompt = None;
         self.reload(ctx);
+        self.detect_android_apps(ctx);
+    }
+
+    /// Finds the project's Android application modules off the main thread, and starts device
+    /// tracking when there are any.
+    fn detect_android_apps(&mut self, ctx: &mut ViewContext<Self>) {
+        self.android_generation += 1;
+        self.android_apps.clear();
+        self.pending_android_run = None;
+        self.refresh_run_configs(ctx);
+        let Some(root) = self.project_root().map(Path::to_path_buf) else {
+            return;
+        };
+        if !super::android::is_enabled(ctx) {
+            return;
+        }
+        let generation = self.android_generation;
+        let (sender, receiver) = oneshot::channel();
+        let thread_root = root.clone();
+        let spawned = std::thread::Builder::new()
+            .name("android-modules".to_owned())
+            .spawn(move || {
+                let _ = sender.send(find_app_modules(&thread_root));
+            });
+        if let Err(err) = spawned {
+            log::warn!("[Project toolbar] Couldn't start looking for Android modules: {err}");
+            return;
+        }
+        ctx.spawn(async move { receiver.await.ok() }, move |me, apps, ctx| {
+            if me.android_generation != generation {
+                return;
+            }
+            me.android_apps = apps.unwrap_or_default();
+            if !me.android_apps.is_empty() {
+                AndroidModel::handle(ctx).update(ctx, |android, ctx| {
+                    android.ensure_started(Some(root.as_path()), ctx)
+                });
+            }
+            me.refresh_run_configs(ctx);
+        });
+    }
+
+    /// Whether the toolbar shows the device picker: an Android project with the tools on.
+    fn shows_android(&self, ctx: &AppContext) -> bool {
+        !self.android_apps.is_empty() && super::android::is_enabled(ctx)
+    }
+
+    /// Asks the workspace to run an Android app module, or waits for an emulator that is
+    /// booting.
+    fn run_android_app(&mut self, gradle_path: String, ctx: &mut ViewContext<Self>) {
+        let Some(root) = self.project_root().map(Path::to_path_buf) else {
+            return;
+        };
+        let android = AndroidModel::as_ref(ctx);
+        let device_online = android
+            .selected_device()
+            .is_some_and(|device| device.entry.state.is_online());
+        if !device_online && android.is_any_launching() {
+            self.pending_android_run = Some(gradle_path);
+            ctx.notify();
+            return;
+        }
+        self.pending_android_run = None;
+        ctx.emit(ProjectToolbarEvent::RunAndroidApp { root, gradle_path });
+        ctx.notify();
+    }
+
+    /// Opens the device picker's menu, as when a run needs a device.
+    pub(crate) fn open_device_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.shows_android(ctx) && self.open_menu != Some(OpenMenu::Devices) {
+            self.toggle_menu(OpenMenu::Devices, ctx);
+        }
     }
 
     /// Reads the configs again, for example after "Edit personal toolbar overrides" created one.
@@ -525,6 +652,14 @@ impl ProjectToolbarView {
             .map(|root| project_launch_configs(root, ctx))
             .unwrap_or_default();
         self.run_configs = run_config_items(self.buttons(), &launch_configs);
+        if super::android::is_enabled(ctx) {
+            let android_items: Vec<RunConfigItem> = self
+                .android_apps
+                .iter()
+                .map(|module| android_app_run_config(&module.gradle_path, &module.display_name()))
+                .collect();
+            self.run_configs.extend(android_items);
+        }
         let has_content = self.has_content();
         if has_content != self.had_content {
             self.had_content = has_content;
@@ -597,6 +732,10 @@ impl ProjectToolbarView {
                 self.open_menu = None;
                 ctx.emit(ProjectToolbarEvent::OpenLaunchConfig(name));
             }
+            RunConfigKind::AndroidApp(gradle_path) => {
+                self.open_menu = None;
+                self.run_android_app(gradle_path, ctx);
+            }
         }
     }
 
@@ -607,26 +746,56 @@ impl ProjectToolbarView {
             return;
         }
         self.trust_prompt = None;
-        if menu == OpenMenu::RunConfigs {
-            self.refresh_run_configs(ctx);
+        match menu {
+            OpenMenu::RunConfigs => self.refresh_run_configs(ctx),
+            OpenMenu::Devices => {
+                let root = self.project_root().map(Path::to_path_buf);
+                AndroidModel::handle(ctx).update(ctx, |android, ctx| {
+                    android.ensure_started(root.as_deref(), ctx);
+                    android.refresh_avds(ctx);
+                });
+            }
+            OpenMenu::Overflow => {}
         }
+        self.set_menu_items(menu, ctx);
+        self.open_menu = Some(menu);
+        ctx.focus(&self.menu);
+        ctx.notify();
+    }
+
+    fn set_menu_items(&mut self, menu: OpenMenu, ctx: &mut ViewContext<Self>) {
         let items = match menu {
             OpenMenu::RunConfigs => self.run_config_menu_items(),
             OpenMenu::Overflow => self.overflow_menu_items(),
+            OpenMenu::Devices => {
+                let mut items = device_menu_items(
+                    AndroidModel::as_ref(ctx),
+                    ProjectToolbarAction::SelectAndroidDevice,
+                    ProjectToolbarAction::LaunchAndroidAvd,
+                );
+                items.push(MenuItem::Separator);
+                items.push(MenuItem::Item(
+                    MenuItemFields::new("Open Logcat")
+                        .with_on_select_action(ProjectToolbarAction::OpenLogcat),
+                ));
+                items
+            }
         };
-        let selected = (menu == OpenMenu::RunConfigs)
-            .then(|| self.selected_run_config(ctx))
-            .flatten()
-            .map(|item| ProjectToolbarAction::SelectRunConfig(item.key.clone()));
+        let selected = match menu {
+            OpenMenu::RunConfigs => self
+                .selected_run_config(ctx)
+                .map(|item| ProjectToolbarAction::SelectRunConfig(item.key.clone())),
+            OpenMenu::Devices => AndroidModel::as_ref(ctx)
+                .selected_serial()
+                .map(|serial| ProjectToolbarAction::SelectAndroidDevice(serial.to_owned())),
+            OpenMenu::Overflow => None,
+        };
         self.menu.update(ctx, |menu_view, ctx| {
             menu_view.set_items(items, ctx);
             if let Some(selected) = &selected {
                 menu_view.set_selected_by_action(selected, ctx);
             }
         });
-        self.open_menu = Some(menu);
-        ctx.focus(&self.menu);
-        ctx.notify();
     }
 
     fn run_config_menu_items(&self) -> Vec<MenuItem<ProjectToolbarAction>> {
@@ -639,6 +808,7 @@ impl ProjectToolbarView {
             let label = match item.kind {
                 RunConfigKind::Button(_) => item.label.clone(),
                 RunConfigKind::LaunchConfig(_) => format!("{} (launch configuration)", item.label),
+                RunConfigKind::AndroidApp(_) => format!("{} (Android app)", item.label),
             };
             MenuItem::Item(
                 MenuItemFields::new(label)
@@ -892,10 +1062,84 @@ impl ProjectToolbarView {
         .on_click(|ctx, _, _| ctx.dispatch_typed_action(ProjectToolbarAction::RunSelectedRunConfig))
         .finish();
 
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(chip)
+        let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+        if self.shows_android(ctx) {
+            row.add_child(
+                Container::new(self.render_device_chip(appearance, ctx))
+                    .with_margin_right(2.)
+                    .finish(),
+            );
+        }
+        row.with_child(chip)
             .with_child(Container::new(run).with_margin_left(2.).finish())
+            .finish()
+    }
+
+    /// The device picker: the selected device (or the emulator being started) and a menu of
+    /// devices and AVDs.
+    fn render_device_chip(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let android = AndroidModel::as_ref(ctx);
+        let label = if self.pending_android_run.is_some() || android.is_any_launching() {
+            "Starting emulator…".to_owned()
+        } else {
+            match android.selected_device() {
+                Some(device) if device.entry.state.is_online() => device.display_name(),
+                Some(device) => {
+                    format!("{} ({})", device.display_name(), device.entry.state.label())
+                }
+                None => "No device".to_owned(),
+            }
+        };
+        let sub_color = theme.sub_text_color(theme.background());
+        let chip_label = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Container::new(sized_icon(Icon::Phone.to_warpui_icon(sub_color).finish()))
+                    .with_margin_right(4.)
+                    .finish(),
+            )
+            .with_child(
+                ConstrainedBox::new(
+                    Text::new_inline(label, appearance.ui_font_family(), FONT_SIZE)
+                        .with_color(theme.main_text_color(theme.background()).into_solid())
+                        .finish(),
+                )
+                .with_max_width(DEVICE_CHIP_MAX_LABEL_WIDTH)
+                .finish(),
+            )
+            .with_child(
+                Container::new(
+                    ConstrainedBox::new(Icon::ChevronDown.to_warpui_icon(sub_color).finish())
+                        .with_width(12.)
+                        .with_height(12.)
+                        .finish(),
+                )
+                .with_margin_left(4.)
+                .finish(),
+            )
+            .finish();
+        let ui_builder = appearance.ui_builder().clone();
+        let mut chip = toolbar_button(
+            self.mouse_states.device_chip.clone(),
+            chip_label,
+            (6., 6.),
+            appearance,
+        )
+        .with_tooltip(move || {
+            ui_builder
+                .tool_tip("Android device".to_owned())
+                .build()
+                .finish()
+        });
+        if self.open_menu == Some(OpenMenu::Devices) {
+            chip = chip.active().with_active_styles(UiComponentStyles {
+                background: Some(internal_colors::fg_overlay_3(theme).into()),
+                ..UiComponentStyles::default()
+            });
+        }
+        chip.build()
+            .on_click(|ctx, _, _| ctx.dispatch_typed_action(ProjectToolbarAction::ToggleDeviceMenu))
             .finish()
     }
 
@@ -1233,6 +1477,26 @@ impl TypedActionView for ProjectToolbarView {
                 ctx.emit(ProjectToolbarEvent::EditConfig {
                     personal: *personal,
                 });
+                ctx.notify();
+            }
+            ProjectToolbarAction::ToggleDeviceMenu => self.toggle_menu(OpenMenu::Devices, ctx),
+            ProjectToolbarAction::SelectAndroidDevice(serial) => {
+                self.open_menu = None;
+                let serial = serial.clone();
+                AndroidModel::handle(ctx).update(ctx, |android, ctx| android.select(serial, ctx));
+                ctx.emit(ProjectToolbarEvent::MenuClosed);
+                ctx.notify();
+            }
+            ProjectToolbarAction::LaunchAndroidAvd(avd) => {
+                self.open_menu = None;
+                let avd = avd.clone();
+                AndroidModel::handle(ctx).update(ctx, |android, ctx| android.launch_avd(avd, ctx));
+                ctx.emit(ProjectToolbarEvent::MenuClosed);
+                ctx.notify();
+            }
+            ProjectToolbarAction::OpenLogcat => {
+                self.open_menu = None;
+                ctx.emit(ProjectToolbarEvent::OpenLogcat);
                 ctx.notify();
             }
         }
