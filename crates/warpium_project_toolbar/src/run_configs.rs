@@ -10,6 +10,8 @@ pub enum RunConfigKind {
     Button(String),
     /// A launch configuration that opens sessions in the project, by name.
     LaunchConfig(String),
+    /// An Android application module to build, install and start, by Gradle path (`:app`).
+    AndroidApp(String),
 }
 
 /// One entry of the run-configurations dropdown.
@@ -51,6 +53,15 @@ pub fn run_config_items(
         }
     }
     items
+}
+
+/// The run-configurations entry for an Android application module, labelled `name`.
+pub fn android_app_run_config(gradle_path: &str, name: &str) -> RunConfigItem {
+    RunConfigItem {
+        key: format!("android:{gradle_path}"),
+        label: name.to_owned(),
+        kind: RunConfigKind::AndroidApp(gradle_path.to_owned()),
+    }
 }
 
 /// The selected entry: the remembered one if it still exists, else the first.

@@ -191,3 +191,17 @@ fn no_buttons_needs_no_overflow_menu() {
         }
     );
 }
+
+#[test]
+fn android_app_run_config_is_keyed_by_gradle_path() {
+    let item = android_app_run_config(":wear:app", "app");
+
+    assert_eq!(
+        item,
+        RunConfigItem {
+            key: "android::wear:app".to_owned(),
+            label: "app".to_owned(),
+            kind: RunConfigKind::AndroidApp(":wear:app".to_owned()),
+        }
+    );
+}

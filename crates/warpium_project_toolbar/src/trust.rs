@@ -1,7 +1,7 @@
 //! Trust for commands from a committed `.warpium/toolbar.toml`, and the other per-project state
 //! kept in user preferences (never in the project).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,9 @@ pub struct ToolbarUserState {
     /// The selected run configuration key, per project root.
     #[serde(default)]
     selected_run_config: BTreeMap<String, String>,
+    /// Project roots whose Gradle build the user allowed Android runs to execute.
+    #[serde(default)]
+    trusted_android_builds: BTreeSet<String>,
 }
 
 impl ToolbarUserState {
@@ -44,6 +47,15 @@ impl ToolbarUserState {
 
     pub fn trust(&mut self, root: &Path, team_hash: &str) {
         self.trusted.insert(key(root), team_hash.to_owned());
+    }
+
+    /// Whether the user allowed Android runs to execute this project's Gradle build.
+    pub fn trusts_android_builds(&self, root: &Path) -> bool {
+        self.trusted_android_builds.contains(&key(root))
+    }
+
+    pub fn trust_android_builds(&mut self, root: &Path) {
+        self.trusted_android_builds.insert(key(root));
     }
 
     pub fn selected_run_config(&self, root: &Path) -> Option<&str> {

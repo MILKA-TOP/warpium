@@ -46,16 +46,19 @@ impl AndroidAppModule {
         )
     }
 
+    /// AGP's `output-metadata.json` for `variant`, written when the APK is packaged.
+    pub fn output_metadata_path(&self, variant: &str) -> PathBuf {
+        self.dir
+            .join("build/outputs/apk")
+            .join(variant)
+            .join("output-metadata.json")
+    }
+
     /// The package `variant` installs as: from the last build's `output-metadata.json` when there
     /// is one (exact, flavors and suffixes included), else the build script's id plus the debug
     /// suffix.
     pub fn package_for_variant(&self, variant: &str) -> Option<String> {
-        let metadata = self
-            .dir
-            .join("build/outputs/apk")
-            .join(variant)
-            .join("output-metadata.json");
-        if let Some(id) = std::fs::read_to_string(metadata)
+        if let Some(id) = std::fs::read_to_string(self.output_metadata_path(variant))
             .ok()
             .and_then(|json| application_id_from_metadata(&json))
         {

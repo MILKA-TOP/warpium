@@ -12,6 +12,7 @@ pub mod avd;
 pub mod device;
 pub mod logcat;
 pub mod project;
+pub mod run;
 pub mod sdk;
 pub mod stack;
 #[cfg(test)]

@@ -25077,11 +25077,15 @@ impl TypedActionView for Workspace {
             }
             OpenAndroidLogcat => {
                 #[cfg(not(target_family = "wasm"))]
-                self.open_android_logcat(None, ctx);
+                self.open_android_logcat(None, true, ctx);
             }
             SelectAndroidDevice | LaunchAndroidAvd => {
                 #[cfg(not(target_family = "wasm"))]
-                self.open_android_logcat(Some(crate::warpium::logcat::LogcatMenu::Devices), ctx);
+                self.open_android_logcat(
+                    Some(crate::warpium::logcat::LogcatMenu::Devices),
+                    true,
+                    ctx,
+                );
             }
             ToggleAndroidTools => {
                 crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
