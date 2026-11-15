@@ -15583,6 +15583,7 @@ dependencies = [
  "warp_terminal",
  "warp_util",
  "warp_web_event_bus",
+ "warpium_android",
  "warpium_project_toolbar",
  "warpium_self_update",
  "warpium_upstream_check",
@@ -16364,6 +16365,19 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "warpium_android"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "command",
+ "ignore",
+ "instant",
+ "log",
+ "regex",
+ "tempfile",
 ]
 
 [[package]]

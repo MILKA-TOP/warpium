@@ -156,6 +156,8 @@ pub enum LeafContents {
     NetworkLog,
     /// A new first-time user experience which prioritizes choosing a coding repository.
     GetStarted,
+    /// Warpium's Logcat pane. Not persisted: the log is a live stream that starts empty.
+    WarpiumLogcat,
 }
 
 #[cfg(feature = "local_fs")]
@@ -175,6 +177,8 @@ impl LeafContents {
             // starts empty on launch; persisting would also regress back to
             // an on-disk log via the app-state database.
             LeafContents::NetworkLog
+            // Warpium's Logcat pane streams from a device; there is nothing to restore.
+            | LeafContents::WarpiumLogcat
             // Environment management panes are opened on-demand via workspace
             // actions and have no persistable state.
             | LeafContents::EnvironmentManagement(_) => false,

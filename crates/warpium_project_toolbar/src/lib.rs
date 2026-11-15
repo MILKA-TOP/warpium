@@ -25,8 +25,8 @@ pub use project::{
     personal_config_path, project_id, team_config_path,
 };
 pub use run_configs::{
-    InlineFit, RunConfigItem, RunConfigKind, fit_inline_buttons, run_config_items,
-    selected_run_config, toolbar_buttons,
+    InlineFit, RunConfigItem, RunConfigKind, android_app_run_config, fit_inline_buttons,
+    run_config_items, selected_run_config, toolbar_buttons,
 };
 pub use template::{PERSONAL_TEMPLATE, TEAM_TEMPLATE};
 pub use trust::{

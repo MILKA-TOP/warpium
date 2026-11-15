@@ -908,6 +908,14 @@ pub enum WorkspaceAction {
     ToggleProjectToolbar,
     /// Warpium: toggles the Kotlin/Java code index behind Go to Class and Go to Symbol.
     ToggleCodeIndex,
+    /// Warpium: opens (or focuses) the Logcat pane.
+    OpenAndroidLogcat,
+    /// Warpium: opens the Logcat pane's device menu.
+    SelectAndroidDevice,
+    /// Warpium: opens the Logcat pane's device menu, which lists the AVDs to launch.
+    LaunchAndroidAvd,
+    /// Warpium: toggles the Android tools (devices, run, Logcat).
+    ToggleAndroidTools,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1259,6 +1267,10 @@ impl WorkspaceAction {
             | EditPersonalToolbarOverrides
             | ToggleProjectToolbar
             | ToggleCodeIndex
+            | OpenAndroidLogcat
+            | SelectAndroidDevice
+            | LaunchAndroidAvd
+            | ToggleAndroidTools
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }

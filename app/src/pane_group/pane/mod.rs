@@ -27,6 +27,8 @@ pub(super) mod notebook_pane;
 pub(super) mod settings_pane;
 pub(super) mod terminal_pane;
 pub mod view;
+#[cfg(not(target_family = "wasm"))]
+pub(super) mod warpium_logcat_pane;
 pub mod workflow_pane;
 
 use std::any::Any;
@@ -147,6 +149,8 @@ pub(crate) enum IPaneType {
     GetStarted,
     NetworkLog,
     DeferredPlaceholder,
+    /// Warpium's Logcat pane.
+    WarpiumLogcat,
     /// A pane type only for tests.
     #[cfg(test)]
     Dummy,
@@ -171,6 +175,7 @@ impl Display for IPaneType {
             IPaneType::GetStarted => write!(f, "GetStarted"),
             IPaneType::NetworkLog => write!(f, "Network Log"),
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
+            IPaneType::WarpiumLogcat => write!(f, "Logcat"),
             #[cfg(test)]
             IPaneType::Dummy => write!(f, "Dummy"),
         }
@@ -272,6 +277,22 @@ impl PaneId {
     /// Creates a [`PaneId`] from a [`ViewContext<PaneView<NetworkLogView>>`].
     pub fn from_network_log_pane_ctx(ctx: &ViewContext<PaneView<NetworkLogView>>) -> Self {
         Self::new_from_ctx(IPaneType::NetworkLog, ctx)
+    }
+
+    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<LogcatView>>`] (Warpium).
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn from_warpium_logcat_pane_ctx(
+        ctx: &ViewContext<PaneView<crate::warpium::logcat::LogcatView>>,
+    ) -> Self {
+        Self::new_from_ctx(IPaneType::WarpiumLogcat, ctx)
+    }
+
+    /// Creates a [`PaneId`] from a [`PaneView<LogcatView>`] entity ID (Warpium).
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn from_warpium_logcat_pane_view(
+        logcat_pane_view: &ViewHandle<PaneView<crate::warpium::logcat::LogcatView>>,
+    ) -> Self {
+        Self::new(IPaneType::WarpiumLogcat, logcat_pane_view)
     }
 
     /// Creates a [`PaneId`] from a [`PaneView<TerminalView>`] entity ID.
@@ -498,6 +519,15 @@ impl PaneId {
                 ChildView::<PaneView<NetworkLogView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::DeferredPlaceholder => warpui::elements::Empty::new().finish(),
+            #[cfg(not(target_family = "wasm"))]
+            IPaneType::WarpiumLogcat => {
+                ChildView::<PaneView<crate::warpium::logcat::LogcatView>>::with_id(
+                    self.0.pane_view_id,
+                )
+                .finish()
+            }
+            #[cfg(target_family = "wasm")]
+            IPaneType::WarpiumLogcat => warpui::elements::Empty::new().finish(),
             #[cfg(test)]
             IPaneType::Dummy => warpui::elements::Empty::new().finish(),
         };

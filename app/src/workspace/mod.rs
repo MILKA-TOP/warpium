@@ -121,6 +121,10 @@ pub fn init(app: &mut AppContext) {
     crate::warpium::project_toolbar::init_bindings(app);
     #[cfg(not(target_family = "wasm"))]
     crate::warpium::code_index::init_bindings(app);
+    #[cfg(not(target_family = "wasm"))]
+    crate::warpium::android::init_bindings(app);
+    #[cfg(not(target_family = "wasm"))]
+    crate::warpium::logcat::init(app);
 
     app.register_fixed_bindings([FixedBinding::empty(
         "Dump debug info",

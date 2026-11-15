@@ -23,6 +23,8 @@ mod tab_grouping;
 pub(crate) mod tests;
 mod vertical_tabs;
 #[cfg(not(target_family = "wasm"))]
+mod warpium_android;
+#[cfg(not(target_family = "wasm"))]
 mod warpium_project_toolbar;
 #[cfg(target_family = "wasm")]
 mod wasm_view;
@@ -25080,6 +25082,27 @@ impl TypedActionView for Workspace {
                 );
                 ctx.notify();
             }
+            OpenAndroidLogcat => {
+                #[cfg(not(target_family = "wasm"))]
+                self.open_android_logcat(None, true, ctx);
+            }
+            SelectAndroidDevice | LaunchAndroidAvd => {
+                #[cfg(not(target_family = "wasm"))]
+                self.open_android_logcat(
+                    Some(crate::warpium::logcat::LogcatMenu::Devices),
+                    true,
+                    ctx,
+                );
+            }
+            ToggleAndroidTools => {
+                crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.android_tools.toggle_and_save_value(ctx));
+                    },
+                );
+                ctx.notify();
+            }
             OpenLocalToCloudHandoffPane {
                 launch,
                 environment_id,
@@ -27398,6 +27421,11 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::CODE_INDEX_CONTEXT_FLAG);
+        }
+        if *crate::warpium::sync_settings::WarpiumSettings::as_ref(app).android_tools {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::ANDROID_CONTEXT_FLAG);
         }
 
         if self.team_uid(app).is_some() {
