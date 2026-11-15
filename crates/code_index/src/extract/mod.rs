@@ -4,9 +4,11 @@ mod java;
 mod kotlin;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 
-use arborium_tree_sitter::{Node, Parser};
+use arborium_tree_sitter::{Node, Parser, Tree};
 
+use crate::lex::{for_each_identifier, is_keyword};
 use crate::model::{Language, Position, SymbolKind, Visibility};
 
 /// A declaration before its strings are interned.
@@ -36,6 +38,8 @@ pub(crate) struct RawFile {
     pub package: String,
     pub imports: Vec<RawImport>,
     pub symbols: Vec<RawSymbol>,
+    /// Every distinct identifier used in the file's code, for finding usages.
+    pub identifiers: Vec<String>,
 }
 
 thread_local! {
@@ -43,9 +47,35 @@ thread_local! {
     static JAVA_PARSER: RefCell<Option<Parser>> = const { RefCell::new(None) };
 }
 
-/// Parses `source` and extracts its package, imports and declarations. Parsers are cached per
-/// thread. Returns `None` if the grammar can't be loaded or parsing is aborted.
+/// Parses `source` and extracts its package, imports, declarations and identifiers. Parsers are
+/// cached per thread. Returns `None` if the grammar can't be loaded or parsing is aborted.
 pub(crate) fn extract(language: Language, source: &[u8]) -> Option<RawFile> {
+    let tree = parse(language, source)?;
+    let mut file = extract_from_tree(language, &tree, source);
+    if let Ok(text) = std::str::from_utf8(source) {
+        let mut seen = HashSet::new();
+        for_each_identifier(text, language, |name, _| {
+            if !is_keyword(name, language) && !seen.contains(name) {
+                seen.insert(name.to_owned());
+            }
+        });
+        file.identifiers = seen.into_iter().collect();
+    }
+    Some(file)
+}
+
+/// The package, imports and declarations of an already parsed file (no identifiers).
+pub(crate) fn extract_from_tree(language: Language, tree: &Tree, source: &[u8]) -> RawFile {
+    let mut file = RawFile::default();
+    match language {
+        Language::Kotlin => kotlin::extract(tree.root_node(), source, &mut file),
+        Language::Java => java::extract(tree.root_node(), source, &mut file),
+    }
+    file
+}
+
+/// Parses `source` with the thread's cached parser for `language`.
+pub(crate) fn parse(language: Language, source: &[u8]) -> Option<Tree> {
     let parser_cell = match language {
         Language::Kotlin => &KOTLIN_PARSER,
         Language::Java => &JAVA_PARSER,
@@ -61,23 +91,16 @@ pub(crate) fn extract(language: Language, source: &[u8]) -> Option<RawFile> {
             parser.set_language(&grammar.into()).ok()?;
             *slot = Some(parser);
         }
-        let parser = slot.as_mut()?;
-        let tree = parser.parse(source, None)?;
-        let mut file = RawFile::default();
-        match language {
-            Language::Kotlin => kotlin::extract(tree.root_node(), source, &mut file),
-            Language::Java => java::extract(tree.root_node(), source, &mut file),
-        }
-        Some(file)
+        slot.as_mut()?.parse(source, None)
     })
 }
 
-fn text<'a>(node: Node, source: &'a [u8]) -> &'a str {
+pub(crate) fn text<'a>(node: Node, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.byte_range()]).unwrap_or("")
 }
 
 /// The node's text with all whitespace removed, for dotted identifiers that may span lines.
-fn compact_text(node: Node, source: &[u8]) -> String {
+pub(crate) fn compact_text(node: Node, source: &[u8]) -> String {
     text(node, source)
         .chars()
         .filter(|c| !c.is_whitespace())
@@ -93,19 +116,19 @@ fn normalized_text(node: Node, source: &[u8]) -> String {
 }
 
 /// Indexed child access is linear in tree-sitter, so children are collected with a cursor.
-fn children(node: Node) -> impl Iterator<Item = Node> {
+pub(crate) fn children(node: Node) -> impl Iterator<Item = Node> {
     let mut cursor = node.walk();
     node.children(&mut cursor).collect::<Vec<_>>().into_iter()
 }
 
-fn named_children(node: Node) -> impl Iterator<Item = Node> {
+pub(crate) fn named_children(node: Node) -> impl Iterator<Item = Node> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .collect::<Vec<_>>()
         .into_iter()
 }
 
-fn child_of_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+pub(crate) fn child_of_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
     named_children(node).find(|child| child.kind() == kind)
 }
 
@@ -115,7 +138,7 @@ fn has_token(node: Node, token: &str) -> bool {
 
 /// Where `node` starts, with the column in characters (editors count characters, tree-sitter
 /// counts bytes).
-fn position(node: Node, source: &[u8]) -> Position {
+pub(crate) fn position(node: Node, source: &[u8]) -> Position {
     let point = node.start_position();
     let start = node.start_byte();
     let line_prefix = &source[start.saturating_sub(point.column)..start];
@@ -125,7 +148,7 @@ fn position(node: Node, source: &[u8]) -> Position {
     }
 }
 
-fn join_container(container: &str, name: &str) -> String {
+pub(crate) fn join_container(container: &str, name: &str) -> String {
     if container.is_empty() {
         name.to_owned()
     } else {

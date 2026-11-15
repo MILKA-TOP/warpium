@@ -106,3 +106,30 @@ fn rejects_garbage() {
 
     assert!(matches!(result, Err(PersistError::Corrupt(_))));
 }
+
+#[test]
+fn loaded_snapshot_finds_the_same_usages_as_a_fresh_build() {
+    let root = fixture_root("nav-kmp");
+    let index = CodeIndex::build(&root, 2);
+    let dir = TempDir::new().expect("temp dir");
+    let snapshot = dir.path().join("index.bin");
+    index.save(&snapshot).expect("save");
+    let loaded = CodeIndex::load(&snapshot, &root).expect("load");
+    let rel_path = "core/model/src/commonMain/kotlin/com/example/model/NewsResource.kt";
+    let text = std::fs::read_to_string(root.join(rel_path)).expect("fixture file exists");
+    let file = crate::SourceFile {
+        rel_path,
+        text: &text,
+        language: Language::Kotlin,
+    };
+    let at_class_name = Position {
+        line: 2,
+        column: 11,
+    };
+
+    let fresh = index.find_usages(&file, at_class_name, 100, 1);
+    let warm = loaded.find_usages(&file, at_class_name, 100, 1);
+
+    assert_eq!(warm, fresh);
+    assert_eq!(fresh.map(|result| result.usages.len()), Some(10));
+}

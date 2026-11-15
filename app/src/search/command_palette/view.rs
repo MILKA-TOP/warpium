@@ -400,6 +400,7 @@ impl View {
                 | (PaletteMode::WarpDrive, QueryFilter::Drive)
                 | (PaletteMode::CodeClasses, QueryFilter::CodeClasses)
                 | (PaletteMode::CodeSymbols, QueryFilter::CodeSymbols)
+                | (PaletteMode::CodeNavigation, QueryFilter::CodeNavigation)
         )
     }
 

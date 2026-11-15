@@ -57,12 +57,15 @@ fn main() -> ExitCode {
             let started = Instant::now();
             let (index, report) = code_index::open(&root, snapshot.as_deref(), default_threads());
             let stats = index.stats();
+            let snapshot_load = report.loaded_in.map_or_else(
+                || "no snapshot".to_owned(),
+                |loaded| format!("snapshot loaded in {} ms", loaded.as_millis()),
+            );
             println!(
-                "{} files, {} symbols in {:.0?} (snapshot load {:?}, parsed {}, removed {})",
+                "{} files, {} symbols in {:.0?} ({snapshot_load}, parsed {}, removed {})",
                 stats.files,
                 stats.symbols,
                 started.elapsed(),
-                report.loaded_in,
                 report.update.files_parsed,
                 report.update.files_removed
             );
