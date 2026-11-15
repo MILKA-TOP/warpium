@@ -15,8 +15,16 @@ fn url_buttons(count: usize) -> Vec<ToolbarButton> {
 
 fn strip_ids(strip: &ToolbarStrip<'_>) -> (Vec<String>, Vec<String>) {
     (
-        strip.inline.iter().map(|button| button.id.clone()).collect(),
-        strip.overflow.iter().map(|button| button.id.clone()).collect(),
+        strip
+            .inline
+            .iter()
+            .map(|button| button.id.clone())
+            .collect(),
+        strip
+            .overflow
+            .iter()
+            .map(|button| button.id.clone())
+            .collect(),
     )
 }
 
@@ -47,14 +55,19 @@ fn run_config_buttons_come_first_then_project_launch_configs() {
 
 #[test]
 fn launch_config_already_opened_by_a_run_config_button_is_listed_once() {
-    let buttons = buttons(
-        "[[button]]\nid = \"dev\"\nlaunch_config = \"Android dev\"\nrun_config = true\n",
+    let buttons =
+        buttons("[[button]]\nid = \"dev\"\nlaunch_config = \"Android dev\"\nrun_config = true\n");
+
+    let items = run_config_items(
+        &buttons,
+        &["Android dev".to_owned(), "Android dev".to_owned()],
     );
 
-    let items = run_config_items(&buttons, &["Android dev".to_owned(), "Android dev".to_owned()]);
-
     assert_eq!(
-        items.iter().map(|item| item.key.as_str()).collect::<Vec<_>>(),
+        items
+            .iter()
+            .map(|item| item.key.as_str())
+            .collect::<Vec<_>>(),
         vec!["button:dev"]
     );
 }
@@ -62,7 +75,9 @@ fn launch_config_already_opened_by_a_run_config_button_is_listed_once() {
 #[test]
 fn remembered_selection_is_used_while_it_exists() {
     let items = run_config_items(
-        &buttons("[[button]]\nid = \"a\"\ncommand = \"a\"\nrun_config = true\n[[button]]\nid = \"b\"\ncommand = \"b\"\nrun_config = true\n"),
+        &buttons(
+            "[[button]]\nid = \"a\"\ncommand = \"a\"\nrun_config = true\n[[button]]\nid = \"b\"\ncommand = \"b\"\nrun_config = true\n",
+        ),
         &[],
     );
 

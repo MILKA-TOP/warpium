@@ -17,7 +17,10 @@ fn every_bundled_icon_exists_in_the_app_assets() {
 
 #[test]
 fn bundled_icon_names_are_unique() {
-    let mut names = BUNDLED_ICONS.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+    let mut names = BUNDLED_ICONS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>();
     names.sort_unstable();
     names.dedup();
 

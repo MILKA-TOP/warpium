@@ -897,6 +897,13 @@ pub enum WorkspaceAction {
     RestartForWarpiumUpdate,
     /// Warpium: shows the downloaded Warpium disk image in Finder after an update failed.
     RevealWarpiumUpdateDmg,
+    /// Warpium: opens the project's `.warpium/toolbar.toml`, creating it from a template.
+    EditProjectToolbar,
+    /// Warpium: opens the personal toolbar overrides of the project, creating them from a
+    /// template.
+    EditPersonalToolbarOverrides,
+    /// Warpium: toggles the project toolbar.
+    ToggleProjectToolbar,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1243,6 +1250,9 @@ impl WorkspaceAction {
             | SkipWarpiumUpdate
             | RestartForWarpiumUpdate
             | RevealWarpiumUpdateDmg
+            | EditProjectToolbar
+            | EditPersonalToolbarOverrides
+            | ToggleProjectToolbar
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }

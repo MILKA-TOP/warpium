@@ -11,6 +11,9 @@ pub(crate) const UPSTREAM_CHECK_CONTEXT_FLAG: &str = "WarpiumUpstreamCheck";
 /// Keymap context flag present while [`WarpiumSettings::update_check`] is on.
 pub(crate) const UPDATE_CHECK_CONTEXT_FLAG: &str = "WarpiumUpdateCheck";
 
+/// Keymap context flag present while [`WarpiumSettings::project_toolbar`] is on.
+pub(crate) const PROJECT_TOOLBAR_CONTEXT_FLAG: &str = "WarpiumProjectToolbar";
+
 define_settings_group!(WarpiumSettings, settings: [
     sync_from_warp: SyncFromWarp {
         type: bool,
@@ -71,5 +74,15 @@ define_settings_group!(WarpiumSettings, settings: [
         private: false,
         toml_path: "warpium.update_check_interval_hours",
         description: "Hours between automatic checks for new Warpium releases (1 to 168).",
+    },
+    project_toolbar: ProjectToolbar {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: ::settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "warpium.project_toolbar",
+        description: "Whether Warpium shows the project toolbar (buttons from .warpium/toolbar.toml and personal overrides) in the top-right corner of the window.",
     },
 ]);

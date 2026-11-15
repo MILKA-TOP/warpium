@@ -95,13 +95,15 @@ pub fn trust_listings(buttons: &[ToolbarButton]) -> Vec<TrustListing> {
             let ButtonAction::Command(command) = &button.action else {
                 return None;
             };
-            let mut details = vec![match command.target {
-                CommandTarget::Current => "current session",
-                CommandTarget::NewTab => "new tab",
-                CommandTarget::SplitRight => "split right",
-                CommandTarget::SplitDown => "split down",
-            }
-            .to_owned()];
+            let mut details = vec![
+                match command.target {
+                    CommandTarget::Current => "current session",
+                    CommandTarget::NewTab => "new tab",
+                    CommandTarget::SplitRight => "split right",
+                    CommandTarget::SplitDown => "split down",
+                }
+                .to_owned(),
+            ];
             if let Some(cwd) = &command.cwd {
                 details.push(format!("cwd {cwd}"));
             }

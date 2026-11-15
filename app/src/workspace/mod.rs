@@ -117,6 +117,8 @@ pub fn init(app: &mut AppContext) {
     crate::warpium::upstream_check::init_bindings(app);
     #[cfg(not(target_family = "wasm"))]
     crate::warpium::self_update::init_bindings(app);
+    #[cfg(not(target_family = "wasm"))]
+    crate::warpium::project_toolbar::init_bindings(app);
 
     app.register_fixed_bindings([FixedBinding::empty(
         "Dump debug info",

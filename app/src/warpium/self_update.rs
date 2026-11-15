@@ -166,7 +166,8 @@ pub(crate) fn init(poll: bool, ctx: &mut AppContext) {
                 WarpiumSettingsChangedEvent::SyncFromWarp { .. }
                 | WarpiumSettingsChangedEvent::UpstreamCheck { .. }
                 | WarpiumSettingsChangedEvent::UpstreamCheckIntervalHours { .. }
-                | WarpiumSettingsChangedEvent::UpstreamCheckMinCommits { .. } => {}
+                | WarpiumSettingsChangedEvent::UpstreamCheckMinCommits { .. }
+                | WarpiumSettingsChangedEvent::ProjectToolbar { .. } => {}
             },
         );
         SelfUpdater::new(poll, ctx)

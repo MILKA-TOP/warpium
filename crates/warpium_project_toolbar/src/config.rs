@@ -154,8 +154,7 @@ impl ToolbarButton {
 
     /// Whether running this button needs the project's toolbar to be trusted first.
     pub fn requires_trust(&self) -> bool {
-        matches!(self.action, ButtonAction::Command(_))
-            && self.action_source == ConfigSource::Team
+        matches!(self.action, ButtonAction::Command(_)) && self.action_source == ConfigSource::Team
     }
 }
 
@@ -239,8 +238,9 @@ pub fn parse_config(text: &str, source: ConfigSource) -> Result<ParsedConfig, Co
     let mut seen = HashSet::new();
     let mut entries = Vec::with_capacity(raw.button.len());
     for (index, raw_button) in raw.button.into_iter().enumerate() {
-        let entry = parse_entry(raw_button, source)
-            .map_err(|message| ConfigError::new(source, format!("button {}: {message}", index + 1)))?;
+        let entry = parse_entry(raw_button, source).map_err(|message| {
+            ConfigError::new(source, format!("button {}: {message}", index + 1))
+        })?;
         if !seen.insert(entry.id.clone()) {
             return Err(ConfigError::new(
                 source,
@@ -274,7 +274,11 @@ fn parse_entry(raw: RawButton, source: ConfigSource) -> Result<PartialButton, St
         actions.push(ActionSpec::Command(command));
     }
     for (key, value, make) in [
-        ("workflow", raw.workflow, ActionSpec::Workflow as fn(String) -> ActionSpec),
+        (
+            "workflow",
+            raw.workflow,
+            ActionSpec::Workflow as fn(String) -> ActionSpec,
+        ),
         ("launch_config", raw.launch_config, ActionSpec::LaunchConfig),
         ("tab_config", raw.tab_config, ActionSpec::TabConfig),
     ] {
@@ -331,16 +335,26 @@ fn parse_entry(raw: RawButton, source: ConfigSource) -> Result<PartialButton, St
     if let Some(env) = &raw.env
         && let Some(name) = env.keys().find(|name| !is_valid_env_name(name))
     {
-        return Err(in_button(format!("`{name}` is not a valid environment variable name")));
+        return Err(in_button(format!(
+            "`{name}` is not a valid environment variable name"
+        )));
     }
     let has_command_options = target.is_some() || raw.cwd.is_some() || raw.env.is_some();
-    if has_command_options && action.as_ref().is_some_and(|a| !matches!(a, ActionSpec::Command(_)))
+    if has_command_options
+        && action
+            .as_ref()
+            .is_some_and(|a| !matches!(a, ActionSpec::Command(_)))
     {
         return Err(in_button(
             "`target`, `cwd` and `env` only apply to `command` buttons".to_owned(),
         ));
     }
-    let icon = raw.icon.as_deref().map(parse_icon).transpose().map_err(in_button)?;
+    let icon = raw
+        .icon
+        .as_deref()
+        .map(parse_icon)
+        .transpose()
+        .map_err(in_button)?;
 
     Ok(PartialButton {
         id,

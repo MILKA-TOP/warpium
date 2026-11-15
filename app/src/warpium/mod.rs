@@ -1,6 +1,8 @@
 //! Warpium-only features. Kept in their own module so upstream merges stay clean.
 
 #[cfg(not(target_family = "wasm"))]
+pub(crate) mod project_toolbar;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod self_update;
 pub(crate) mod sync_settings;
 #[cfg(not(target_family = "wasm"))]

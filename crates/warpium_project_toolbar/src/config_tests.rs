@@ -82,7 +82,11 @@ run_config = true
 
 #[test]
 fn command_defaults_to_the_current_session_and_the_project_root() {
-    let buttons = merge(Some(&team("[[button]]\nid = \"t\"\ncommand = \"make\"\n")), None).unwrap();
+    let buttons = merge(
+        Some(&team("[[button]]\nid = \"t\"\ncommand = \"make\"\n")),
+        None,
+    )
+    .unwrap();
 
     assert_eq!(
         buttons[0].action,
@@ -138,7 +142,9 @@ action = "surface.project_explorer.open"
 #[test]
 fn custom_svg_icon_is_kept_relative_to_the_warpium_directory() {
     let buttons = merge(
-        Some(&team("[[button]]\nid = \"x\"\nicon = \"icons/android.svg\"\ncommand = \"x\"\n")),
+        Some(&team(
+            "[[button]]\nid = \"x\"\nicon = \"icons/android.svg\"\ncommand = \"x\"\n",
+        )),
         None,
     )
     .unwrap();
@@ -181,7 +187,14 @@ fn personal_template_examples_merge_into_the_team_examples_when_uncommented() {
 
     assert_eq!(
         ids(&buttons),
-        vec!["assemble", "test", "deploy", "dev-layout", "explorer", "my-emulator"]
+        vec![
+            "assemble",
+            "test",
+            "deploy",
+            "dev-layout",
+            "explorer",
+            "my-emulator"
+        ]
     );
 }
 
@@ -210,7 +223,9 @@ fn rejects_a_button_without_an_id() {
 #[test]
 fn rejects_duplicate_ids() {
     assert_eq!(
-        team_error("[[button]]\nid = \"x\"\nurl = \"https://a\"\n[[button]]\nid = \"x\"\nurl = \"https://b\"\n"),
+        team_error(
+            "[[button]]\nid = \"x\"\nurl = \"https://a\"\n[[button]]\nid = \"x\"\nurl = \"https://b\"\n"
+        ),
         "button id `x` is used more than once"
     );
 }
@@ -227,14 +242,20 @@ fn rejects_a_team_button_without_an_action() {
 fn rejects_more_than_one_action() {
     let message = team_error("[[button]]\nid = \"x\"\ncommand = \"make\"\nurl = \"https://a\"\n");
 
-    assert!(message.starts_with("button 1: `x`: set only one of"), "message: {message}");
+    assert!(
+        message.starts_with("button 1: `x`: set only one of"),
+        "message: {message}"
+    );
 }
 
 #[test]
 fn rejects_an_unknown_target() {
     let message = team_error("[[button]]\nid = \"x\"\ncommand = \"make\"\ntarget = \"window\"\n");
 
-    assert!(message.contains("unknown target `window`"), "message: {message}");
+    assert!(
+        message.contains("unknown target `window`"),
+        "message: {message}"
+    );
 }
 
 #[test]
@@ -244,7 +265,10 @@ fn rejects_a_cwd_outside_the_project() {
             "[[button]]\nid = \"x\"\ncommand = \"make\"\ncwd = \"{cwd}\"\n"
         ));
 
-        assert!(message.contains("`cwd` must be relative"), "cwd {cwd}: {message}");
+        assert!(
+            message.contains("`cwd` must be relative"),
+            "cwd {cwd}: {message}"
+        );
     }
 }
 
@@ -260,38 +284,55 @@ fn rejects_invalid_env_names() {
     let message =
         team_error("[[button]]\nid = \"x\"\ncommand = \"make\"\nenv = { \"MY-VAR\" = \"1\" }\n");
 
-    assert!(message.contains("`MY-VAR` is not a valid"), "message: {message}");
+    assert!(
+        message.contains("`MY-VAR` is not a valid"),
+        "message: {message}"
+    );
 }
 
 #[test]
 fn rejects_command_options_on_other_actions() {
     let message = team_error("[[button]]\nid = \"x\"\nurl = \"https://a\"\ntarget = \"new_tab\"\n");
 
-    assert!(message.contains("only apply to `command` buttons"), "message: {message}");
+    assert!(
+        message.contains("only apply to `command` buttons"),
+        "message: {message}"
+    );
 }
 
 #[test]
 fn rejects_non_http_urls() {
     let message = team_error("[[button]]\nid = \"x\"\nurl = \"file:///etc/passwd\"\n");
 
-    assert!(message.contains("must start with https://"), "message: {message}");
+    assert!(
+        message.contains("must start with https://"),
+        "message: {message}"
+    );
 }
 
 #[test]
 fn rejects_unknown_builtin_actions() {
     let message = team_error("[[button]]\nid = \"x\"\naction = \"pane.close\"\n");
 
-    assert!(message.contains("unknown action `pane.close`"), "message: {message}");
+    assert!(
+        message.contains("unknown action `pane.close`"),
+        "message: {message}"
+    );
 }
 
 #[test]
 fn rejects_unknown_icons_and_escaping_svg_paths() {
     let unknown = team_error("[[button]]\nid = \"x\"\nicon = \"hammer\"\ncommand = \"x\"\n");
-    let escaping =
-        team_error("[[button]]\nid = \"x\"\nicon = \"../logo.svg\"\ncommand = \"x\"\n");
+    let escaping = team_error("[[button]]\nid = \"x\"\nicon = \"../logo.svg\"\ncommand = \"x\"\n");
 
-    assert!(unknown.contains("unknown icon `hammer`"), "message: {unknown}");
-    assert!(escaping.contains("must be relative to `.warpium/`"), "message: {escaping}");
+    assert!(
+        unknown.contains("unknown icon `hammer`"),
+        "message: {unknown}"
+    );
+    assert!(
+        escaping.contains("must be relative to `.warpium/`"),
+        "message: {escaping}"
+    );
 }
 
 #[test]
@@ -308,9 +349,8 @@ fn error_display_names_the_file() {
 
 #[test]
 fn override_changes_only_the_fields_it_sets() {
-    let team_config = team(
-        "[[button]]\nid = \"b\"\nlabel = \"Build\"\nicon = \"build\"\ncommand = \"make\"\n",
-    );
+    let team_config =
+        team("[[button]]\nid = \"b\"\nlabel = \"Build\"\nicon = \"build\"\ncommand = \"make\"\n");
     let personal_config = personal("[[button]]\nid = \"b\"\nlabel = \"My build\"\n");
 
     let buttons = merge(Some(&team_config), Some(&personal_config)).unwrap();
@@ -326,9 +366,8 @@ fn team_config_icon(name: &str) -> Option<ButtonIcon> {
 
 #[test]
 fn override_of_command_options_keeps_the_team_command_and_its_trust_requirement() {
-    let team_config = team(
-        "[[button]]\nid = \"b\"\ncommand = \"make\"\ntarget = \"new_tab\"\ncwd = \"app\"\n",
-    );
+    let team_config =
+        team("[[button]]\nid = \"b\"\ncommand = \"make\"\ntarget = \"new_tab\"\ncwd = \"app\"\n");
     let personal_config = personal("[[button]]\nid = \"b\"\ntarget = \"split_down\"\n");
 
     let buttons = merge(Some(&team_config), Some(&personal_config)).unwrap();
@@ -347,9 +386,8 @@ fn override_of_command_options_keeps_the_team_command_and_its_trust_requirement(
 
 #[test]
 fn override_with_an_action_replaces_the_whole_action_and_is_trusted() {
-    let team_config = team(
-        "[[button]]\nid = \"b\"\ncommand = \"make\"\ntarget = \"new_tab\"\ncwd = \"app\"\n",
-    );
+    let team_config =
+        team("[[button]]\nid = \"b\"\ncommand = \"make\"\ntarget = \"new_tab\"\ncwd = \"app\"\n");
     let personal_config = personal("[[button]]\nid = \"b\"\ncommand = \"make -j8\"\n");
 
     let buttons = merge(Some(&team_config), Some(&personal_config)).unwrap();
@@ -462,7 +500,10 @@ fn tooltip_falls_back_to_the_label_then_the_action() {
         .map(ToolbarButton::tooltip_text)
         .collect::<Vec<_>>();
 
-    assert_eq!(tooltips, vec!["Build", "make test", "Run workflow \"Deploy\""]);
+    assert_eq!(
+        tooltips,
+        vec!["Build", "make test", "Run workflow \"Deploy\""]
+    );
 }
 
 #[test]

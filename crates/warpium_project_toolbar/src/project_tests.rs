@@ -38,7 +38,10 @@ fn missing_pinned_root_falls_through_to_the_cwd() {
 
     let project = detect_project(Some(&temp.path().join("gone")), Some(&repo));
 
-    assert_eq!(project.map(|project| project.source), Some(ProjectSource::GitRepository));
+    assert_eq!(
+        project.map(|project| project.source),
+        Some(ProjectSource::GitRepository)
+    );
 }
 
 #[test]

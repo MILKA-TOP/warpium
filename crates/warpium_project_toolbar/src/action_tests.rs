@@ -32,14 +32,27 @@ fn resolves_cwd_relative_to_the_project_root() {
 
     assert_eq!(resolve_cwd(root, None), PathBuf::from("/work/app"));
     assert_eq!(resolve_cwd(root, Some(".")), PathBuf::from("/work/app"));
-    assert_eq!(resolve_cwd(root, Some("android/app")), PathBuf::from("/work/app/android/app"));
-    assert_eq!(resolve_cwd(root, Some("a/../b")), PathBuf::from("/work/app/b"));
+    assert_eq!(
+        resolve_cwd(root, Some("android/app")),
+        PathBuf::from("/work/app/android/app")
+    );
+    assert_eq!(
+        resolve_cwd(root, Some("a/../b")),
+        PathBuf::from("/work/app/b")
+    );
 }
 
 #[test]
 fn command_without_cwd_or_env_is_unchanged() {
-    for shell in [ShellFamily::Posix, ShellFamily::Fish, ShellFamily::PowerShell] {
-        assert_eq!(shell_line("./gradlew test", None, &BTreeMap::new(), shell), "./gradlew test");
+    for shell in [
+        ShellFamily::Posix,
+        ShellFamily::Fish,
+        ShellFamily::PowerShell,
+    ] {
+        assert_eq!(
+            shell_line("./gradlew test", None, &BTreeMap::new(), shell),
+            "./gradlew test"
+        );
     }
 }
 
@@ -75,7 +88,10 @@ fn fish_restores_the_directory_and_scopes_env_to_the_block() {
         ShellFamily::Fish,
     );
 
-    assert_eq!(line, r"if pushd '/work/it\'s'; set -lx A 'a\\b'; make; popd; end");
+    assert_eq!(
+        line,
+        r"if pushd '/work/it\'s'; set -lx A 'a\\b'; make; popd; end"
+    );
 }
 
 #[test]

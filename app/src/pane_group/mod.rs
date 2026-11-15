@@ -186,6 +186,8 @@ pub mod focus_state;
 pub mod pane;
 pub mod tree;
 pub mod working_directories;
+#[cfg(not(target_family = "wasm"))]
+mod warpium_project_toolbar;
 use ambient_pane_restoration::AmbientRestoreKind;
 use focus_state::PaneGroupFocusState;
 

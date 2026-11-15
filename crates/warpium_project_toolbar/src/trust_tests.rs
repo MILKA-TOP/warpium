@@ -77,7 +77,12 @@ fn team_command_needs_trust_until_its_file_version_is_trusted() {
     state.trust(root, "sha256:one");
 
     assert!(!needs_trust(&buttons[0], root, Some("sha256:one"), &state));
-    assert!(needs_trust(&buttons[0], root, Some("sha256:changed"), &state));
+    assert!(needs_trust(
+        &buttons[0],
+        root,
+        Some("sha256:changed"),
+        &state
+    ));
 }
 
 #[test]
