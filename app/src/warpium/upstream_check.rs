@@ -68,6 +68,7 @@ pub(crate) fn init(poll: bool, ctx: &mut AppContext) {
                 WarpiumSettingsChangedEvent::SyncFromWarp { .. }
                 | WarpiumSettingsChangedEvent::UpdateCheck { .. }
                 | WarpiumSettingsChangedEvent::UpdateCheckIntervalHours { .. }
+                | WarpiumSettingsChangedEvent::ProjectToolbar { .. }
                 | WarpiumSettingsChangedEvent::CodeIndex { .. } => {}
             },
         );

@@ -1,4 +1,6 @@
+import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -20,6 +22,7 @@ from warpium_mac_mcp.workspace import (
     check_run_info,
     normalize_remote,
     pick_artifact,
+    remove_self_update_backups,
     reset_git_config,
 )
 
@@ -447,3 +450,114 @@ def test_pick_artifact():
         pick_artifact(arts + [{"name": "Warpium-x", "expired": False}], None)
     with pytest.raises(WorkspaceError):
         pick_artifact([], None)
+
+
+def _fake_app(apps_dir: Path, name: str, exe: str = "warp-oss") -> Path:
+    import plistlib
+
+    app = apps_dir / name
+    (app / "Contents" / "MacOS").mkdir(parents=True)
+    with open(app / "Contents" / "Info.plist", "wb") as f:
+        plistlib.dump({"CFBundleExecutable": exe}, f)
+    binary = app / "Contents" / "MacOS" / exe
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    return app
+
+
+def test_installed_app_ignores_self_update_backup(ws):
+    # The self-updater leaves `.Warpium-previous.app` next to Warpium.app; "."
+    # sorts first, so app_launch(source="artifact") used to run the stale backup.
+    w, cfg = ws
+    assert w.installed_app() is None
+    _fake_app(cfg.apps_dir, ".Warpium-previous.app")
+    _fake_app(cfg.apps_dir, ".Warpium-update-123.app")
+    assert w.installed_app() is None
+    app = _fake_app(cfg.apps_dir, "Warpium.app")
+    assert w.installed_app() == app
+    am = AppManager(cfg, w, PathJail([cfg.workspace_dir]), processes=lambda: [])
+    exe = am.resolve_binary("artifact")
+    assert exe == Path(os.path.realpath(app / "Contents" / "MacOS" / "warp-oss"))
+
+
+def test_installed_app_prefers_warpium_app(ws):
+    w, cfg = ws
+    other = _fake_app(cfg.apps_dir, "Another.app")
+    assert w.installed_app() == other
+    app = _fake_app(cfg.apps_dir, "Warpium.app")
+    assert w.installed_app() == app
+
+
+def test_installed_app_skips_broken_bundles(ws):
+    w, cfg = ws
+    (cfg.apps_dir / "Warpium.app").mkdir()  # partial copy, no Info.plist
+    (cfg.apps_dir / "Stray.app").write_text("")  # a file, not a bundle
+    assert w.installed_app() is None
+    other = _fake_app(cfg.apps_dir, "Other.app")
+    assert w.installed_app() == other
+
+
+def test_remove_self_update_backups(ws, tmp_path):
+    _, cfg = ws
+    _fake_app(cfg.apps_dir, "Warpium.app")
+    _fake_app(cfg.apps_dir, ".Warpium-previous.app")
+    _fake_app(cfg.apps_dir, ".Warpium-update-123.app")  # maybe a live self-update
+    _fake_app(cfg.apps_dir, ".Warpium-known-good.app")  # not the updater's
+    outside = tmp_path / "outside.app"
+    outside.mkdir()
+    (outside / "x").write_text("keep")
+    (cfg.apps_dir / ".Other-previous.app").symlink_to(outside)
+    lines = []
+    remove_self_update_backups(cfg.apps_dir, lines.append)
+    assert sorted(p.name for p in cfg.apps_dir.iterdir()) == [
+        ".Warpium-known-good.app",
+        ".Warpium-update-123.app",
+        "Warpium.app",
+    ]
+    assert (outside / "x").read_text() == "keep"  # symlink target not followed
+    assert len(lines) == 2
+
+
+def test_remove_self_update_backups_is_best_effort(ws, monkeypatch):
+    _, cfg = ws
+    _fake_app(cfg.apps_dir, ".Warpium-previous.app")
+
+    def boom(p):
+        raise PermissionError("nope")
+
+    monkeypatch.setattr("warpium_mac_mcp.workspace.shutil.rmtree", boom)
+    lines = []
+    remove_self_update_backups(cfg.apps_dir, lines.append)
+    assert "could not remove" in lines[0]
+
+
+def test_install_artifact_removes_self_update_backup(ws, monkeypatch):
+    w, cfg = ws
+    _fake_app(cfg.apps_dir, "Warpium.app", exe="old")
+    _fake_app(cfg.apps_dir, ".Warpium-previous.app")
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv[0:2])
+        out = ""
+        if argv[:2] == ["gh", "api"]:
+            if argv[2].endswith("/artifacts?per_page=100"):
+                out = json.dumps({"artifacts": [{"name": "Warpium-abc", "expired": False}]})
+            else:
+                out = json.dumps(_run())
+        elif argv[:3] == ["gh", "run", "download"]:
+            d = Path(argv[argv.index("--dir") + 1])
+            (d / "Warpium.dmg").write_text("")
+        elif argv[:2] == ["hdiutil", "attach"]:
+            mnt = Path(argv[argv.index("-mountpoint") + 1])
+            _fake_app(mnt, "Warpium.app", exe="new")
+        elif argv[0] == "ditto":
+            shutil.copytree(argv[1], argv[2], symlinks=True)
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+    monkeypatch.setattr("warpium_mac_mcp.workspace.subprocess.run", fake_run)
+    job = wait(w.install_artifact("123"))
+    assert job.state == "succeeded", job.error
+    assert sorted(p.name for p in cfg.apps_dir.iterdir()) == ["Warpium.app"]
+    assert w.app_executable(w.installed_app()).name == "new"
+    assert ["hdiutil", "detach"] in calls
