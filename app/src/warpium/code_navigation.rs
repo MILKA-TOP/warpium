@@ -1,7 +1,9 @@
 //! Go to Definition and Find Usages requests from a Kotlin or Java editor, answered by the code
 //! index (see `code_index`).
 
-use std::path::{Path, PathBuf};
+#[cfg(not(target_family = "wasm"))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Keymap context flag on a code editor whose file the code index can navigate, while
@@ -26,14 +28,11 @@ pub struct CodeNavigationRequest {
 }
 
 /// Kotlin sources and scripts, and Java sources.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn is_navigable_path(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|extension| extension.to_str()),
-        Some("kt" | "kts" | "java")
-    )
+    code_index::Language::of_editable_path(path).is_some()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "code_navigation_tests.rs"]
 mod tests;

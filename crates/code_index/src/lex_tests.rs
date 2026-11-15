@@ -106,3 +106,15 @@ fn offset_of_clamps_columns_past_the_line_end() {
         Some(2)
     );
 }
+
+#[test]
+fn is_identifier_at_rejects_keywords_comments_and_strings() {
+    let source = "return foo // bar\nval s = \"baz\"";
+    let at =
+        |line, column| crate::is_identifier_at(source, Language::Kotlin, Position { line, column });
+
+    assert!(at(0, 8), "foo");
+    assert!(!at(0, 2), "return");
+    assert!(!at(0, 14), "bar in a comment");
+    assert!(!at(1, 10), "baz in a string");
+}

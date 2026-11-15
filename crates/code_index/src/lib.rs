@@ -37,6 +37,21 @@ pub use persist::{FORMAT_VERSION, PersistError, write_snapshot};
 pub use resolve::{Definition, DefinitionResult, Resolution, SourceFile};
 pub use usages::{Usage, UsagesResult};
 
+/// Whether `position` (zero-based line and character column) is on an identifier in code: not a
+/// keyword, comment or string. Cheap enough for every hovered word.
+pub fn is_identifier_at(text: &str, language: Language, position: Position) -> bool {
+    let Some(offset) = lex::offset_of(text, &lex::line_starts(text), position) else {
+        return false;
+    };
+    let mut found = false;
+    lex::for_each_identifier(text, language, |name, start| {
+        if (start..=start + name.len()).contains(&offset) && !lex::is_keyword(name, language) {
+            found = true;
+        }
+    });
+    found
+}
+
 /// How [`open`] got its index.
 #[derive(Clone, Debug)]
 pub struct OpenReport {

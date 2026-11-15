@@ -211,3 +211,67 @@ fn java_method_usages_include_kotlin_calls() {
         vec![("src/main/kotlin/org/acme/UserScreen.kt", 8, true)]
     );
 }
+
+fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    for (rel_path, contents) in files {
+        let path = dir.path().join(rel_path);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create dirs");
+        std::fs::write(path, contents).expect("write file");
+    }
+    dir
+}
+
+#[test]
+fn star_imports_of_a_package_see_its_nested_types() {
+    let dir = project(&[
+        (
+            "src/main/kotlin/p/Outer.kt",
+            "package p\n\nclass Outer {\n    class Inner\n}\n",
+        ),
+        (
+            "src/main/kotlin/q/User.kt",
+            "package q\n\nimport p.*\n\nval inner = Outer.Inner()\n",
+        ),
+    ]);
+    let index = CodeIndex::build(dir.path(), 1);
+
+    let result = usages_at(
+        &index,
+        "src/main/kotlin/p/Outer.kt",
+        Language::Kotlin,
+        "class Inner",
+        "Inner",
+    );
+
+    assert_eq!(found(&result), vec![("src/main/kotlin/q/User.kt", 4, true)]);
+}
+
+#[test]
+fn parameters_and_named_arguments_with_the_name_are_not_usages() {
+    let dir = project(&[
+        ("src/main/kotlin/p/Load.kt", "package p\n\nfun load() {}\n"),
+        (
+            "src/main/kotlin/q/Run.kt",
+            "package q\n\nimport p.load\n\nfun run(load: Boolean) {\n    if (load) {}\n    configure(load = true)\n    p.load()\n}\n\nfun configure(load: Boolean) {}\n\nfun go() = load()\n",
+        ),
+    ]);
+    let index = CodeIndex::build(dir.path(), 1);
+
+    let result = usages_at(
+        &index,
+        "src/main/kotlin/p/Load.kt",
+        Language::Kotlin,
+        "fun load",
+        "load",
+    );
+
+    assert_eq!(
+        found(&result),
+        vec![
+            ("src/main/kotlin/q/Run.kt", 2, true),
+            ("src/main/kotlin/q/Run.kt", 7, true),
+            ("src/main/kotlin/q/Run.kt", 12, true),
+        ]
+    );
+}

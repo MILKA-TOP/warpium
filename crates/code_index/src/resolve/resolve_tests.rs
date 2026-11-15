@@ -407,3 +407,70 @@ fn java_resolves_a_local_variable() {
     assert_eq!(targets(&result), vec![(LEGACY, 9, false)]);
     assert!(result.definitions[0].local);
 }
+
+/// Writes `files` (path, contents) into a temporary project.
+fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    for (rel_path, contents) in files {
+        let path = dir.path().join(rel_path);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create dirs");
+        std::fs::write(path, contents).expect("write file");
+    }
+    dir
+}
+
+#[test]
+fn java_method_calls_skip_same_named_local_variables() {
+    let source = "package p;\n\nclass Box {\n    int size() { return 0; }\n\n    int twice() {\n        int size = size();\n        return size() + size;\n    }\n}\n";
+    let dir = project(&[("src/main/java/p/Box.java", source)]);
+    let index = CodeIndex::build(dir.path(), 1);
+
+    let result = java_definition(&index, "src/main/java/p/Box.java", "return size()", "size");
+
+    assert_eq!(
+        targets(&result),
+        vec![("src/main/java/p/Box.java", 3, false)]
+    );
+    assert!(!result.definitions[0].local);
+}
+
+#[test]
+fn kotlin_function_typed_parameters_are_callable_locals() {
+    let source = "package p\n\nfun button(onClick: () -> Unit) {\n    onClick()\n}\n";
+    let dir = project(&[("src/main/kotlin/p/Button.kt", source)]);
+    let index = CodeIndex::build(dir.path(), 1);
+
+    let result = definition(
+        &index,
+        "src/main/kotlin/p/Button.kt",
+        "    onClick()",
+        "onClick",
+    );
+
+    assert_eq!(
+        targets(&result),
+        vec![("src/main/kotlin/p/Button.kt", 2, false)]
+    );
+    assert!(result.definitions[0].local);
+}
+
+#[test]
+fn plain_constructor_parameters_are_not_visible_in_member_functions() {
+    let source = "package p\n\nclass Foo(name: String) {\n    val name = name.trim()\n\n    fun f() = name\n}\n";
+    let dir = project(&[("src/main/kotlin/p/Foo.kt", source)]);
+    let index = CodeIndex::build(dir.path(), 1);
+
+    let in_function = definition(&index, "src/main/kotlin/p/Foo.kt", "fun f() = name", "name");
+    let in_initializer = definition(&index, "src/main/kotlin/p/Foo.kt", "= name.trim()", "name");
+
+    assert_eq!(
+        targets(&in_function),
+        vec![("src/main/kotlin/p/Foo.kt", 3, false)]
+    );
+    assert!(!in_function.definitions[0].local);
+    assert_eq!(
+        targets(&in_initializer),
+        vec![("src/main/kotlin/p/Foo.kt", 2, false)]
+    );
+    assert!(in_initializer.definitions[0].local);
+}

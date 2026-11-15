@@ -41,6 +41,8 @@ pub(crate) struct LocalDecl<'tree> {
     pub type_node: Option<TypeNode<'tree>>,
     /// A local function rather than a variable.
     pub is_function: bool,
+    /// A Kotlin variable or parameter of a function type (`onClick: () -> Unit`), so callable.
+    pub is_function_typed: bool,
 }
 
 /// A type as written: a type node, or the callee of a constructor call.
@@ -286,11 +288,16 @@ pub(crate) fn find_local<'tree>(
     source: &[u8],
 ) -> Option<LocalDecl<'tree>> {
     let mut node = at;
+    let mut in_function = false;
     while let Some(parent) = node.parent() {
         let found = match language {
-            Language::Kotlin => kotlin_scope_local(parent, node, name, at, source),
+            Language::Kotlin => kotlin_scope_local(parent, node, name, at, in_function, source),
             Language::Java => java_scope_local(parent, node, name, at, source),
         };
+        in_function |= matches!(
+            parent.kind(),
+            "function_declaration" | "getter" | "setter" | "secondary_constructor"
+        );
         match found {
             ScopeResult::Found(local) => return Some(local),
             ScopeResult::Stop => return None,
@@ -319,6 +326,17 @@ fn variable<'tree>(
         name: name_node,
         type_node,
         is_function: false,
+        is_function_typed: name_node.parent().is_some_and(has_function_type),
+    })
+}
+
+/// Whether a declaration node's type is a Kotlin function type, possibly nullable.
+fn has_function_type(declaration: Node) -> bool {
+    named_children(declaration).any(|child| match child.kind() {
+        "function_type" => true,
+        "nullable_type" | "parenthesized_type" => named_children(child)
+            .any(|inner| inner.kind() == "function_type" || has_function_type(inner)),
+        _ => false,
     })
 }
 
@@ -335,6 +353,7 @@ fn kotlin_scope_local<'tree>(
     child: Node<'tree>,
     name: &str,
     at: Node<'tree>,
+    in_function: bool,
     source: &[u8],
 ) -> ScopeResult<'tree> {
     match scope.kind() {
@@ -358,6 +377,7 @@ fn kotlin_scope_local<'tree>(
                                 name: fun_name,
                                 type_node: None,
                                 is_function: true,
+                                is_function_typed: false,
                             });
                         }
                     }
@@ -418,8 +438,10 @@ fn kotlin_scope_local<'tree>(
             }
             _ => ScopeResult::Continue,
         },
+        "class_declaration" if in_function => ScopeResult::Stop,
         "class_declaration" => {
-            // Plain constructor parameters (without `val`/`var`) are visible in initializers.
+            // Plain constructor parameters (without `val`/`var`) are visible in initializers,
+            // not in member functions.
             let parameters = child_of_kind(scope, "primary_constructor")
                 .map(named_children)
                 .into_iter()

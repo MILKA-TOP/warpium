@@ -237,7 +237,8 @@ pub(crate) fn ensure_project(
 }
 
 /// Makes sure the project holding `file` is indexed, when the current project doesn't hold it:
-/// the enclosing repository, else the outermost directory with Gradle settings.
+/// the outermost directory with Gradle settings inside the enclosing repository (or anywhere,
+/// outside one), else the repository.
 pub(crate) fn ensure_project_for_file(file: &Path, ctx: &mut AppContext) {
     if !ctx.has_singleton_model::<CodeIndexModel>() {
         return;
@@ -249,19 +250,24 @@ pub(crate) fn ensure_project_for_file(file: &Path, ctx: &mut AppContext) {
     if holds_file {
         return;
     }
-    let ancestors = || file.ancestors().skip(1);
-    let root = ancestors()
-        .find(|dir| dir.join(".git").exists())
-        .or_else(|| {
-            ancestors()
-                .filter(|dir| {
-                    dir.join("settings.gradle.kts").is_file()
-                        || dir.join("settings.gradle").is_file()
-                })
-                .last()
+    let repository = file
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.join(".git").exists());
+    let gradle_root = file
+        .ancestors()
+        .skip(1)
+        .take_while(|dir| repository.is_none_or(|repository| dir.starts_with(repository)))
+        .filter(|dir| {
+            dir.join("settings.gradle.kts").is_file() || dir.join("settings.gradle").is_file()
         })
-        .map(Path::to_path_buf);
-    ensure_project(root, true, ctx);
+        .last();
+    match (gradle_root, repository) {
+        (Some(root), _) => ensure_project(Some(root.to_path_buf()), true, ctx),
+        // A repository is a project root even without build files at its top.
+        (None, Some(repository)) => ensure_project(Some(repository.to_path_buf()), false, ctx),
+        (None, None) => {}
+    }
 }
 
 /// Resolves `request` against the index on the calling (background) thread.
@@ -297,6 +303,14 @@ pub(crate) fn navigate(handle: &IndexHandle, request: &CodeNavigationRequest) ->
         ""
     };
     let index = handle.index.read();
+    if handle.state == IndexState::Indexing && index.stats().files == 0 {
+        let project = handle
+            .root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        return NavigationOutcome::Nothing(format!("Indexing {project}… try again in a moment"));
+    }
     match request.kind {
         CodeNavigationKind::Definition => {
             let Some(result) = index.find_definition(&file, position) else {

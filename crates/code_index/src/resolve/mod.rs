@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use arborium_tree_sitter::{Node, Tree};
 
-use crate::extract::{RawFile, RawSymbol, extract_from_tree, parse, position};
+use crate::extract::{RawFile, RawSymbol, extract_from_tree, join_container, parse, position};
 use crate::index::{CodeIndex, SymbolInfo};
 use crate::layout::{Placement, place};
 use crate::lex::{line_starts, offset_of};
@@ -263,7 +263,12 @@ impl<'a> Resolver<'a> {
 
         if want != Want::Type
             && let Some(local) = find_local(self.file.language, name, at, source)
-            && (want == Want::Call || !local.is_function)
+            && match want {
+                // Calls name functions, or Kotlin variables of a function type; Java keeps
+                // methods and variables in separate namespaces.
+                Want::Call => local.is_function || local.is_function_typed,
+                Want::Value | Want::Type => !local.is_function,
+            }
         {
             let candidates = keep(vec![self.local_decl_candidate(&local)]);
             if !candidates.is_empty() {
@@ -565,19 +570,19 @@ impl<'a> Resolver<'a> {
 
     /// Members of the type `class` named `name`, including nested types.
     fn members_of(&self, class: &SymbolInfo, name: &str) -> Vec<Candidate> {
-        let container = join(&class.container, &class.name);
+        let container = join_container(&class.container, &class.name);
         self.declarations(Some(&class.package), Some(&container), name)
     }
 
     /// Members named `name` of the companion object of `class`.
     fn companion_members_of(&self, class: &SymbolInfo, name: &str) -> Vec<Candidate> {
-        let container = join(&class.container, &class.name);
+        let container = join_container(&class.container, &class.name);
         self.companions(&class.package, &container)
             .into_iter()
             .flat_map(|companion| {
                 self.declarations(
                     Some(&class.package),
-                    Some(&join(&container, &companion.info.name)),
+                    Some(&join_container(&container, &companion.info.name)),
                     name,
                 )
             })
@@ -614,7 +619,9 @@ impl<'a> Resolver<'a> {
             .filter(|symbol| {
                 symbol.container == container && symbol.kind == SymbolKind::CompanionObject
             })
-            .flat_map(|companion| self.file_members(&join(container, &companion.name), name))
+            .flat_map(|companion| {
+                self.file_members(&join_container(container, &companion.name), name)
+            })
             .collect()
     }
 
@@ -702,6 +709,9 @@ impl<'a> Resolver<'a> {
             }
             None => {
                 for file in self.index.live_files() {
+                    if package.is_some_and(|package| package != file.package) {
+                        continue;
+                    }
                     for symbol in &file.symbols {
                         consider(file, symbol);
                     }
@@ -938,14 +948,6 @@ fn container_path(classes: &[EnclosingClass]) -> String {
         .map(|class| class.name.as_str())
         .collect::<Vec<_>>()
         .join(".")
-}
-
-fn join(container: &str, name: &str) -> String {
-    if container.is_empty() {
-        name.to_owned()
-    } else {
-        format!("{container}.{name}")
-    }
 }
 
 /// `List<Foo>?` → `List`, `kotlin.String` → `String`.

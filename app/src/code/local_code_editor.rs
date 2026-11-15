@@ -2188,6 +2188,34 @@ impl LocalCodeEditorView {
         let Some(word) = editor.word_range_at_offset(offset, ctx) else {
             return;
         };
+        // Keywords and words in comments or strings have no definition to go to.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let language = self
+                .file_path()
+                .and_then(code_index::Language::of_editable_path);
+            let position = editor.offset_to_lsp_position(offset, ctx);
+            let is_identifier = language.is_some_and(|language| {
+                code_index::is_identifier_at(
+                    &editor.text(ctx).into_string(),
+                    language,
+                    code_index::Position {
+                        line: position.line as u32,
+                        column: position.column as u32,
+                    },
+                )
+            });
+            if !is_identifier {
+                if editor.hovered_symbol_range(ctx).is_some() {
+                    self.editor.update(ctx, |editor, ctx| {
+                        if editor.clear_hovered_symbol_range(ctx) {
+                            ctx.notify();
+                        }
+                    });
+                }
+                return;
+            }
+        }
         let highlight_range = word.start.saturating_sub(&CharOffset::from(1))
             ..word.end.saturating_sub(&CharOffset::from(1));
         let view_id = ctx.view_id();

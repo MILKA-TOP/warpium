@@ -6,10 +6,11 @@ use std::collections::HashSet;
 
 use rayon::prelude::*;
 
+use crate::extract::join_container;
 use crate::index::{CodeIndex, SymbolInfo, worker_pool};
 use crate::layout::place;
 use crate::lex::{for_each_identifier, line_starts, position_of};
-use crate::model::{FileData, Origin, Position, Symbol, Visibility, flags};
+use crate::model::{FileData, Language, Origin, Position, Symbol, Visibility, flags};
 use crate::resolve::{ParsedFile, Resolution, Resolver, SourceFile, same_declaration};
 
 /// Files whose mentions are resolved one by one, at most; past this, mentions in files that see
@@ -91,6 +92,7 @@ impl CodeIndex {
             index: self,
             name: &definition.name,
             targets: &targets,
+            target_reach: targets.iter().map(Reach::of).collect(),
             current: file,
         };
 
@@ -153,7 +155,42 @@ struct Search<'a> {
     index: &'a CodeIndex,
     name: &'a str,
     targets: &'a [SymbolInfo],
+    target_reach: Vec<Reach>,
     current: &'a SourceFile<'a>,
+}
+
+/// What a file needs to see a declaration, precomputed once per query.
+struct Reach {
+    rel_path: String,
+    package: String,
+    module: String,
+    visibility: Visibility,
+    fqn: String,
+    /// For a member or nested type: its top-level class, and that with a trailing dot.
+    top_fqn: Option<(String, String)>,
+}
+
+impl Reach {
+    fn of(symbol: &SymbolInfo) -> Self {
+        let top_fqn = symbol
+            .container
+            .split('.')
+            .next()
+            .filter(|top| !top.is_empty())
+            .map(|top| {
+                let top = join_container(&symbol.package, top);
+                let prefix = format!("{top}.");
+                (top, prefix)
+            });
+        Self {
+            rel_path: symbol.rel_path.clone(),
+            package: symbol.package.clone(),
+            module: symbol.module.clone(),
+            visibility: symbol.visibility,
+            fqn: symbol.qualified_name(),
+            top_fqn,
+        }
+    }
 }
 
 impl<'a> Search<'a> {
@@ -174,6 +211,10 @@ impl<'a> Search<'a> {
         let declaring_other: HashSet<&str> = others
             .iter()
             .map(|(file, _)| file.rel_path.as_str())
+            .collect();
+        let other_reach: Vec<Reach> = others
+            .iter()
+            .map(|(file, symbol)| Reach::of(&self.index.symbol_info(file, symbol)))
             .collect();
         let is_member = self.targets.iter().all(|target| {
             !target.container.is_empty() && target.receiver.is_none() && !target.kind.is_type()
@@ -209,16 +250,13 @@ impl<'a> Search<'a> {
                 Scan::Resolve
             } else if !sees_target {
                 continue;
-            } else if others
-                .iter()
-                .any(|(other, symbol)| self.sees(file, &self.index.symbol_info(other, symbol)))
-            {
+            } else if other_reach.iter().any(|other| self.sees(file, other)) {
                 Scan::Resolve
             } else {
                 Scan::All { exact: true }
             };
             if self
-                .targets
+                .target_reach
                 .iter()
                 .all(|target| !self.may_access(file, target))
             {
@@ -236,7 +274,7 @@ impl<'a> Search<'a> {
             jobs.push((Job::Indexed(file), scan));
         }
         // The parse budget goes to the files most likely to hold usages first.
-        jobs.sort_by_key(|(job, _)| match job {
+        jobs.sort_by_cached_key(|(job, _)| match job {
             Job::Current => false,
             Job::Indexed(file) => !self.mentions_target_class(file),
         });
@@ -260,50 +298,46 @@ impl<'a> Search<'a> {
     }
 
     fn sees_any_target(&self, file: &FileData) -> bool {
-        self.targets.iter().any(|target| self.sees(file, target))
+        self.target_reach
+            .iter()
+            .any(|target| self.sees(file, target))
     }
 
-    /// Whether visibility rules let `file` use `symbol` at all.
-    fn may_access(&self, file: &FileData, symbol: &SymbolInfo) -> bool {
-        match symbol.visibility {
-            Visibility::Private => file.rel_path == symbol.rel_path,
-            Visibility::Internal => self.index.interner.resolve(file.module) == symbol.module,
+    /// Whether visibility rules let `file` use the declaration at all.
+    fn may_access(&self, file: &FileData, reach: &Reach) -> bool {
+        match reach.visibility {
+            Visibility::Private => file.rel_path == reach.rel_path,
+            Visibility::Internal => self.index.interner.resolve(file.module) == reach.module,
             Visibility::Public | Visibility::Protected | Visibility::PackagePrivate => true,
         }
     }
 
-    /// Whether `file` can name `symbol` (or, for a member, its top-level class) without
-    /// qualification: same file or package, or imported.
-    fn sees(&self, file: &FileData, symbol: &SymbolInfo) -> bool {
-        if file.rel_path == symbol.rel_path {
+    /// Whether `file` can name the declaration (or, for a member or nested type, its top-level
+    /// class) without qualification: same file or package, or imported.
+    fn sees(&self, file: &FileData, reach: &Reach) -> bool {
+        if file.rel_path == reach.rel_path {
             return true;
         }
-        if !self.may_access(file, symbol) {
+        if !self.may_access(file, reach) {
             return false;
         }
         let interner = &self.index.interner;
-        if interner.resolve(file.package) == symbol.package {
+        if interner.resolve(file.package) == reach.package {
             return true;
         }
-        let top_level = symbol
-            .container
-            .split('.')
-            .next()
-            .filter(|top| !top.is_empty());
-        let fqn = symbol.qualified_name();
-        let top_fqn = top_level.map(|top| join(&symbol.package, top));
+        let names_top_class = |path: &str| {
+            reach
+                .top_fqn
+                .as_ref()
+                .is_some_and(|(top, prefix)| path == top || path.starts_with(prefix.as_str()))
+        };
         file.imports.iter().any(|import| {
             let path = interner.resolve(import.path);
             if import.wildcard {
-                path == symbol.package && top_level.is_none()
-                    || top_fqn
-                        .as_deref()
-                        .is_some_and(|top| path == top || path.starts_with(&format!("{top}.")))
+                // `p.*` brings in the package's top-level declarations, nested ones through them.
+                path == reach.package || names_top_class(path)
             } else {
-                path == fqn
-                    || top_fqn
-                        .as_deref()
-                        .is_some_and(|top| path == top || path.starts_with(&format!("{top}.")))
+                path == reach.fqn || names_top_class(path)
             }
         })
     }
@@ -342,6 +376,18 @@ impl<'a> Search<'a> {
                 origin,
                 exact,
             }
+        };
+        // A mention that looks like a declaration or a named argument may not be a usage at all
+        // (parameters and locals aren't indexed); resolve the file instead of counting it.
+        let scan = match scan {
+            Scan::All { .. }
+                if offsets.iter().any(|offset| {
+                    may_declare_or_label(&text, *offset, self.name.len(), language)
+                }) =>
+            {
+                Scan::Resolve
+            }
+            Scan::All { .. } | Scan::Resolve => scan,
         };
         match scan {
             Scan::All { exact } => offsets
@@ -422,11 +468,47 @@ fn line_text(text: &str, starts: &[usize], line: u32) -> String {
     }
 }
 
-fn join(package: &str, name: &str) -> String {
-    if package.is_empty() {
-        name.to_owned()
-    } else {
-        format!("{package}.{name}")
+/// Whether the mention at `offset` reads like a declaration (`val x`, `x: Type`, `Type x`) or a
+/// named argument (`f(x = 1)`), judging by the code around it.
+fn may_declare_or_label(text: &str, offset: usize, len: usize, language: Language) -> bool {
+    let before = text[..offset].trim_end();
+    let after = text[offset + len..].trim_start();
+    let previous_word = before
+        .rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+        .next()
+        .unwrap_or_default();
+    let assigned = after.starts_with('=') && !after.starts_with("==");
+    match language {
+        Language::Kotlin => {
+            assigned
+                || (after.starts_with(':') && !after.starts_with("::"))
+                || matches!(
+                    previous_word,
+                    "val" | "var" | "fun" | "class" | "object" | "interface" | "typealias"
+                )
+        }
+        Language::Java => {
+            const NOT_TYPES: &[&str] = &[
+                "return",
+                "new",
+                "throw",
+                "case",
+                "else",
+                "instanceof",
+                "extends",
+                "implements",
+                "import",
+                "package",
+                "static",
+                "assert",
+                "yield",
+            ];
+            let after_type = before.ends_with(['>', ']'])
+                || (!previous_word.is_empty()
+                    && before.ends_with(previous_word)
+                    && !NOT_TYPES.contains(&previous_word));
+            assigned || after_type
+        }
     }
 }
 
