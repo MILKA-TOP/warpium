@@ -1,0 +1,18 @@
+[package]
+name = "warpium_project_toolbar"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: per-project toolbar config parsing, override merge, project detection and trust"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+toml = "0.8.13"
+
+[dev-dependencies]
+tempfile.workspace = true

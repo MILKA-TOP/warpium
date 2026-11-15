@@ -98,7 +98,8 @@ pub(crate) fn init(ctx: &mut AppContext) {
                 | WarpiumSettingsChangedEvent::UpstreamCheckIntervalHours { .. }
                 | WarpiumSettingsChangedEvent::UpstreamCheckMinCommits { .. }
                 | WarpiumSettingsChangedEvent::UpdateCheck { .. }
-                | WarpiumSettingsChangedEvent::UpdateCheckIntervalHours { .. } => {}
+                | WarpiumSettingsChangedEvent::UpdateCheckIntervalHours { .. }
+                | WarpiumSettingsChangedEvent::ProjectToolbar { .. } => {}
             },
         );
         CodeIndexModel {

@@ -85,6 +85,7 @@ warp_channel_config = { path = "crates/warp_channel_config" }
 warp_cli = { path = "crates/warp_cli" }
 warp_completer = { path = "crates/warp_completer" }
 warp_config_import = { path = "crates/warp_config_import" }
+warpium_project_toolbar = { path = "crates/warpium_project_toolbar" }
 warpium_self_update = { path = "crates/warpium_self_update" }
 warpium_upstream_check = { path = "crates/warpium_upstream_check" }
 code_index = { path = "crates/code_index" }

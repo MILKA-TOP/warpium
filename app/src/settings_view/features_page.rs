@@ -747,6 +747,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 #[derive(Clone, Debug, PartialEq)]
 pub enum FeaturesPageAction {
     ToggleCopyOnSelect,
+    /// Warpium: toggles the project toolbar.
+    ToggleWarpiumProjectToolbar,
     ToggleAsyncFind,
     ToggleNotifications,
     ToggleRestoreSession,
@@ -906,6 +908,12 @@ impl FeaturesPageAction {
         let input_settings = InputSettings::as_ref(ctx);
         let keys_settings = KeysSettings::as_ref(ctx);
         match self {
+            Self::ToggleWarpiumProjectToolbar => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleWarpiumProjectToolbar".to_string(),
+                value: to_string(
+                    *crate::warpium::sync_settings::WarpiumSettings::as_ref(ctx).project_toolbar,
+                ),
+            },
             Self::ToggleCopyOnSelect => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCopyOnSelect".to_string(),
                 value: to_string(selection_settings.copy_on_select_enabled()),
@@ -1494,6 +1502,14 @@ impl TypedActionView for FeaturesPageView {
                             .set_value(*right_click_behavior, ctx)
                     );
                 });
+            }
+            ToggleWarpiumProjectToolbar => {
+                crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.project_toolbar.toggle_and_save_value(ctx));
+                    },
+                );
             }
             ToggleCopyOnSelect => {
                 SelectionSettings::handle(ctx).update(ctx, |selection_settings, ctx| {
@@ -3088,7 +3104,8 @@ impl FeaturesPageView {
             }
         }
 
-        let categories = vec![
+        #[cfg_attr(target_family = "wasm", allow(unused_mut))]
+        let mut categories = vec![
             Category::new("General", general_widgets),
             Category::new("Session", session_widgets),
             Category::new("Keys", keys_widgets),
@@ -3102,6 +3119,13 @@ impl FeaturesPageView {
             ),
             Category::new("System", system_widgets),
         ];
+        #[cfg(not(target_family = "wasm"))]
+        if crate::warpium::is_warpium_channel() {
+            categories.push(Category::new(
+                "Warpium",
+                vec![Box::new(WarpiumProjectToolbarWidget::default())],
+            ));
+        }
 
         PageType::new_categorized(categories, None)
     }
@@ -7365,6 +7389,59 @@ impl SettingsWidget for CopyOnSelectWidget {
                 })
                 .finish(),
             None,
+        )
+    }
+}
+
+/// Warpium: the per-project toolbar in the top-right corner of the window.
+#[derive(Default)]
+struct WarpiumProjectToolbarWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for WarpiumProjectToolbarWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "warpium project toolbar buttons run configurations title bar top right gradle"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::warpium::sync_settings::{ProjectToolbar, WarpiumSettings};
+
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Show the project toolbar".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ProjectToolbar::storage_key(),
+                ProjectToolbar::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*WarpiumSettings::as_ref(app).project_toolbar)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleWarpiumProjectToolbar);
+                })
+                .finish(),
+            Some(
+                "Buttons from the project's .warpium/toolbar.toml and your personal overrides, \
+                 in the top-right corner of the window."
+                    .into(),
+            ),
         )
     }
 }

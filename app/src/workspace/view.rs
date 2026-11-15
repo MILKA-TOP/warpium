@@ -22,6 +22,8 @@ mod tab_grouping;
 #[path = "view_tests.rs"]
 pub(crate) mod tests;
 mod vertical_tabs;
+#[cfg(not(target_family = "wasm"))]
+mod warpium_project_toolbar;
 #[cfg(target_family = "wasm")]
 mod wasm_view;
 
@@ -1207,6 +1209,9 @@ pub struct Workspace {
     tab_bar_pinned_by_popup: bool,
     user_menu: ViewHandle<Menu<WorkspaceAction>>,
     native_modal: ViewHandle<NativeModal>,
+    /// Warpium: the project toolbar in the top-right corner.
+    #[cfg(not(target_family = "wasm"))]
+    project_toolbar: ViewHandle<crate::warpium::project_toolbar::ProjectToolbarView>,
     shared_objects_creation_denied_modal: ViewHandle<SharedObjectsCreationDeniedModal>,
     shown_staging_banner_count: u32,
 
@@ -3418,6 +3423,8 @@ impl Workspace {
         });
 
         let native_modal = Self::build_native_modal_view(ctx);
+        #[cfg(not(target_family = "wasm"))]
+        let project_toolbar = Self::build_project_toolbar_view(ctx);
 
         let shared_objects_creation_denied_modal =
             ctx.add_typed_action_view(|ctx| SharedObjectsCreationDeniedModal::new(None, ctx));
@@ -3597,6 +3604,8 @@ impl Workspace {
             tab_bar_pinned_by_popup: false,
             user_menu,
             native_modal,
+            #[cfg(not(target_family = "wasm"))]
+            project_toolbar,
             shared_objects_creation_denied_modal,
             file_upload_sessions: Default::default(),
             ai_fact_view,
@@ -9045,6 +9054,8 @@ impl Workspace {
         });
         // Activating the tab may already have computed its roots without the pin.
         self.refresh_working_directories_for_pane_group(&pane_group, ctx);
+        #[cfg(not(target_family = "wasm"))]
+        self.refresh_project_toolbar(ctx);
     }
 
     #[cfg(feature = "local_fs")]
@@ -17920,6 +17931,8 @@ impl Workspace {
 
     /// Update the active session model state.
     fn update_active_session(&mut self, ctx: &mut ViewContext<Self>) {
+        #[cfg(not(target_family = "wasm"))]
+        self.refresh_project_toolbar(ctx);
         let pane_group_handle = self.active_tab_pane_group();
         let file_tree_and_global_search_are_enabled = {
             #[cfg(feature = "local_fs")]
@@ -21483,9 +21496,13 @@ impl Workspace {
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(tab_bar.finish())
-                .with_child(search_bar_slot)
-                .with_child(right_controls.finish())
-                .finish();
+                .with_child(search_bar_slot);
+            #[cfg(not(target_family = "wasm"))]
+            let tab_bar = match self.render_project_toolbar_slot(ctx) {
+                Some(slot) => tab_bar.with_child(slot),
+                None => tab_bar,
+            };
+            let tab_bar = tab_bar.with_child(right_controls.finish()).finish();
 
             return EventHandler::new(
                 Container::new(tab_bar)
@@ -21624,6 +21641,10 @@ impl Workspace {
         // Trailing spacer fills only the leftover width. When groups are collapsed
         // the freed flex is distributed accross the remaining flex items in the tab bar.
         tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(slot) = self.render_project_toolbar_slot(ctx) {
+            tab_bar.add_child(slot);
+        }
 
         self.add_configurable_right_side_tab_bar_controls(
             &mut tab_bar,
@@ -24934,6 +24955,23 @@ impl TypedActionView for Workspace {
                 #[cfg(not(target_family = "wasm"))]
                 Self::update_self_updater(ctx, |updater, _| updater.reveal_dmg());
             }
+            EditProjectToolbar => {
+                #[cfg(not(target_family = "wasm"))]
+                self.edit_project_toolbar_config(false, ctx);
+            }
+            EditPersonalToolbarOverrides => {
+                #[cfg(not(target_family = "wasm"))]
+                self.edit_project_toolbar_config(true, ctx);
+            }
+            ToggleProjectToolbar => {
+                crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.project_toolbar.toggle_and_save_value(ctx));
+                    },
+                );
+                ctx.notify();
+            }
             ToggleCodeIndex => {
                 crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
                     ctx,
@@ -27250,6 +27288,11 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::UPDATE_CHECK_CONTEXT_FLAG);
+        }
+        if *crate::warpium::sync_settings::WarpiumSettings::as_ref(app).project_toolbar {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::PROJECT_TOOLBAR_CONTEXT_FLAG);
         }
         if *crate::warpium::sync_settings::WarpiumSettings::as_ref(app).code_index {
             context

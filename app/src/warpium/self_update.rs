@@ -167,6 +167,7 @@ pub(crate) fn init(poll: bool, ctx: &mut AppContext) {
                 | WarpiumSettingsChangedEvent::UpstreamCheck { .. }
                 | WarpiumSettingsChangedEvent::UpstreamCheckIntervalHours { .. }
                 | WarpiumSettingsChangedEvent::UpstreamCheckMinCommits { .. }
+                | WarpiumSettingsChangedEvent::ProjectToolbar { .. }
                 | WarpiumSettingsChangedEvent::CodeIndex { .. } => {}
             },
         );
