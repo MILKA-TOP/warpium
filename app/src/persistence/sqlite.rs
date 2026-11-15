@@ -1211,7 +1211,9 @@ fn save_pane_state(
         }
         LeafContents::GetStarted => GET_STARTED_PANE_KIND,
         LeafContents::AIDocument(_) => AI_DOCUMENT_PANE_KIND,
-        LeafContents::EnvironmentManagement(_) | LeafContents::NetworkLog => {
+        LeafContents::EnvironmentManagement(_)
+        | LeafContents::NetworkLog
+        | LeafContents::WarpiumLogcat => {
             // These pane types are filtered out before this function is
             // called; see `LeafContents::is_persisted` and the skip in
             // `save_app_state`. Reaching this arm would mean a `pane_nodes`
@@ -1439,7 +1441,7 @@ fn save_pane_state(
                 .values(ambient_agent_pane)
                 .execute(conn)?;
         }
-        LeafContents::NetworkLog => {
+        LeafContents::NetworkLog | LeafContents::WarpiumLogcat => {
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
         }
     }

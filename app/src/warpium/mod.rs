@@ -1,9 +1,13 @@
 //! Warpium-only features. Kept in their own module so upstream merges stay clean.
 
 #[cfg(not(target_family = "wasm"))]
+pub(crate) mod android;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod code_index;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod code_index_palette;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod logcat;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod project_toolbar;
 #[cfg(not(target_family = "wasm"))]

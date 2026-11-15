@@ -208,6 +208,8 @@ pub use pane::network_log_pane::NetworkLogPane;
 pub use pane::notebook_pane::NotebookPane;
 pub use pane::settings_pane::SettingsPane;
 pub use pane::terminal_pane::TerminalPane;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use pane::warpium_logcat_pane::LogcatPane;
 pub use pane::workflow_pane::WorkflowPane;
 pub use pane::{
     AnyPaneContent, BackingView, PaneConfiguration, PaneConfigurationEvent, PaneContent, PaneEvent,
@@ -2016,6 +2018,9 @@ impl PaneGroup {
                     "Network log pane should not have been persisted, as it cannot be restored"
                 ))
             }
+            LeafContents::WarpiumLogcat => Err(anyhow::anyhow!(
+                "Logcat pane should not have been persisted, as it cannot be restored"
+            )),
             LeafContents::GetStarted => {
                 if !FeatureFlag::GetStartedTab.is_enabled() {
                     Err(anyhow::anyhow!("GetStarted pane not supported"))

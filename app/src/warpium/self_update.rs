@@ -168,7 +168,8 @@ pub(crate) fn init(poll: bool, ctx: &mut AppContext) {
                 | WarpiumSettingsChangedEvent::UpstreamCheckIntervalHours { .. }
                 | WarpiumSettingsChangedEvent::UpstreamCheckMinCommits { .. }
                 | WarpiumSettingsChangedEvent::ProjectToolbar { .. }
-                | WarpiumSettingsChangedEvent::CodeIndex { .. } => {}
+                | WarpiumSettingsChangedEvent::CodeIndex { .. }
+                | WarpiumSettingsChangedEvent::AndroidTools { .. } => {}
             },
         );
         SelfUpdater::new(poll, ctx)

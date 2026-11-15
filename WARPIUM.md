@@ -312,6 +312,66 @@ cargo run --release -p code_index --example bench -- --name private /path/to/pro
 Inside the dev container, keep projects for timing off the `/workspace` bind mount. Directory walks
 there are about 40 times slower than on a local disk, which inflates rescan and cold-build times.
 
+## Android devices and Logcat
+
+Phase A of running Android apps from Warpium: devices, AVDs and a native Logcat pane. The emulator
+runs in its own window; embedding it in a pane (and mirroring physical devices) is phase B, see
+[docs/warpium/research/android-emulator-embedding.md](docs/warpium/research/android-emulator-embedding.md).
+Fork-only code lives in `crates/warpium_android` (protoc-free, unit-tested with
+`cargo test -p warpium_android` against a scripted fake adb server and binary logcat fixtures),
+`app/src/warpium/android.rs` (`AndroidModel`: SDK, device list, selection, AVDs),
+`app/src/warpium/logcat.rs` (the pane's view), `app/src/pane_group/pane/warpium_logcat_pane.rs`
+and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::WarpiumLogcat` and
+`LeafContents::WarpiumLogcat` (never persisted, like the network log pane).
+
+- **SDK.** `find_sdk`: `<project>/local.properties` `sdk.dir`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`,
+  then `~/Library/Android/sdk` (`~/Android/Sdk` on Linux); a directory counts only with
+  `platform-tools/adb`. Without one, an `adb` on `PATH`. The project is the project toolbar's.
+  Apps started from the Dock don't get shell variables, so the default location matters most.
+- **adb.** `AdbClient` speaks the adb server's smart-socket protocol on `127.0.0.1:5037`
+  (`ANDROID_ADB_SERVER_PORT` honored): `host:version`, `host:devices-l`, `host:track-devices-l`
+  (falling back to `host:track-devices` on old servers), and `host:transport:<serial>` followed by
+  `shell:` or `exec:`. No `adb` process is started per request; `adb start-server` runs only when
+  nothing listens. Every call blocks, so it runs on dedicated threads (`WorkerHandle` stops them
+  when dropped, by shutting their socket down, without blocking the UI thread).
+- **Devices.** One tracker thread follows `track-devices-l` and reads each device's properties once
+  it is online (`ro.build.version.sdk`/`release`, manufacturer, model, `ro.boot.qemu.avd_name` or
+  `ro.kernel.qemu.avd_name`) in a single `shell:` call. Emulators (`emulator-*`), USB and Wi-Fi
+  (`host:port` and mDNS `adb-…._adb-tls-connect._tcp`) are told apart by serial; states include
+  offline, unauthorized and no permissions. Reconnects back off from 1 to 30 s. The selected device
+  is remembered in private preferences (`WarpiumAndroidSelectedDevice`); when it is gone, the first
+  online device is selected. Nothing starts until the Logcat pane, its device menu or an Android
+  palette command needs devices.
+- **AVDs.** Listed from `<name>.ini` and `<name>.avd/config.ini` in `ANDROID_AVD_HOME`,
+  `ANDROID_USER_HOME/avd`, `ANDROID_SDK_HOME/.android/avd` and `~/.android/avd` (display name and API
+  level), falling back to `emulator -list-avds`. Launching runs `emulator -avd <name>` (its own
+  window; it outlives Warpium) and polls the adb server every second until an emulator reports that
+  AVD name and `sys.boot_completed=1` (5 minute limit; an early emulator exit is reported).
+- **Logcat stream.** `exec:logcat -B -b main,system,crash -T 5000`: binary `logger_entry` records
+  (v1–v4 headers), parsed incrementally on the stream's thread with interned tags, so multi-line
+  messages and stack traces stay intact. Batches go to the UI at most every 50 ms (4096 entries at
+  most). A stream that ends while its device is online reconnects after 2 s; a restarted stream
+  clears the pane, since `-T` replays the backlog.
+- **Buffer and filters.** `LogBuffer` keeps 200,000 entries and the list of rows (one per message
+  line) that pass the filters, appended incrementally and rebuilt only when a filter or the
+  package's pids change. Filters: minimum level, tags (comma-separated substrings, `-tag` hides),
+  text (case-insensitive) or regex over tag and message, and a package. Package pids come from
+  ActivityManager's `Start proc` lines in the stream (applied before the lines after them, so an
+  app's first lines after a restart are kept) and from polling `ps` every 3 s; every pid the package
+  ever had stays included, so a crash stays visible after the restart. The package filter starts
+  with the project's first app module's id (see `warpium_android::project`).
+- **Rendering.** A `UniformList` lays out only the visible rows; the list follows new rows until
+  the user scrolls up, and keeps its place when old rows are evicted. Pause collects new entries
+  aside and applies them on resume.
+- **Stack frames.** `at [module/]com.foo.Bar$Inner$1.baz(Bar.kt:42)` lines get a link. Clicking it
+  looks up `com.foo.Bar.Inner`, then `com.foo.Bar`, in the code index (Kotlin file facades such as
+  `BarKt` are skipped), prefers a matching file with the frame's file name or that name next to it,
+  and otherwise walks the project for `Bar.kt` under `com/foo/` (honoring `.gitignore`, skipping
+  `build/`), off the UI thread; then opens the file at the line.
+- **Command palette:** "Open Logcat", "Select Android device", "Launch Android Virtual Device (AVD)"
+  (both open the pane's device menu) and "Enable/Disable Android tools (devices, logcat, run)",
+  which toggles `warpium.android` (default on, OSS channel only).
+
 ## Versioning
 
 A Warpium version is the upstream Warp release it is based on plus a fork counter as one

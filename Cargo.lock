@@ -16367,6 +16367,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "warpium_android"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "command",
+ "ignore",
+ "instant",
+ "log",
+ "regex",
+ "tempfile",
+]
+
+[[package]]
 name = "warpium_project_toolbar"
 version = "0.1.0"
 dependencies = [

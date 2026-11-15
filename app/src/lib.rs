@@ -1561,6 +1561,9 @@ pub(crate) fn initialize_app(
     // Warpium: Kotlin/Java declaration index for Go to Class/Symbol (built on demand).
     #[cfg(not(target_family = "wasm"))]
     warpium::code_index::init(ctx);
+    // Warpium: Android devices, AVDs and the Logcat pane (adb is contacted on first use).
+    #[cfg(not(target_family = "wasm"))]
+    warpium::android::init(ctx);
 
     if FeatureFlag::UIZoom.is_enabled() {
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
