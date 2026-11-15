@@ -88,3 +88,31 @@ fn indexes_generated_sources_except_resource_classes() {
         ".hidden/build/generated/ksp/debug/kotlin/X.kt"
     ));
 }
+
+#[test]
+fn places_test_fixture_modules_as_tests() {
+    for path in [
+        "core/testing/src/main/kotlin/X.kt",
+        "core/data-test/src/main/kotlin/X.kt",
+        "core/screenshot-testing/src/main/kotlin/X.kt",
+        "sync/sync-test/src/main/kotlin/X.kt",
+        "core/test-fixtures/src/main/kotlin/X.kt",
+        "core/testFixtures/src/main/kotlin/X.kt",
+        "core/test_utils/src/main/kotlin/X.kt",
+        "integration-tests/src/main/kotlin/X.kt",
+    ] {
+        assert_eq!(place(path).origin, Origin::Test, "{path}");
+    }
+}
+
+#[test]
+fn modules_that_merely_mention_testing_stay_project_code() {
+    for path in [
+        "core/data/src/main/kotlin/X.kt",
+        "core/testing-manifest/src/main/kotlin/X.kt",
+        "feature/contest/src/main/kotlin/X.kt",
+        "ui-test-hilt-manifest/src/main/kotlin/X.kt",
+    ] {
+        assert_eq!(place(path).origin, Origin::Main, "{path}");
+    }
+}

@@ -471,3 +471,27 @@ fn file_outline_lists_declarations_in_source_order() {
         ]
     );
 }
+
+#[test]
+fn ranks_declarations_in_test_fixture_modules_like_tests() {
+    let index = CodeIndex::build(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join("nav-kmp"),
+        1,
+    );
+
+    let results = index.search("getNewsResources", SearchScope::All, 10);
+
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| (result.symbol.location(), result.symbol.origin))
+            .collect::<Vec<_>>(),
+        vec![
+            ("com.example.data.NewsRepository".to_owned(), Origin::Main),
+            ("com.example.data.OfflineFirstNewsRepository".to_owned(), Origin::Main),
+            ("com.example.data.test.FakeNewsRepository".to_owned(), Origin::Test),
+        ]
+    );
+}

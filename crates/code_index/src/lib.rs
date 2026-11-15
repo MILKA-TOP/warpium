@@ -2,8 +2,9 @@
 //!
 //! Sources are parsed with the tree-sitter grammars the app already links (through `arborium`),
 //! declarations are kept in memory for one-frame fuzzy lookups ("Go to Class/Symbol"), and a
-//! compact snapshot in the user cache directory makes later starts fast. No Gradle, JVM or
-//! language server is involved.
+//! compact snapshot in the user cache directory makes later starts fast. References resolve to
+//! their declarations ("Go to Definition") and to their usages ("Find Usages") through imports,
+//! packages and scopes. No Gradle, JVM or language server is involved.
 
 mod cache;
 mod extract;
@@ -11,10 +12,13 @@ pub mod fuzzy;
 mod index;
 mod interner;
 mod layout;
+mod lex;
 pub mod mcp;
 mod model;
 mod persist;
+mod resolve;
 mod scan;
+mod usages;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -30,6 +34,8 @@ pub use index::{
 pub use interner::Sym;
 pub use model::{Language, Origin, Position, SymbolKind, Visibility, flags};
 pub use persist::{FORMAT_VERSION, PersistError, write_snapshot};
+pub use resolve::{Definition, DefinitionResult, Resolution, SourceFile};
+pub use usages::{Usage, UsagesResult};
 
 /// How [`open`] got its index.
 #[derive(Clone, Debug)]

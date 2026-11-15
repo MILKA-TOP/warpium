@@ -9,7 +9,8 @@ use instant::Instant;
 use serde_json::{Value, json};
 
 use crate::index::{CodeIndex, SearchScope, SymbolInfo, default_threads};
-use crate::model::{SymbolKind, flags};
+use crate::model::{Language, Position, SymbolKind, flags};
+use crate::resolve::SourceFile;
 
 /// Protocol version answered when the client doesn't ask for one we know.
 const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -19,6 +20,8 @@ const KNOWN_PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-
 const REFRESH_AFTER: Duration = Duration::from_secs(2);
 const DEFAULT_LIMIT: usize = 30;
 const MAX_LIMIT: usize = 200;
+const DEFAULT_USAGES_LIMIT: usize = 100;
+const MAX_USAGES_LIMIT: usize = 1000;
 
 pub struct Server {
     root: PathBuf,
@@ -79,10 +82,9 @@ impl Server {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
         let text_argument = |key: &str| arguments.get(key).and_then(Value::as_str);
-        let limit = arguments
-            .get("limit")
-            .and_then(Value::as_u64)
-            .map_or(DEFAULT_LIMIT, |limit| (limit as usize).clamp(1, MAX_LIMIT));
+        let requested_limit = arguments.get("limit").and_then(Value::as_u64);
+        let limit =
+            requested_limit.map_or(DEFAULT_LIMIT, |limit| (limit as usize).clamp(1, MAX_LIMIT));
 
         let result = match name {
             "find_class" | "find_symbol" => match text_argument("query") {
@@ -101,6 +103,13 @@ impl Server {
                 Some(path) => self.outline(path),
                 None => Err("Missing required argument: path".to_owned()),
             },
+            "find_definition" => self.definition(&arguments),
+            "find_usages" => {
+                let limit = requested_limit.map_or(DEFAULT_USAGES_LIMIT, |limit| {
+                    (limit as usize).clamp(1, MAX_USAGES_LIMIT)
+                });
+                self.usages(&arguments, limit)
+            }
             _ => Err(format!("Unknown tool: {name}")),
         };
         match result {
@@ -162,13 +171,152 @@ impl Server {
             .join("\n")
     }
 
-    fn outline(&mut self, path: &str) -> Result<String, String> {
-        let root = self.root.clone();
-        let index = self.index();
-        let rel_path = std::path::Path::new(path)
-            .strip_prefix(&root)
+    fn rel_path(&self, path: &str) -> String {
+        std::path::Path::new(path)
+            .strip_prefix(&self.root)
             .map(|relative| relative.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_else(|_| path.trim_start_matches("./").to_owned());
+            .unwrap_or_else(|_| path.trim_start_matches("./").to_owned())
+    }
+
+    /// Reads the file a position argument names and finds the position: `line` (1-based) and
+    /// either `column` (1-based characters) or `name`, an identifier on that line.
+    fn location(&self, arguments: &Value) -> Result<(String, String, Language, Position), String> {
+        let path = arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or("Missing required argument: path")?;
+        let line = arguments
+            .get("line")
+            .and_then(Value::as_u64)
+            .filter(|line| *line >= 1)
+            .ok_or("Missing required argument: line (1-based)")?;
+        let rel_path = self.rel_path(path);
+        let language = Language::of_editable_path(std::path::Path::new(&rel_path))
+            .ok_or_else(|| format!("{rel_path} isn't a Kotlin or Java file."))?;
+        let text = std::fs::read_to_string(crate::scan::abs_path(&self.root, &rel_path))
+            .map_err(|err| format!("Couldn't read {rel_path}: {err}"))?;
+        let line_index = (line - 1) as u32;
+        let line_text = text
+            .lines()
+            .nth(line_index as usize)
+            .ok_or_else(|| format!("{rel_path} has no line {line}."))?;
+        let column = match (
+            arguments.get("column").and_then(Value::as_u64),
+            arguments.get("name").and_then(Value::as_str),
+        ) {
+            (Some(column), _) => column.saturating_sub(1) as u32,
+            (None, Some(name)) => identifier_column(line_text, name)
+                .ok_or_else(|| format!("\"{name}\" isn't on line {line} of {rel_path}."))?,
+            (None, None) => return Err("Pass column or name to locate the reference.".to_owned()),
+        };
+        Ok((
+            rel_path,
+            text,
+            language,
+            Position {
+                line: line_index,
+                column,
+            },
+        ))
+    }
+
+    fn definition(&mut self, arguments: &Value) -> Result<String, String> {
+        let (rel_path, text, language, position) = self.location(arguments)?;
+        let index = self.index();
+        let file = SourceFile {
+            rel_path: &rel_path,
+            text: &text,
+            language,
+        };
+        let Some(result) = index.find_definition(&file, position) else {
+            return Err(format!(
+                "No identifier at {rel_path}:{}:{}.",
+                position.line + 1,
+                position.column + 1
+            ));
+        };
+        if result.definitions.is_empty() {
+            return Ok(format!(
+                "No declaration of \"{}\" found in the project (it may come from a library).",
+                result.name
+            ));
+        }
+        let mut lines = Vec::new();
+        if result.at_declaration {
+            lines.push(format!(
+                "\"{}\" is declared here; use find_usages for its usages.",
+                result.name
+            ));
+        }
+        for definition in &result.definitions {
+            let mut line = describe_location(&definition.symbol);
+            let mut tags = vec![definition.resolution.label().to_owned()];
+            if definition.local {
+                tags.push("local".to_owned());
+            }
+            if definition.counterpart {
+                tags.push("counterpart".to_owned());
+            }
+            line.push_str(&format!("  ({})", tags.join(", ")));
+            lines.push(line);
+        }
+        Ok(lines.join("\n"))
+    }
+
+    fn usages(&mut self, arguments: &Value, limit: usize) -> Result<String, String> {
+        let (rel_path, text, language, position) = self.location(arguments)?;
+        let index = self.index();
+        let file = SourceFile {
+            rel_path: &rel_path,
+            text: &text,
+            language,
+        };
+        let Some(result) = index.find_usages(&file, position, limit, default_threads()) else {
+            return Err(format!(
+                "No identifier at {rel_path}:{}:{}.",
+                position.line + 1,
+                position.column + 1
+            ));
+        };
+        if result.targets.is_empty() {
+            return Ok(format!(
+                "No declaration of \"{}\" found in the project, so its usages are unknown.",
+                result.name
+            ));
+        }
+        let mut lines = vec![format!(
+            "{} usage{} of {}{}:",
+            result.usages.len(),
+            if result.usages.len() == 1 { "" } else { "s" },
+            result
+                .targets
+                .iter()
+                .map(|target| {
+                    format!("{} ({}:{})", target.qualified_name(), target.rel_path, target.name_pos.line + 1)
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            if result.complete { "" } else { " (more not shown)" },
+        )];
+        for usage in &result.usages {
+            lines.push(format!(
+                "{}:{}:{}{}  {}",
+                usage.rel_path,
+                usage.position.line + 1,
+                usage.position.column + 1,
+                if usage.exact { "" } else { " ≈" },
+                usage.line_text
+            ));
+        }
+        if result.usages.iter().any(|usage| !usage.exact) {
+            lines.push("≈ the name matches and the declaration is visible there, but the reference wasn't resolved to it.".to_owned());
+        }
+        Ok(lines.join("\n"))
+    }
+
+    fn outline(&mut self, path: &str) -> Result<String, String> {
+        let rel_path = self.rel_path(path);
+        let index = self.index();
         let Some((package, imports)) = index.file_header(&rel_path) else {
             return Err(format!("{rel_path} isn't an indexed Kotlin or Java file."));
         };
@@ -250,6 +398,35 @@ fn describe(symbol: &SymbolInfo, index: &CodeIndex) -> String {
     line
 }
 
+/// `kind name  location  path:line:column  [source set]`.
+fn describe_location(symbol: &SymbolInfo) -> String {
+    let mut line = format!(
+        "{} {}{}  {}  {}:{}:{}",
+        symbol.kind.label(),
+        receiver_prefix(symbol),
+        symbol.name,
+        symbol.location(),
+        symbol.rel_path,
+        symbol.name_pos.line + 1,
+        symbol.name_pos.column + 1
+    );
+    if !symbol.source_set.is_empty() {
+        line.push_str(&format!("  [{}]", symbol.source_set));
+    }
+    line
+}
+
+/// The character column where `name` occurs on `line` as a whole identifier.
+fn identifier_column(line: &str, name: &str) -> Option<u32> {
+    let is_identifier_char = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    line.match_indices(name).find_map(|(start, _)| {
+        let before = line[..start].chars().next_back();
+        let after = line[start + name.len()..].chars().next();
+        (!before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char))
+            .then(|| line[..start].chars().count() as u32)
+    })
+}
+
 fn initialize_result(params: &Value) -> Value {
     let requested = params.get("protocolVersion").and_then(Value::as_str);
     let version = requested
@@ -261,8 +438,9 @@ fn initialize_result(params: &Value) -> Value {
         "serverInfo": { "name": "warpium-code-index", "version": env!("CARGO_PKG_VERSION") },
         "instructions": "Kotlin and Java declaration index of the project. Use find_class and \
             find_symbol (fuzzy, camel humps: \"UVM\" finds UserViewModel; \"pkg.Name\" narrows by \
-            package or enclosing class) instead of grep to locate declarations, and file_outline \
-            to list a file's declarations.",
+            package or enclosing class) instead of grep to locate declarations, file_outline \
+            to list a file's declarations, find_definition to jump from a reference to its \
+            declaration, and find_usages to list where a declaration is used.",
     })
 }
 
@@ -271,6 +449,19 @@ fn tool_definitions() -> Value {
         "type": "integer",
         "description": format!("Maximum results (default {DEFAULT_LIMIT}, at most {MAX_LIMIT})."),
     });
+    let position = |what: &str| {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "File path, absolute or relative to the project root (.kt, .kts or .java)." },
+                "line": { "type": "integer", "description": "1-based line of the reference." },
+                "column": { "type": "integer", "description": format!("1-based character column of {what}. Optional when name is given.") },
+                "name": { "type": "string", "description": "The identifier on that line, instead of a column (its first whole-word occurrence)." },
+                "limit": { "type": "integer", "description": format!("Maximum usages (default {DEFAULT_USAGES_LIMIT}, at most {MAX_USAGES_LIMIT}); find_usages only.") },
+            },
+            "required": ["path", "line"],
+        })
+    };
     json!([
         {
             "name": "find_class",
@@ -317,6 +508,22 @@ fn tool_definitions() -> Value {
                 },
                 "required": ["path"],
             },
+        },
+        {
+            "name": "find_definition",
+            "description": "Go to definition for a Kotlin/Java reference: the declaration(s) a \
+                name at path:line refers to, resolved through local scopes, imports, the package \
+                and declared receiver types (no compiler, so ambiguous members list every \
+                candidate, marked \"name only\"). expect/actual counterparts are listed after \
+                the definition.",
+            "inputSchema": position("the reference"),
+        },
+        {
+            "name": "find_usages",
+            "description": "Find usages of the Kotlin/Java declaration a name at path:line \
+                declares or refers to, across the project (imports, type references, calls; not \
+                comments or strings). Usages that only match by name are marked ≈.",
+            "inputSchema": position("the name"),
         },
     ])
 }
