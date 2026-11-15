@@ -171,7 +171,7 @@ pub mod flags {
     pub const CONST: u8 = 1 << 5;
 }
 
-/// A position in a file: zero-based line and UTF-8 byte column.
+/// A position in a file: zero-based line and character column.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Position {
     pub line: u32,

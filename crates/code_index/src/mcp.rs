@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use instant::Instant;
-
 use serde_json::{Value, json};
 
 use crate::index::{CodeIndex, SearchScope, SymbolInfo, default_threads};

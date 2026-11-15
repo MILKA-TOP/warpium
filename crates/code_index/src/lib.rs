@@ -29,7 +29,7 @@ pub use index::{
 };
 pub use interner::Sym;
 pub use model::{Language, Origin, Position, SymbolKind, Visibility, flags};
-pub use persist::{FORMAT_VERSION, PersistError};
+pub use persist::{FORMAT_VERSION, PersistError, write_snapshot};
 
 /// How [`open`] got its index.
 #[derive(Clone, Debug)]

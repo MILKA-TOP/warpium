@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::index::CodeIndex;
 use crate::interner::{Interner, Sym};
@@ -32,18 +33,13 @@ pub enum PersistError {
 impl CodeIndex {
     /// Writes a snapshot to `path` atomically (through a temporary file in the same directory).
     pub fn save(&self, path: &Path) -> Result<(), PersistError> {
-        let bytes = self.encode();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let tmp_path = path.with_extension(format!("tmp-{}", std::process::id()));
-        let result = std::fs::File::create(&tmp_path)
-            .and_then(|mut file| file.write_all(&bytes).and_then(|()| file.sync_all()))
-            .and_then(|()| std::fs::rename(&tmp_path, path));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&tmp_path);
-        }
-        Ok(result?)
+        write_snapshot(path, &self.snapshot_bytes())
+    }
+
+    /// The snapshot as bytes, for [`write_snapshot`]. Encoding is the only part that needs the
+    /// index, so a shared index can be unlocked before the file is written.
+    pub fn snapshot_bytes(&self) -> Vec<u8> {
+        self.encode()
     }
 
     /// Loads a snapshot written by [`CodeIndex::save`] for the index root `root`.
@@ -240,6 +236,27 @@ impl CodeIndex {
         }
         Ok(index)
     }
+}
+
+/// Writes snapshot bytes from [`CodeIndex::snapshot_bytes`] to `path` atomically. Concurrent
+/// writers each use their own temporary file, so the last rename wins with a whole snapshot.
+pub fn write_snapshot(path: &Path, bytes: &[u8]) -> Result<(), PersistError> {
+    static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp_path = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        NEXT_TMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = std::fs::File::create(&tmp_path)
+        .and_then(|mut file| file.write_all(bytes).and_then(|()| file.sync_all()))
+        .and_then(|()| std::fs::rename(&tmp_path, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    Ok(result?)
 }
 
 /// Live strings in first-use order, with their ids in the snapshot.

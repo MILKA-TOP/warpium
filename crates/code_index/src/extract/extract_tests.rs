@@ -165,6 +165,19 @@ fn kotlin_points_at_the_name_and_spans_the_declaration() {
 }
 
 #[test]
+fn columns_count_characters_not_bytes() {
+    let file = kotlin("@Named(\"пользователь\") val userRepo = 1\n");
+
+    assert_eq!(
+        find(&file, "userRepo").name_pos,
+        Position {
+            line: 0,
+            column: 27
+        }
+    );
+}
+
+#[test]
 fn kotlin_destructuring_declares_each_name() {
     let file = kotlin("val (first, second) = 1 to 2\n");
 

@@ -182,7 +182,7 @@ fn symbol(
         flags: symbol_flags,
         container: container.to_owned(),
         receiver: None,
-        name_pos: position(name),
+        name_pos: position(name, source),
         start_line: node.start_position().row as u32,
         end_line: node.end_position().row as u32,
     }

@@ -10,12 +10,12 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use instant::Instant;
-
-use code_index::{CodeIndex, PersistError};
+use code_index::{CodeIndex, PersistError, write_snapshot};
 use futures::channel::oneshot;
+use instant::Instant;
 use parking_lot::RwLock;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
 use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate, RepositoryWatchMode};
@@ -68,10 +68,17 @@ struct Project {
     pending: HashSet<PathBuf>,
     update_running: bool,
     save: Option<SpawnedFutureHandle>,
+    /// Set when the project is closed, so its build stops between batches.
+    cancelled: Arc<AtomicBool>,
+}
+
+pub(crate) enum CodeIndexEvent {
+    /// The current project finished indexing, so open Go to palettes can show full results.
+    Ready,
 }
 
 impl Entity for CodeIndexModel {
-    type Event = ();
+    type Event = CodeIndexEvent;
 }
 
 impl SingletonEntity for CodeIndexModel {}
@@ -102,12 +109,12 @@ pub(crate) fn init(ctx: &mut AppContext) {
 }
 
 /// Registers the Go to Class / Go to Symbol palettes and the setting's palette toggle.
-pub(crate) fn init_bindings(app: &mut AppContext) {
+pub(crate) fn init_bindings(ctx: &mut AppContext) {
     use warpui::keymap::macros::*;
 
     // JetBrains uses cmd-O and cmd-alt-O, but Warp already binds them (Files palette and
     // /open-repo), so these add ctrl. Both are editable.
-    app.register_editable_bindings([
+    ctx.register_editable_bindings([
         EditableBinding::new(
             "workspace:go_to_class",
             "Go to Class",
@@ -139,7 +146,7 @@ pub(crate) fn init_bindings(app: &mut AppContext) {
             &id!("Workspace"),
             CODE_INDEX_CONTEXT_FLAG,
         )],
-        app,
+        ctx,
     );
 }
 
@@ -148,16 +155,36 @@ pub(crate) fn is_enabled(ctx: &AppContext) -> bool {
     is_warpium_channel() && *WarpiumSettings::as_ref(ctx).code_index
 }
 
-/// Starts indexing `root` unless it is already the current project. Without a root (no local
-/// directory in the active tab) the current project stays.
-pub(crate) fn ensure_project(root: Option<PathBuf>, ctx: &mut AppContext) {
+/// Starts indexing `root` unless it is already the current project. Without a usable root the
+/// current project stays. The home directory and `/` are never indexed; a root that isn't a
+/// pinned explorer root or repository (`require_build_files`) must contain Gradle or Maven build
+/// files, so a stray working directory doesn't start a crawl.
+pub(crate) fn ensure_project(
+    root: Option<PathBuf>,
+    require_build_files: bool,
+    ctx: &mut AppContext,
+) {
     let Some(root) = root else {
         return;
     };
-    if !ctx.has_singleton_model::<CodeIndexModel>() {
+    if !is_indexable_root(&root, require_build_files)
+        || !ctx.has_singleton_model::<CodeIndexModel>()
+    {
         return;
     }
     CodeIndexModel::handle(ctx).update(ctx, |model, ctx| model.open_project(root, ctx));
+}
+
+fn is_indexable_root(root: &Path, require_build_files: bool) -> bool {
+    const BUILD_FILES: &[&str] = &[
+        "settings.gradle.kts",
+        "settings.gradle",
+        "build.gradle.kts",
+        "build.gradle",
+        "pom.xml",
+    ];
+    let too_broad = root.parent().is_none() || dirs::home_dir().is_some_and(|home| home == root);
+    !too_broad && (!require_build_files || BUILD_FILES.iter().any(|file| root.join(file).is_file()))
 }
 
 impl CodeIndexModel {
@@ -195,10 +222,14 @@ impl CodeIndexModel {
             pending: HashSet::new(),
             update_running: false,
             save: None,
+            cancelled: Arc::new(AtomicBool::new(false)),
         };
         project.watch = self.watch(&project.root, ctx);
-        self.start_build(&project, ctx);
         self.project = Some(project);
+        if !self.start_build(ctx) {
+            // Leave no project behind, so the next palette open tries again.
+            self.close_project(ctx);
+        }
         ctx.notify();
     }
 
@@ -207,6 +238,7 @@ impl CodeIndexModel {
             return;
         };
         self.generation += 1;
+        project.cancelled.store(true, Ordering::Relaxed);
         if let Some(save) = project.save {
             save.abort();
         }
@@ -222,20 +254,25 @@ impl CodeIndexModel {
     }
 
     /// Loads the snapshot, rescans the root and saves the snapshot again, on its own thread.
-    fn start_build(&self, project: &Project, ctx: &mut ModelContext<Self>) {
+    /// Returns whether the thread started.
+    fn start_build(&self, ctx: &mut ModelContext<Self>) -> bool {
+        let Some(project) = &self.project else {
+            return false;
+        };
         let (sender, receiver) = oneshot::channel();
         let root = project.root.clone();
         let snapshot = project.snapshot.clone();
         let index = project.index.clone();
+        let cancelled = project.cancelled.clone();
         let spawned = std::thread::Builder::new()
             .name("code-index-build".to_owned())
             .spawn(move || {
-                let report = build(&root, snapshot.as_deref(), &index);
+                let report = build(&root, snapshot.as_deref(), &index, &cancelled);
                 let _ = sender.send(report);
             });
         if let Err(err) = spawned {
             log::error!("[Code index] Couldn't start the indexing thread: {err}");
-            return;
+            return false;
         }
         let generation = self.generation;
         ctx.spawn(
@@ -259,9 +296,11 @@ impl CodeIndexModel {
                     project.state = IndexState::Ready;
                 }
                 model.run_update(ctx);
+                ctx.emit(CodeIndexEvent::Ready);
                 ctx.notify();
             },
         );
+        true
     }
 
     fn watch(
@@ -269,7 +308,14 @@ impl CodeIndexModel {
         root: &Path,
         ctx: &mut ModelContext<Self>,
     ) -> Option<(WeakModelHandle<Repository>, SubscriberId)> {
-        let standardized = StandardizedPath::from_local_canonicalized(root).ok()?;
+        // Watch the enclosing repository, which the app usually watches already: the watcher
+        // routes events to the deepest registered directory, so registering a subdirectory of a
+        // watched repository would hide its events from the repository's other subscribers.
+        let watched = root
+            .ancestors()
+            .find(|dir| dir.join(".git").exists())
+            .unwrap_or(root);
+        let standardized = StandardizedPath::from_local_canonicalized(watched).ok()?;
         let repository = DirectoryWatcher::handle(ctx)
             .update(ctx, |watcher, ctx| watcher.add_directory(standardized, ctx))
             .inspect_err(|err| log::warn!("[Code index] Couldn't watch the project: {err}"))
@@ -393,7 +439,13 @@ impl CodeIndexModel {
         project.save = Some(ctx.spawn(
             async move {
                 Timer::after(SAVE_DELAY).await;
-                save_snapshot(&index, &snapshot);
+                // File I/O and fsync stay off the shared executor.
+                let spawned = std::thread::Builder::new()
+                    .name("code-index-save".to_owned())
+                    .spawn(move || save_snapshot(&index, &snapshot));
+                if let Err(err) = spawned {
+                    log::warn!("[Code index] Couldn't start the snapshot thread: {err}");
+                }
             },
             |_, _, _| {},
         ));
@@ -409,8 +461,13 @@ struct BuildReport {
 }
 
 /// Loads the snapshot into `index` (so the palette can search right away), rescans the root in
-/// batches and saves the snapshot if anything changed.
-fn build(root: &Path, snapshot: Option<&Path>, index: &RwLock<CodeIndex>) -> BuildReport {
+/// batches and saves the snapshot if anything changed. Stops early once `cancelled` is set.
+fn build(
+    root: &Path,
+    snapshot: Option<&Path>,
+    index: &RwLock<CodeIndex>,
+    cancelled: &AtomicBool,
+) -> BuildReport {
     let started = Instant::now();
     let mut loaded_in = None;
     if let Some(snapshot) = snapshot {
@@ -426,10 +483,15 @@ fn build(root: &Path, snapshot: Option<&Path>, index: &RwLock<CodeIndex>) -> Bui
     let stamps = index.read().stamps();
     let mut changed = 0;
     code_index::refresh_in_batches(root, &stamps, code_index::default_threads(), |batch| {
+        if cancelled.load(Ordering::Relaxed) {
+            return false;
+        }
         let stats = index.write().apply(batch);
         changed += stats.files_parsed + stats.files_removed;
+        true
     });
     if changed > 0
+        && !cancelled.load(Ordering::Relaxed)
         && let Some(snapshot) = snapshot
     {
         save_snapshot(index, snapshot);
@@ -444,8 +506,11 @@ fn build(root: &Path, snapshot: Option<&Path>, index: &RwLock<CodeIndex>) -> Bui
     }
 }
 
+/// Encodes under the read lock and writes after releasing it, so searches and updates never
+/// wait for the disk.
 fn save_snapshot(index: &RwLock<CodeIndex>, snapshot: &Path) {
-    if let Err(err) = index.read().save(snapshot) {
+    let bytes = index.read().snapshot_bytes();
+    if let Err(err) = write_snapshot(snapshot, &bytes) {
         log::warn!("[Code index] Couldn't save the index snapshot: {err}");
     }
 }
@@ -457,12 +522,12 @@ fn is_generated_source(path: &Path) -> bool {
         .any(|pair| pair[0] == "build" && pair[1] == "generated")
 }
 
-/// Kotlin and Java files, and extensionless paths that may be (deleted or moved) directories.
+/// Kotlin and Java files, directories, and paths that no longer exist (deleted or moved files
+/// and directories, whatever their names; removing an unindexed path is a no-op).
 fn may_hold_sources(path: &Path) -> bool {
     match path.extension().and_then(|extension| extension.to_str()) {
         Some("kt" | "java") => true,
-        Some(_) => false,
-        None => !path.is_file(),
+        _ => !path.is_file(),
     }
 }
 

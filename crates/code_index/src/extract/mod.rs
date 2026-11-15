@@ -113,11 +113,15 @@ fn has_token(node: Node, token: &str) -> bool {
     children(node).any(|child| !child.is_named() && child.kind() == token)
 }
 
-fn position(node: Node) -> Position {
+/// Where `node` starts, with the column in characters (editors count characters, tree-sitter
+/// counts bytes).
+fn position(node: Node, source: &[u8]) -> Position {
     let point = node.start_position();
+    let start = node.start_byte();
+    let line_prefix = &source[start.saturating_sub(point.column)..start];
     Position {
         line: point.row as u32,
-        column: point.column as u32,
+        column: String::from_utf8_lossy(line_prefix).chars().count() as u32,
     }
 }
 

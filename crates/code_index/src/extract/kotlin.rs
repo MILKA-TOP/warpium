@@ -97,7 +97,7 @@ fn visit_declarations(parent: Node, container: &str, source: &[u8], out: &mut Ve
                         flags,
                         container: container.to_owned(),
                         receiver: None,
-                        name_pos: position(node),
+                        name_pos: position(node, source),
                         start_line: node.start_position().row as u32,
                         end_line: node.end_position().row as u32,
                     });
@@ -209,8 +209,8 @@ fn visit_object(
             receiver: None,
             name_pos: children(node)
                 .find(|child| child.kind() == "companion")
-                .map(position)
-                .unwrap_or_else(|| position(node)),
+                .map(|keyword| position(keyword, source))
+                .unwrap_or_else(|| position(node, source)),
             start_line: node.start_position().row as u32,
             end_line: node.end_position().row as u32,
         },
@@ -248,7 +248,7 @@ fn visit_property(node: Node, container: &str, source: &[u8], out: &mut Vec<RawS
                 receiver.clone(),
                 source,
             );
-            symbol.name_pos = position(name);
+            symbol.name_pos = position(name, source);
             out.push(symbol);
         }
     }
@@ -272,7 +272,7 @@ fn symbol(
         flags,
         container: container.to_owned(),
         receiver,
-        name_pos: position(name),
+        name_pos: position(name, source),
         start_line: node.start_position().row as u32,
         end_line: node.end_position().row as u32,
     }

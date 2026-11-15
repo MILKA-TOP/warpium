@@ -217,9 +217,54 @@ fn qualifier_alone_lists_members_and_extensions() {
     let dir = fixture("plain");
     let index = CodeIndex::build(dir.path(), 2);
 
+    let members = index.search("LoadState.", SearchScope::All, 10);
+    let user_scope = index.search("User.", SearchScope::All, 10);
+
+    assert_eq!(names(&members), vec!["Loaded", "Loading"]);
+    assert_eq!(
+        names(&user_scope),
+        vec!["id", "initials", "displayName", "isAnonymous"]
+    );
+}
+
+#[test]
+fn qualifier_alone_ignores_packages_that_merely_contain_its_letters() {
+    let dir = TempDir::new().expect("temp dir");
+    write(
+        dir.path(),
+        "src/main/kotlin/State.kt",
+        "package org.local.data.state
+class Unrelated
+",
+    );
+    write(
+        dir.path(),
+        "src/main/kotlin/LoadState.kt",
+        "package app
+class LoadState { object Idle }
+",
+    );
+    let index = CodeIndex::build(dir.path(), 1);
+
     let results = index.search("LoadState.", SearchScope::All, 10);
 
-    assert_eq!(names(&results), vec!["user", "Loaded", "Loading"]);
+    assert_eq!(names(&results), vec!["Idle"]);
+}
+
+#[test]
+fn refresh_in_batches_stops_when_apply_declines() {
+    let dir = TempDir::new().expect("temp dir");
+    for i in 0..600 {
+        write(dir.path(), &format!("src/main/kotlin/F{i}.kt"), "class X\n");
+    }
+    let mut batches = 0;
+
+    refresh_in_batches(dir.path(), &HashMap::new(), 2, |_| {
+        batches += 1;
+        false
+    });
+
+    assert_eq!(batches, 1);
 }
 
 #[test]

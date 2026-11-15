@@ -179,6 +179,7 @@ impl CodeIndex {
             let batch_stats = self.apply(batch);
             stats.files_parsed += batch_stats.files_parsed;
             stats.files_removed += batch_stats.files_removed;
+            true
         });
         stats
     }
@@ -202,9 +203,7 @@ impl CodeIndex {
                 stats.files_removed += usize::from(self.remove_file(&path));
             }
         }
-        for path in &update.removed {
-            stats.files_removed += self.remove_path(path);
-        }
+        stats.files_removed += self.remove_paths(&update.removed);
         for (found, raw) in update.parsed {
             self.insert_file(found, raw);
             stats.files_parsed += 1;
@@ -278,10 +277,15 @@ impl CodeIndex {
                 if encoded == 1 {
                     continue;
                 }
-                if let Some(qualifier) = &qualifier
-                    && !self.qualifier_matches(qualifier, file, symbol)
-                {
-                    continue;
+                if let Some(qualifier) = &qualifier {
+                    let matches = if pattern.is_some() {
+                        self.qualifier_matches(qualifier, file, symbol)
+                    } else {
+                        self.qualifier_is_scope(qualifier, file, symbol)
+                    };
+                    if !matches {
+                        continue;
+                    }
                 }
                 candidates.push(Candidate {
                     encoded,
@@ -439,6 +443,31 @@ impl CodeIndex {
         remaining.is_empty()
     }
 
+    /// Whether `qualifier` (lowercase) names the symbol's enclosing declaration, extension
+    /// receiver or package exactly, or as a dotted suffix: what `Outer.` alone lists.
+    fn qualifier_is_scope(&self, qualifier: &[u8], file: &FileData, symbol: &Symbol) -> bool {
+        let names_scope = |scope: &str| {
+            let scope = scope.as_bytes();
+            scope.len() >= qualifier.len()
+                && scope[scope.len() - qualifier.len()..].eq_ignore_ascii_case(qualifier)
+                && (scope.len() == qualifier.len()
+                    || scope[scope.len() - qualifier.len() - 1] == b'.')
+        };
+        let receiver = symbol.receiver.map(|receiver| {
+            let receiver = self.interner.resolve(receiver);
+            receiver
+                .split('<')
+                .next()
+                .unwrap_or(receiver)
+                .trim_end_matches('?')
+        });
+        names_scope(self.interner.resolve(symbol.container))
+            || receiver.is_some_and(names_scope)
+            || (symbol.container.is_empty()
+                && symbol.receiver.is_none()
+                && names_scope(self.interner.resolve(file.package)))
+    }
+
     pub(crate) fn symbol_info(&self, file: &FileData, symbol: &Symbol) -> SymbolInfo {
         let resolve = |sym: Sym| self.interner.resolve(sym).to_owned();
         SymbolInfo {
@@ -460,19 +489,31 @@ impl CodeIndex {
         }
     }
 
-    /// Removes a file, or every file under a directory. Returns how many files were removed.
-    pub(crate) fn remove_path(&mut self, rel_path: &str) -> usize {
-        if self.remove_file(rel_path) {
-            return 1;
+    /// Removes files, and every file under the paths that are directories, in one pass over the
+    /// index. Returns how many files were removed.
+    pub(crate) fn remove_paths(&mut self, rel_paths: &[String]) -> usize {
+        let mut removed = 0;
+        let mut dirs = HashSet::new();
+        for rel_path in rel_paths {
+            if self.remove_file(rel_path) {
+                removed += 1;
+            } else {
+                dirs.insert(rel_path.as_str());
+            }
         }
-        let prefix = format!("{rel_path}/");
+        if dirs.is_empty() {
+            return removed;
+        }
         let under: Vec<String> = self
             .by_path
             .keys()
-            .filter(|path| path.starts_with(&prefix))
+            .filter(|path| {
+                path.match_indices('/')
+                    .any(|(slash, _)| dirs.contains(&path[..slash]))
+            })
             .cloned()
             .collect();
-        under.iter().filter(|path| self.remove_file(path)).count()
+        removed + under.iter().filter(|path| self.remove_file(path)).count()
     }
 
     fn remove_file(&mut self, rel_path: &str) -> bool {
@@ -589,11 +630,12 @@ const REFRESH_BATCH: usize = 512;
 /// Walks `root` and parses every file that is new or whose `(mtime, size)` differs from `stamps`,
 /// handing the results to `apply` in batches. The first batch also drops indexed files that are
 /// gone. Applying a batch only takes a moment, so a shared index can be locked per batch.
+/// `apply` returns whether to go on; returning `false` cancels the remaining batches.
 pub fn refresh_in_batches(
     root: &Path,
     stamps: &HashMap<String, (u64, u64)>,
     threads: usize,
-    mut apply: impl FnMut(PendingUpdate),
+    mut apply: impl FnMut(PendingUpdate) -> bool,
 ) {
     let found = scan(root, threads);
     let mut present = Some(found.iter().map(|file| file.rel_path.clone()).collect());
@@ -613,11 +655,14 @@ pub fn refresh_in_batches(
         return;
     }
     for batch in batches {
-        apply(PendingUpdate {
+        let go_on = apply(PendingUpdate {
             parsed: parse_all(root, batch.to_vec(), pool.as_ref()),
             removed: Vec::new(),
             present: present.take(),
         });
+        if !go_on {
+            return;
+        }
     }
 }
 

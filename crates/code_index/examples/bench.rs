@@ -14,9 +14,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use instant::Instant;
-
 use code_index::{CodeIndex, SearchScope, snapshot_path_in};
+use instant::Instant;
 
 /// Typical palette queries: abbreviations, prefixes, common words, members and extension
 /// receivers. Names sampled from each corpus are added at run time.

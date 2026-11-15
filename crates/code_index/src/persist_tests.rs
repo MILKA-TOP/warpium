@@ -59,7 +59,7 @@ fn snapshot_drops_strings_of_removed_files() {
     let root = fixture_root("plain");
     let mut index = CodeIndex::build(&root, 2);
     let before = index.encode().len();
-    index.remove_path("src/main/kotlin");
+    index.remove_paths(&["src/main/kotlin".to_owned()]);
 
     let after = CodeIndex::decode(&index.encode(), &root).expect("decode");
 

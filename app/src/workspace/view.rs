@@ -3037,6 +3037,17 @@ impl Workspace {
                 |_, _, ctx| ctx.notify(),
             );
         }
+        #[cfg(not(target_family = "wasm"))]
+        if ctx.has_singleton_model::<crate::warpium::code_index::CodeIndexModel>() {
+            ctx.subscribe_to_model(
+                &crate::warpium::code_index::CodeIndexModel::handle(ctx),
+                |me, _, event, ctx| match event {
+                    crate::warpium::code_index::CodeIndexEvent::Ready => {
+                        me.rerun_code_index_palette_query(ctx);
+                    }
+                },
+            );
+        }
 
         let changelog_model = ChangelogModel::handle(ctx);
         ctx.subscribe_to_model(&changelog_model, |me, _, event, ctx| {
@@ -14815,6 +14826,21 @@ impl Workspace {
         });
     }
 
+    /// Warpium: refreshes an open Go to palette once indexing finishes, replacing partial results.
+    #[cfg(not(target_family = "wasm"))]
+    fn rerun_code_index_palette_query(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_code_palette_open = self.current_workspace_state.is_palette_open
+            && (self.is_palette_mode_enabled(PaletteMode::CodeClasses, ctx)
+                || self.is_palette_mode_enabled(PaletteMode::CodeSymbols, ctx));
+        if !is_code_palette_open {
+            return;
+        }
+        self.palette.update(ctx, |view, ctx| {
+            view.search_bar
+                .update(ctx, |search_bar, ctx| search_bar.run_query(ctx));
+        });
+    }
+
     /// Warpium: indexes the project of the active tab: its pinned Project Explorer root, else the
     /// repository of the active session, else the session's directory.
     #[cfg_attr(target_family = "wasm", allow(unused_variables))]
@@ -14830,12 +14856,13 @@ impl Workspace {
             if root.is_none() {
                 root = crate::search::files::model::FileSearchModel::as_ref(ctx).repo_root(ctx);
             }
+            let require_build_files = root.is_none();
             if root.is_none() {
                 root = ActiveSession::as_ref(ctx)
                     .path_if_local(window_id)
                     .map(Path::to_path_buf);
             }
-            crate::warpium::code_index::ensure_project(root, ctx);
+            crate::warpium::code_index::ensure_project(root, require_build_files, ctx);
         }
     }
 

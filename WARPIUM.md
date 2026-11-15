@@ -212,8 +212,11 @@ watcher, snapshots) and `app/src/warpium/code_index_palette.rs` (palette rows).
   editable and listed in the command palette. JetBrains' `cmd-O`/`cmd-alt-O` are taken by Warp
   (Files palette, `/open-repo`). Enter opens the declaration in the editor at its name.
 - **Project root.** When a Go to palette opens: the tab's pinned Project Explorer root, else the
-  repository of the active session, else its directory. One project is held at a time; switching
-  drops the previous index.
+  repository of the active session, else its directory if that holds Gradle or Maven build files.
+  The home directory and `/` are never indexed. One project is held at a time; switching cancels
+  the previous build between batches and drops its index. The watcher is registered on the
+  enclosing git repository, because `repo_metadata` routes events to the deepest registered
+  directory. Registrations are never removed, since `DirectoryWatcher` has no removal API.
 - **Threads and memory.** Builds run on a dedicated thread with a bounded rayon pool (half the
   cores, at most 8) that exists only for the build, parsing in batches of 512 files. The palette
   searches on a background executor under a shared read lock. Saves are reparsed off the main
