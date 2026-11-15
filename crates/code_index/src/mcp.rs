@@ -1,0 +1,322 @@
+//! A minimal Model Context Protocol server over stdio, so AI agents can query the index (as a
+//! candidate replacement for `ast-index`). Messages are newline-delimited JSON-RPC 2.0.
+
+use std::io::{BufRead, Write};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+use crate::index::{CodeIndex, SearchScope, SymbolInfo, default_threads};
+use crate::model::{SymbolKind, flags};
+
+/// Protocol version answered when the client doesn't ask for one we know.
+const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
+const KNOWN_PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
+
+/// Files are rescanned before a tool call when the last scan is older than this.
+const REFRESH_AFTER: Duration = Duration::from_secs(2);
+const DEFAULT_LIMIT: usize = 30;
+const MAX_LIMIT: usize = 200;
+
+pub struct Server {
+    root: PathBuf,
+    snapshot: Option<PathBuf>,
+    index: Option<CodeIndex>,
+    last_refresh: Option<Instant>,
+}
+
+impl Server {
+    pub fn new(root: PathBuf, snapshot: Option<PathBuf>) -> Self {
+        Self {
+            root,
+            snapshot,
+            index: None,
+            last_refresh: None,
+        }
+    }
+
+    /// Serves requests from `input` until it closes.
+    pub fn serve(&mut self, input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
+        for line in input.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Some(response) = self.handle_message(&line) {
+                serde_json::to_writer(&mut output, &response)?;
+                output.write_all(b"\n")?;
+                output.flush()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Handles one JSON-RPC message and returns the response, or `None` for notifications.
+    pub fn handle_message(&mut self, line: &str) -> Option<Value> {
+        let message: Value = match serde_json::from_str(line) {
+            Ok(message) => message,
+            Err(_) => return Some(error_response(Value::Null, -32700, "Parse error")),
+        };
+        let id = message.get("id").cloned()?;
+        let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+        let params = message.get("params").cloned().unwrap_or(Value::Null);
+        let result = match method {
+            "initialize" => Ok(initialize_result(&params)),
+            "ping" => Ok(json!({})),
+            "tools/list" => Ok(json!({ "tools": tool_definitions() })),
+            "tools/call" => Ok(self.call_tool(&params)),
+            _ => Err((-32601, "Method not found")),
+        };
+        Some(match result {
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+            Err((code, message)) => error_response(id, code, message),
+        })
+    }
+
+    fn call_tool(&mut self, params: &Value) -> Value {
+        let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+        let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+        let text_argument = |key: &str| arguments.get(key).and_then(Value::as_str);
+        let limit = arguments
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map_or(DEFAULT_LIMIT, |limit| (limit as usize).clamp(1, MAX_LIMIT));
+
+        let result = match name {
+            "find_class" | "find_symbol" => match text_argument("query") {
+                Some(query) => {
+                    let scope = if name == "find_class" {
+                        SearchScope::Types
+                    } else {
+                        SearchScope::All
+                    };
+                    let kind = text_argument("kind");
+                    Ok(self.find(query, scope, kind, limit))
+                }
+                None => Err("Missing required argument: query".to_owned()),
+            },
+            "file_outline" => match text_argument("path") {
+                Some(path) => self.outline(path),
+                None => Err("Missing required argument: path".to_owned()),
+            },
+            _ => Err(format!("Unknown tool: {name}")),
+        };
+        match result {
+            Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+            Err(text) => json!({ "content": [{ "type": "text", "text": text }], "isError": true }),
+        }
+    }
+
+    fn index(&mut self) -> &CodeIndex {
+        let stale = self
+            .last_refresh
+            .is_none_or(|refreshed| refreshed.elapsed() >= REFRESH_AFTER);
+        if stale {
+            let threads = default_threads();
+            let changed = match &mut self.index {
+                Some(index) => index.refresh(threads) != Default::default(),
+                None => {
+                    let (index, report) = crate::open(&self.root, self.snapshot.as_deref(), threads);
+                    self.index = Some(index);
+                    report.update != Default::default()
+                }
+            };
+            if changed
+                && let (Some(index), Some(snapshot)) = (&self.index, &self.snapshot)
+                && let Err(err) = index.save(snapshot)
+            {
+                log::warn!("[Code index] Couldn't save the index snapshot: {err}");
+            }
+            self.last_refresh = Some(Instant::now());
+        }
+        self.index.as_ref().expect("index was opened above")
+    }
+
+    fn find(&mut self, query: &str, scope: SearchScope, kind: Option<&str>, limit: usize) -> String {
+        let index = self.index();
+        // Kind filtering happens after ranking, so ask for more and trim.
+        let fetch = if kind.is_some() { MAX_LIMIT * 5 } else { limit };
+        let results: Vec<SymbolInfo> = index
+            .search(query, scope, fetch)
+            .into_iter()
+            .map(|result| result.symbol)
+            .filter(|symbol| kind.is_none_or(|kind| kind_matches(symbol.kind, kind)))
+            .take(limit)
+            .collect();
+        if results.is_empty() {
+            return format!("No declarations match \"{query}\".");
+        }
+        results
+            .iter()
+            .map(|symbol| describe(symbol, index))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn outline(&mut self, path: &str) -> Result<String, String> {
+        let root = self.root.clone();
+        let index = self.index();
+        let rel_path = std::path::Path::new(path)
+            .strip_prefix(&root)
+            .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| path.trim_start_matches("./").to_owned());
+        let Some((package, imports)) = index.file_header(&rel_path) else {
+            return Err(format!("{rel_path} isn't an indexed Kotlin or Java file."));
+        };
+        let mut lines = vec![format!("package {package}")];
+        lines.extend(imports.iter().map(|import| format!("import {import}")));
+        for symbol in index.file_symbols(&rel_path) {
+            let depth = symbol.container.matches('.').count()
+                + usize::from(!symbol.container.is_empty());
+            lines.push(format!(
+                "{}{} {}{} :{}",
+                "  ".repeat(depth),
+                symbol.kind.label(),
+                receiver_prefix(&symbol),
+                symbol.name,
+                symbol.name_pos.line + 1
+            ));
+        }
+        Ok(lines.join("\n"))
+    }
+}
+
+fn kind_matches(kind: SymbolKind, wanted: &str) -> bool {
+    let wanted = wanted.to_ascii_lowercase();
+    match wanted.as_str() {
+        "function" | "fun" | "method" => kind == SymbolKind::Function,
+        "property" | "field" | "val" | "var" => kind == SymbolKind::Property,
+        "type" => kind.is_type(),
+        _ => kind.label().replace(' ', "_") == wanted.replace(' ', "_"),
+    }
+}
+
+fn receiver_prefix(symbol: &SymbolInfo) -> String {
+    symbol
+        .receiver
+        .as_ref()
+        .map(|receiver| format!("{receiver}."))
+        .unwrap_or_default()
+}
+
+/// One result line: `class UserViewModel  com.app.feature  feature/src/main/…/X.kt:12  [main]`.
+fn describe(symbol: &SymbolInfo, index: &CodeIndex) -> String {
+    let mut tags = Vec::new();
+    if !symbol.source_set.is_empty() {
+        tags.push(symbol.source_set.clone());
+    }
+    if symbol.has_flag(flags::EXPECT) {
+        tags.push("expect".to_owned());
+    }
+    if symbol.has_flag(flags::ACTUAL) {
+        tags.push("actual".to_owned());
+    }
+    if symbol.origin == crate::Origin::Generated {
+        tags.push("generated".to_owned());
+    }
+    let mut line = format!(
+        "{} {}{}  {}  {}:{}",
+        symbol.kind.label(),
+        receiver_prefix(symbol),
+        symbol.name,
+        symbol.location(),
+        symbol.rel_path,
+        symbol.name_pos.line + 1
+    );
+    if !tags.is_empty() {
+        line.push_str(&format!("  [{}]", tags.join(", ")));
+    }
+    for counterpart in index.expect_actual_counterparts(symbol) {
+        line.push_str(&format!(
+            "\n    {} in {}:{}",
+            if counterpart.has_flag(flags::EXPECT) {
+                "expect"
+            } else {
+                "actual"
+            },
+            counterpart.rel_path,
+            counterpart.name_pos.line + 1
+        ));
+    }
+    line
+}
+
+fn initialize_result(params: &Value) -> Value {
+    let requested = params.get("protocolVersion").and_then(Value::as_str);
+    let version = requested
+        .filter(|version| KNOWN_PROTOCOL_VERSIONS.contains(version))
+        .unwrap_or(LATEST_PROTOCOL_VERSION);
+    json!({
+        "protocolVersion": version,
+        "capabilities": { "tools": {} },
+        "serverInfo": { "name": "warpium-code-index", "version": env!("CARGO_PKG_VERSION") },
+        "instructions": "Kotlin and Java declaration index of the project. Use find_class and \
+            find_symbol (fuzzy, camel humps: \"UVM\" finds UserViewModel; \"pkg.Name\" narrows by \
+            package or enclosing class) instead of grep to locate declarations, and file_outline \
+            to list a file's declarations.",
+    })
+}
+
+fn tool_definitions() -> Value {
+    let limit = json!({
+        "type": "integer",
+        "description": format!("Maximum results (default {DEFAULT_LIMIT}, at most {MAX_LIMIT})."),
+    });
+    json!([
+        {
+            "name": "find_class",
+            "description": "Find Kotlin/Java classes, interfaces, objects, enums, annotations, \
+                records and type aliases by name. Fuzzy with camel humps (\"UVM\" → \
+                UserViewModel); \"pkg.Name\" narrows by package. Returns kind, name, package, \
+                file:line and source set; expect/actual counterparts are listed under each hit.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Name or camel-hump abbreviation." },
+                    "limit": limit,
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "find_symbol",
+            "description": "Find any Kotlin/Java declaration (types, functions including \
+                extension functions, properties, constructors, enum entries) by name. Same \
+                matching as find_class; \"Receiver.name\" finds extension functions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Name or camel-hump abbreviation." },
+                    "kind": {
+                        "type": "string",
+                        "description": "Optional filter: class, interface, object, enum, \
+                            typealias, function, property, constructor, enum_entry or type.",
+                    },
+                    "limit": limit,
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": "file_outline",
+            "description": "List the package, imports and declarations (with line numbers) of \
+                a Kotlin or Java file in the project.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "File path, absolute or relative to the project root." },
+                },
+                "required": ["path"],
+            },
+        },
+    ])
+}
+
+fn error_response(id: Value, code: i32, message: &str) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+}
+
+#[cfg(test)]
+#[path = "mcp_tests.rs"]
+mod tests;

@@ -3135,6 +3135,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "code_index"
+version = "0.1.0"
+dependencies = [
+ "arborium-java",
+ "arborium-kotlin",
+ "arborium-tree-sitter",
+ "dirs 6.0.0",
+ "ignore",
+ "libc",
+ "log",
+ "rayon",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "codesnake"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
