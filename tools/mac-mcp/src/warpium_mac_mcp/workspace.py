@@ -178,6 +178,47 @@ def registered_integration_tests(clone: Path) -> set[str] | None:
     return set(re.findall(r"register_test!\(\s*([a-z0-9_]+)\s*\)", src))
 
 
+# The Warpium workflow (the only one check_run_info accepts) bundles Warpium.app.
+PREFERRED_APP = "Warpium.app"
+# Warpium's self-updater keeps the replaced bundle as `.{stem}-previous.app`
+# next to the new one (BACKUP_SUFFIX in crates/warpium_self_update/src/install.rs).
+SELF_UPDATE_BACKUP_SUFFIX = "-previous.app"
+
+
+def is_app_bundle(p: Path) -> bool:
+    """A visible, real ``*.app`` directory. Hidden bundles are the self-updater's
+    backup and ``.*-update-*.app`` staging copies, never the installed app."""
+    return (
+        p.suffix == ".app"
+        and not p.name.startswith(".")
+        and not p.is_symlink()
+        and (p / "Contents" / "Info.plist").is_file()
+    )
+
+
+def remove_self_update_backups(apps_dir: Path, log: Callable[[str], None]) -> None:
+    """Best effort: deletes ``.*-previous.app`` backups the self-updater left
+    directly in ``apps_dir`` (already jail-resolved). A symlink is unlinked,
+    never followed. Staging copies (``.*-update-<pid>.app``) are left alone: one
+    may belong to a self-update in progress, and the updater cleans them up."""
+    try:
+        entries = sorted(apps_dir.iterdir())
+    except OSError as e:
+        log(f"could not list {apps_dir}: {e}")
+        return
+    for p in entries:
+        if not (p.name.startswith(".") and p.name.endswith(SELF_UPDATE_BACKUP_SUFFIX)):
+            continue
+        try:
+            if p.is_symlink() or not p.is_dir():
+                p.unlink()
+            else:
+                shutil.rmtree(p)
+            log(f"removed stale self-update backup {p}")
+        except OSError as e:
+            log(f"could not remove {p}: {e}")
+
+
 class Workspace:
     def __init__(
         self,
@@ -380,6 +421,7 @@ class Workspace:
                 log(r.stdout + r.stderr)
                 if r.returncode != 0:
                     raise WorkspaceError("ditto failed")
+                remove_self_update_backups(apps_dir, log)
             finally:
                 r = subprocess.run(
                     ["hdiutil", "detach", str(mnt)], capture_output=True, text=True, timeout=120
@@ -406,7 +448,16 @@ class Workspace:
         )
 
     def installed_app(self) -> Path | None:
-        apps = sorted(p for p in self.cfg.apps_dir.glob("*.app") if not p.is_symlink())
+        """The app install_artifact put in apps/: Warpium.app if present, else the
+        first other visible bundle. Hidden self-updater leftovers are never picked
+        (``.Warpium-previous.app`` sorts before Warpium.app)."""
+        apps_dir = self.cfg.apps_dir
+        preferred = apps_dir / PREFERRED_APP
+        if is_app_bundle(preferred):
+            return preferred
+        if not apps_dir.is_dir():
+            return None
+        apps = sorted(p for p in apps_dir.iterdir() if is_app_bundle(p))
         return apps[0] if apps else None
 
     @staticmethod
