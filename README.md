@@ -70,6 +70,17 @@ Buttons for your project's everyday commands sit in the top-right corner of the 
 - Commands from a committed `toolbar.toml` only run after you confirm that you trust it. Warpium lists them first, and asks again whenever the file changes. Your personal buttons never ask.
 - Turn the toolbar off in **Settings → Features → Warpium**, from the command palette, or with `warpium.project_toolbar = false` in `settings.toml`.
 
+## Android devices and Logcat
+
+Run **Open Logcat** from the command palette to open a live log of your Android device or emulator in a pane, like Logcat in Android Studio. It works with emulators and with phones connected over USB or Wi-Fi.
+
+- The device menu at the top left of the pane lists the connected devices and your emulators (AVDs). Pick an emulator that isn't running to start it in its own window; Logcat switches to it once it has booted. **Select Android device** and **Launch Android Virtual Device (AVD)** in the command palette open the same menu.
+- Filter by app package (filled in with your project's app, and it keeps following the app when it crashes and restarts), minimum level, tags (`MyTag, -Noisy` hides `Noisy`) and text or a regular expression.
+- Click a stack-trace line such as `at com.example.MainViewModel.load(MainViewModel.kt:42)` to open that file at that line.
+- Pause the log to read it without new lines arriving, clear it, or click a line and press ⌘C to copy it. **Copy shown log** in the pane's menu copies everything that passes the filters.
+- Warpium finds the Android SDK the way Gradle does (`local.properties`, `ANDROID_HOME`, then `~/Library/Android/sdk`) and talks to the adb server directly. Nothing contacts adb until you open Logcat or the device menu.
+- Turn the Android tools off from the command palette, or with `warpium.android = false` in `settings.toml`.
+
 ## Planned features
 
 - **Git log.** A JetBrains-style git log and graph with branches, commits and sorting.

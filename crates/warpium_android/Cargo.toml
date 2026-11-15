@@ -1,0 +1,19 @@
+[package]
+name = "warpium_android"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: Android SDK discovery, an adb client over the adb server socket, AVDs, logcat streaming and parsing"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+command.workspace = true
+ignore = "0.4.23"
+instant.workspace = true
+log.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

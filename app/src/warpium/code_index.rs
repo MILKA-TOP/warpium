@@ -137,7 +137,8 @@ pub(crate) fn init(ctx: &mut AppContext) {
                 | WarpiumSettingsChangedEvent::UpstreamCheckMinCommits { .. }
                 | WarpiumSettingsChangedEvent::UpdateCheck { .. }
                 | WarpiumSettingsChangedEvent::UpdateCheckIntervalHours { .. }
-                | WarpiumSettingsChangedEvent::ProjectToolbar { .. } => {}
+                | WarpiumSettingsChangedEvent::ProjectToolbar { .. }
+                | WarpiumSettingsChangedEvent::AndroidTools { .. } => {}
             },
         );
         CodeIndexModel {
