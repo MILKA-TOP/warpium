@@ -96,7 +96,10 @@ impl CodeIndex {
             write_varint(&mut out, file.imports.len() as u64);
             for import in &file.imports {
                 write_varint(&mut out, table.id(import.path));
-                write_varint(&mut out, import.alias.map_or(0, |alias| table.id(alias) + 1));
+                write_varint(
+                    &mut out,
+                    import.alias.map_or(0, |alias| table.id(alias) + 1),
+                );
                 out.push(u8::from(import.wildcard) | (u8::from(import.is_static) << 1));
             }
             write_varint(&mut out, file.symbols.len() as u64);
@@ -164,8 +167,8 @@ impl CodeIndex {
         let mut files = Vec::with_capacity(file_count);
         for _ in 0..file_count {
             let rel_path = reader.str()?.to_owned();
-            let language = Language::from_u8(reader.byte()?)
-                .ok_or(PersistError::Corrupt("bad language"))?;
+            let language =
+                Language::from_u8(reader.byte()?).ok_or(PersistError::Corrupt("bad language"))?;
             let origin =
                 Origin::from_u8(reader.byte()?).ok_or(PersistError::Corrupt("bad origin"))?;
             let module = sym(reader.varint()?)?;

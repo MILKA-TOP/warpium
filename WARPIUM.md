@@ -187,6 +187,86 @@ silicon Macs only (releases ship arm64 disk images).
   match the release's plist version, so the override only changes what is offered, not what is
   accepted.
 
+## Kotlin/Java code index (Go to Class / Go to Symbol)
+
+An in-process declaration index for Kotlin and Java projects, KMP and plain JVM alike: phases 0
+and 1 of [the research report](docs/warpium/research/kotlin-navigation-and-toolchain.md). No
+Gradle, JVM or language server is involved. Fork-only code lives in `crates/code_index`
+(protoc-free, unit-tested with `cargo test -p code_index`), `app/src/warpium/code_index.rs` (model,
+watcher, snapshots) and `app/src/warpium/code_index_palette.rs` (palette rows).
+
+- **What is indexed.** `.kt` and `.java` files under the project root, honoring `.gitignore` (also
+  outside git) and skipping hidden and `build/` directories, plus each Gradle module's
+  `build/generated/` sources (`R.java`/`BR.java` excluded). Declarations: classes, interfaces,
+  objects, companion objects, enums and entries, annotations, records, type aliases, functions
+  (with extension receivers), properties (including `val`/`var` constructor parameters),
+  constructors and nested types, with package, file, span, visibility, `expect`/`actual` and the
+  file's imports (for phase 2). Local declarations inside function bodies are left out. The module
+  and source set (`commonMain`, `iosMain`, `main`, `test`, …) come from the path, so test and
+  generated code can rank lower and `expect` declarations link to their `actual`s by qualified name.
+- **Search.** Tiers: exact > prefix > camel humps from the first word (`UVM`, `UsViMo` →
+  `UserViewModel`) > camel humps from a later word (`VM`) > subsequence. Within a tier, project
+  sources rank above tests and generated code, then shorter names. `pkg.Name` narrows by package or
+  enclosing class; `String.shout` finds extension functions by receiver.
+- **Palettes.** **Go to Class** (`ctrl-cmd-O`) and **Go to Symbol** (`ctrl-alt-cmd-O`), both
+  editable and listed in the command palette. JetBrains' `cmd-O`/`cmd-alt-O` are taken by Warp
+  (Files palette, `/open-repo`). Enter opens the declaration in the editor at its name.
+- **Project root.** When a Go to palette opens: the tab's pinned Project Explorer root, else the
+  repository of the active session, else its directory. One project is held at a time; switching
+  drops the previous index.
+- **Threads and memory.** Builds run on a dedicated thread with a bounded rayon pool (half the
+  cores, at most 8) that exists only for the build, parsing in batches of 512 files. The palette
+  searches on a background executor under a shared read lock. Saves are reparsed off the main
+  thread from `repo_metadata` watcher events.
+- **Snapshot.** `<user cache dir>/dev.milka.Warpium/code-index/<hash of the root>/index.bin`
+  (`~/Library/Caches/…` on macOS): a versioned binary format (`FORMAT_VERSION`) with a deduplicated
+  string table. Nothing is written inside the project. On open, the snapshot is loaded (the palette
+  can search right away), the tree is rescanned by size and modification time, and only changed
+  files are reparsed. The snapshot is rewritten after a rebuild and 10 s after the last change. Bump
+  `FORMAT_VERSION` whenever extraction rules change.
+- **Setting:** `warpium.code_index` (default on, OSS channel only), toggled from the command
+  palette with "Enable/Disable Kotlin/Java code index (Go to Class/Symbol)".
+
+### MCP server for agents
+
+`warpium-code-index` serves the index over MCP (stdio) as a candidate replacement for `ast-index`.
+Tools: `find_class`, `find_symbol` (optional `kind`) and `file_outline`. Results are compact text
+lines with kind, name, package, `file:line` and source set, with `expect`/`actual` counterparts
+listed under each hit. It shares the app's snapshot for the same root and rescans before a call when
+its last scan is more than 2 s old.
+
+```bash
+cargo build --release -p code_index --bin warpium-code-index
+claude mcp add code-index -- "$PWD/target/release/warpium-code-index" mcp --root /path/to/project
+# Without MCP:
+target/release/warpium-code-index search --root /path/to/project --types UVM
+```
+
+Not done yet: shipping the binary in `Warpium.app`, registering it in Warpium's MCP settings, and
+usages/definition tools (phase 2).
+
+### Benchmark (phase 0)
+
+[`script/warpium/code_index_bench`](script/warpium/code_index_bench) shallow-clones the corpus
+(nowinandroid, Thunderbird, DuckDuckGo, Signal) at pinned commits into the user cache dir and runs
+`crates/code_index/examples/bench.rs` in release mode. For each root it reports cold full-index time,
+snapshot size, warm start (load, and load plus rescan), p50/p95/max latency of ~100 Go to Class and
+Go to Symbol queries (a fixed list plus names sampled from the corpus), update time after editing a
+file, and peak RSS. A separate process measures the warm start, so its peak RSS is what the index
+keeps resident.
+
+```bash
+script/warpium/code_index_bench                   # all four corpora
+script/warpium/code_index_bench --combined        # also all four as one ~260k-symbol root
+script/warpium/code_index_bench thunderbird       # one corpus
+CODE_INDEX_BENCH_ARGS="--threads 4" script/warpium/code_index_bench
+# A private project: label it so its path stays out of the output, and share aggregates only.
+cargo run --release -p code_index --example bench -- --name private /path/to/project
+```
+
+Inside the dev container, keep projects for timing off the `/workspace` bind mount. Directory walks
+there are about 40 times slower than on a local disk, which inflates rescan and cold-build times.
+
 ## Versioning
 
 A Warpium version is the upstream Warp release it is based on plus a fork counter as one

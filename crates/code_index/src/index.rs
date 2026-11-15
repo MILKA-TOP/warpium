@@ -75,11 +75,15 @@ impl SymbolInfo {
 
     /// The fully qualified name: package, enclosing declarations and name.
     pub fn qualified_name(&self) -> String {
-        [self.package.as_str(), self.container.as_str(), self.name.as_str()]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(".")
+        [
+            self.package.as_str(),
+            self.container.as_str(),
+            self.name.as_str(),
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(".")
     }
 
     /// The package and enclosing declarations, which is where the symbol lives.
@@ -236,12 +240,14 @@ impl CodeIndex {
             Some((qualifier, name)) => (Some(qualifier), name),
             None => (None, query),
         };
-        let Some(pattern) = Pattern::new(name_query) else {
-            return Vec::new();
-        };
         let qualifier = qualifier
             .map(|qualifier| qualifier.to_ascii_lowercase().into_bytes())
             .filter(|qualifier| !qualifier.is_empty());
+        // `Outer.` or `String.` alone lists everything the qualifier matches.
+        let pattern = Pattern::new(name_query);
+        if pattern.is_none() && qualifier.is_none() {
+            return Vec::new();
+        }
 
         // Per-name match cache: 0 = not computed, 1 = no match, otherwise an encoded match.
         let mut memo = vec![0u32; self.interner.len()];
@@ -254,12 +260,15 @@ impl CodeIndex {
                 }
                 let encoded = match memo[symbol.name.0 as usize] {
                     0 => {
-                        let encoded = if pattern.may_match(self.interner.mask(symbol.name)) {
-                            pattern
-                                .match_name(self.interner.resolve(symbol.name))
-                                .map_or(1, |found| encode_match(found.tier, found.score))
-                        } else {
-                            1
+                        let name = self.interner.resolve(symbol.name);
+                        let encoded = match &pattern {
+                            None => encode_match(MatchTier::Prefix, -(name.len() as i32)),
+                            Some(pattern) if pattern.may_match(self.interner.mask(symbol.name)) => {
+                                pattern
+                                    .match_name(name)
+                                    .map_or(1, |found| encode_match(found.tier, found.score))
+                            }
+                            Some(_) => 1,
                         };
                         memo[symbol.name.0 as usize] = encoded;
                         encoded
@@ -308,7 +317,10 @@ impl CodeIndex {
                 let symbol = &file.symbols[candidate.index as usize];
                 let info = self.symbol_info(file, symbol);
                 SearchResult {
-                    matched_indices: pattern.matched_indices(&info.name),
+                    matched_indices: pattern
+                        .as_ref()
+                        .map(|pattern| pattern.matched_indices(&info.name))
+                        .unwrap_or_default(),
                     symbol: info,
                     tier: candidate.tier(),
                 }
@@ -406,7 +418,9 @@ impl CodeIndex {
         let haystacks = [
             Some(self.interner.resolve(file.package)),
             Some(self.interner.resolve(symbol.container)),
-            symbol.receiver.map(|receiver| self.interner.resolve(receiver)),
+            symbol
+                .receiver
+                .map(|receiver| self.interner.resolve(receiver)),
         ];
         let mut remaining = qualifier;
         for haystack in haystacks.into_iter().flatten() {
@@ -617,7 +631,9 @@ pub fn prepare_changes(root: &Path, paths: &[PathBuf], threads: usize) -> Pendin
                 .hidden(true)
                 .require_git(false)
                 .filter_entry(|entry| {
-                    !entry.file_type().is_some_and(|file_type| file_type.is_dir())
+                    !entry
+                        .file_type()
+                        .is_some_and(|file_type| file_type.is_dir())
                         || entry.file_name().to_str().is_some_and(is_walkable_dir)
                 })
                 .build();

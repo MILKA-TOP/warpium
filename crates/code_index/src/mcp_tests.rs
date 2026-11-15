@@ -51,7 +51,10 @@ fn initialize_echoes_a_known_protocol_version() {
 
     assert_eq!(response["id"], 1);
     assert_eq!(response["result"]["protocolVersion"], "2025-03-26");
-    assert_eq!(response["result"]["serverInfo"]["name"], "warpium-code-index");
+    assert_eq!(
+        response["result"]["serverInfo"]["name"],
+        "warpium-code-index"
+    );
 }
 
 #[test]

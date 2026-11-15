@@ -17,6 +17,7 @@ arborium-tree-sitter = "2.13"
 arborium-kotlin = "2.13"
 arborium-java = "2.13"
 dirs.workspace = true
+instant.workspace = true
 ignore = "0.4.23"
 log.workspace = true
 rayon.workspace = true

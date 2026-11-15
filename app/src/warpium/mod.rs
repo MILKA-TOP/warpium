@@ -1,6 +1,10 @@
 //! Warpium-only features. Kept in their own module so upstream merges stay clean.
 
 #[cfg(not(target_family = "wasm"))]
+pub(crate) mod code_index;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod code_index_palette;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod self_update;
 pub(crate) mod sync_settings;
 #[cfg(not(target_family = "wasm"))]

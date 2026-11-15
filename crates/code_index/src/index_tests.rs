@@ -50,7 +50,12 @@ fn indexes_every_kmp_source_set_and_generated_sources() {
 
     let mut source_sets: Vec<(String, Origin)> = index
         .live_files()
-        .map(|file| (index.interner.resolve(file.source_set).to_owned(), file.origin))
+        .map(|file| {
+            (
+                index.interner.resolve(file.source_set).to_owned(),
+                file.origin,
+            )
+        })
         .collect();
     source_sets.sort();
     assert_eq!(
@@ -101,7 +106,13 @@ fn ranks_exact_then_prefix_then_camel_then_word_start_then_fuzzy() {
 
     assert_eq!(
         names(&results),
-        vec!["Uvm", "UvmHolder", "UserViewModel", "SubUserViewModel", "Duvms"]
+        vec![
+            "Uvm",
+            "UvmHolder",
+            "UserViewModel",
+            "SubUserViewModel",
+            "Duvms"
+        ]
     );
     assert_eq!(
         results.iter().map(|result| result.tier).collect::<Vec<_>>(),
@@ -202,14 +213,42 @@ fn receiver_qualified_query_finds_extension_functions() {
 }
 
 #[test]
+fn qualifier_alone_lists_members_and_extensions() {
+    let dir = fixture("plain");
+    let index = CodeIndex::build(dir.path(), 2);
+
+    let results = index.search("LoadState.", SearchScope::All, 10);
+
+    assert_eq!(names(&results), vec!["user", "Loaded", "Loading"]);
+}
+
+#[test]
+fn empty_query_finds_nothing() {
+    let dir = fixture("plain");
+    let index = CodeIndex::build(dir.path(), 2);
+
+    assert_eq!(
+        names(&index.search(" ", SearchScope::All, 10)),
+        Vec::<&str>::new()
+    );
+}
+
+#[test]
 fn honors_gitignore_outside_git_repositories() {
     let dir = fixture("plain");
     write(dir.path(), ".gitignore", "ignored/\n");
-    write(dir.path(), "ignored/src/main/kotlin/Hidden.kt", "class Hidden\n");
+    write(
+        dir.path(),
+        "ignored/src/main/kotlin/Hidden.kt",
+        "class Hidden\n",
+    );
 
     let index = CodeIndex::build(dir.path(), 2);
 
-    assert_eq!(names(&index.search("Hidden", SearchScope::Types, 10)), Vec::<&str>::new());
+    assert_eq!(
+        names(&index.search("Hidden", SearchScope::Types, 10)),
+        Vec::<&str>::new()
+    );
 }
 
 #[test]
@@ -242,20 +281,28 @@ fn apply_changes_reparses_an_edited_file() {
         names(&index.search("RenamedRepository", SearchScope::Types, 10)),
         vec!["RenamedRepository"]
     );
-    assert_eq!(names(&index.search("UserRepository", SearchScope::Types, 10)), Vec::<&str>::new());
+    assert_eq!(
+        names(&index.search("UserRepository", SearchScope::Types, 10)),
+        Vec::<&str>::new()
+    );
 }
 
 #[test]
 fn apply_changes_drops_a_deleted_file() {
     let dir = fixture("plain");
     let mut index = CodeIndex::build(dir.path(), 2);
-    let path = dir.path().join("src/test/kotlin/org/acme/UserViewModelTest.kt");
+    let path = dir
+        .path()
+        .join("src/test/kotlin/org/acme/UserViewModelTest.kt");
     fs::remove_file(&path).expect("delete file");
 
     let stats = index.apply_changes(&[path], 1);
 
     assert_eq!(stats.files_removed, 1);
-    assert_eq!(names(&index.search("UserViewModelTest", SearchScope::Types, 10)), Vec::<&str>::new());
+    assert_eq!(
+        names(&index.search("UserViewModelTest", SearchScope::Types, 10)),
+        Vec::<&str>::new()
+    );
 }
 
 #[test]
@@ -275,7 +322,11 @@ fn apply_changes_drops_every_file_of_a_deleted_directory() {
 fn apply_changes_indexes_an_added_directory() {
     let dir = fixture("plain");
     let mut index = CodeIndex::build(dir.path(), 2);
-    write(dir.path(), "feature/src/main/kotlin/Feature.kt", "class FeatureScreen\n");
+    write(
+        dir.path(),
+        "feature/src/main/kotlin/Feature.kt",
+        "class FeatureScreen\n",
+    );
 
     index.apply_changes(&[dir.path().join("feature")], 1);
 
@@ -305,8 +356,11 @@ fn refresh_picks_up_added_changed_and_deleted_files() {
         "src/test/kotlin/org/acme/UserViewModelTest.kt",
         "package org.acme\nclass ChangedTest\n",
     );
-    fs::remove_file(dir.path().join("src/main/java/org/acme/legacy/LegacyUserService.java"))
-        .expect("delete file");
+    fs::remove_file(
+        dir.path()
+            .join("src/main/java/org/acme/legacy/LegacyUserService.java"),
+    )
+    .expect("delete file");
 
     let stats = index.refresh(2);
 
@@ -317,9 +371,18 @@ fn refresh_picks_up_added_changed_and_deleted_files() {
             files_removed: 1,
         }
     );
-    assert_eq!(names(&index.search("AddedLater", SearchScope::Types, 1)), vec!["AddedLater"]);
-    assert_eq!(names(&index.search("ChangedTest", SearchScope::Types, 1)), vec!["ChangedTest"]);
-    assert_eq!(names(&index.search("LegacyUserService", SearchScope::Types, 1)), Vec::<&str>::new());
+    assert_eq!(
+        names(&index.search("AddedLater", SearchScope::Types, 1)),
+        vec!["AddedLater"]
+    );
+    assert_eq!(
+        names(&index.search("ChangedTest", SearchScope::Types, 1)),
+        vec!["ChangedTest"]
+    );
+    assert_eq!(
+        names(&index.search("LegacyUserService", SearchScope::Types, 1)),
+        Vec::<&str>::new()
+    );
 }
 
 #[test]
@@ -348,7 +411,8 @@ fn file_outline_lists_declarations_in_source_order() {
     let dir = fixture("kmp");
     let index = CodeIndex::build(dir.path(), 2);
 
-    let symbols = index.file_symbols("shared/src/androidMain/kotlin/com/example/shared/Platform.android.kt");
+    let symbols =
+        index.file_symbols("shared/src/androidMain/kotlin/com/example/shared/Platform.android.kt");
 
     assert_eq!(
         symbols

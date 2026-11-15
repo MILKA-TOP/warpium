@@ -23,8 +23,14 @@ fn empty_query_has_no_pattern() {
 
 #[test]
 fn exact_match_ignores_case() {
-    assert_eq!(tier("UserViewModel", "UserViewModel"), Some(MatchTier::Exact));
-    assert_eq!(tier("userviewmodel", "UserViewModel"), Some(MatchTier::Exact));
+    assert_eq!(
+        tier("UserViewModel", "UserViewModel"),
+        Some(MatchTier::Exact)
+    );
+    assert_eq!(
+        tier("userviewmodel", "UserViewModel"),
+        Some(MatchTier::Exact)
+    );
 }
 
 #[test]

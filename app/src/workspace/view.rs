@@ -14802,6 +14802,43 @@ impl Workspace {
         });
     }
 
+    /// Warpium: opens Go to Class or Go to Symbol over the current project's code index.
+    fn open_code_index_palette(&mut self, filter: QueryFilter, ctx: &mut ViewContext<Self>) {
+        self.ensure_code_index_project(ctx);
+        self.palette.update(ctx, |view, ctx| {
+            view.reset(ctx);
+            let mixer = view.search_bar.as_ref(ctx).mixer().clone();
+            view.data_source_store.update(ctx, |store, ctx| {
+                store.reset_search_mixer(mixer, self.is_shared_session_viewer_focused(ctx), ctx);
+            });
+            view.set_active_query_filter(filter, ctx);
+        });
+    }
+
+    /// Warpium: indexes the project of the active tab: its pinned Project Explorer root, else the
+    /// repository of the active session, else the session's directory.
+    #[cfg_attr(target_family = "wasm", allow(unused_variables))]
+    fn ensure_code_index_project(&self, ctx: &mut ViewContext<Self>) {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let window_id = ctx.window_id();
+            let mut root = self
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .pinned_explorer_root()
+                .cloned();
+            if root.is_none() {
+                root = crate::search::files::model::FileSearchModel::as_ref(ctx).repo_root(ctx);
+            }
+            if root.is_none() {
+                root = ActiveSession::as_ref(ctx)
+                    .path_if_local(window_id)
+                    .map(Path::to_path_buf);
+            }
+            crate::warpium::code_index::ensure_project(root, ctx);
+        }
+    }
+
     fn open_files_palette(&mut self, ctx: &mut ViewContext<Self>) {
         self.tips_completed.update(ctx, |tips_completed, ctx| {
             mark_feature_used_and_write_to_user_defaults(
@@ -15099,6 +15136,8 @@ impl Workspace {
             PaletteMode::WarpDrive => self.open_warp_drive_palette(ctx),
             PaletteMode::Files => self.open_files_palette(ctx),
             PaletteMode::Conversations => self.open_conversations_palette(ctx),
+            PaletteMode::CodeClasses => self.open_code_index_palette(QueryFilter::CodeClasses, ctx),
+            PaletteMode::CodeSymbols => self.open_code_index_palette(QueryFilter::CodeSymbols, ctx),
         }
 
         ctx.focus(&self.palette);
@@ -15238,6 +15277,13 @@ impl Workspace {
                         ctx,
                     );
                 }
+            }
+            CommandPaletteEvent::OpenCodeIndexPalette { filter } => {
+                self.ensure_code_index_project(ctx);
+                let filter = *filter;
+                self.palette.update(ctx, |view, ctx| {
+                    view.set_active_query_filter(filter, ctx);
+                });
             }
             CommandPaletteEvent::OpenDirectory { path } => {
                 let active_terminal_view = self
@@ -24861,6 +24907,15 @@ impl TypedActionView for Workspace {
                 #[cfg(not(target_family = "wasm"))]
                 Self::update_self_updater(ctx, |updater, _| updater.reveal_dmg());
             }
+            ToggleCodeIndex => {
+                crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.code_index.toggle_and_save_value(ctx));
+                    },
+                );
+                ctx.notify();
+            }
             OpenLocalToCloudHandoffPane {
                 launch,
                 environment_id,
@@ -27168,6 +27223,11 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::UPDATE_CHECK_CONTEXT_FLAG);
+        }
+        if *crate::warpium::sync_settings::WarpiumSettings::as_ref(app).code_index {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::CODE_INDEX_CONTEXT_FLAG);
         }
 
         if self.team_uid(app).is_some() {

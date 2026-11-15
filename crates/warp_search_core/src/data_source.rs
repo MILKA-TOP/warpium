@@ -222,6 +222,12 @@ pub enum QueryFilter {
 
     /// Include only conversations whose most recent directory matches the session's current working directory.
     CurrentDirectoryConversations,
+
+    /// Warpium: Kotlin/Java types from the project's code index ("Go to Class").
+    CodeClasses,
+
+    /// Warpium: every Kotlin/Java declaration from the project's code index ("Go to Symbol").
+    CodeSymbols,
 }
 
 impl QueryFilter {
@@ -262,6 +268,8 @@ impl QueryFilter {
             QueryFilter::CurrentDirectoryConversations => {
                 "Search conversations in current directory"
             }
+            QueryFilter::CodeClasses => "Go to class (UVM finds UserViewModel)",
+            QueryFilter::CodeSymbols => "Go to symbol",
         }
     }
 
@@ -294,6 +302,8 @@ impl QueryFilter {
             QueryFilter::BaseModels => &NO_FILTER_ATOM,
             QueryFilter::FullTerminalUseModels => &NO_FILTER_ATOM,
             QueryFilter::CurrentDirectoryConversations => &NO_FILTER_ATOM,
+            QueryFilter::CodeClasses => &NO_FILTER_ATOM,
+            QueryFilter::CodeSymbols => &NO_FILTER_ATOM,
         }
     }
 
@@ -326,6 +336,8 @@ impl QueryFilter {
             QueryFilter::BaseModels => "base models",
             QueryFilter::FullTerminalUseModels => "full terminal use models",
             QueryFilter::CurrentDirectoryConversations => "current directory conversations",
+            QueryFilter::CodeClasses => "classes",
+            QueryFilter::CodeSymbols => "symbols",
         }
     }
 
@@ -365,6 +377,8 @@ impl QueryFilter {
             QueryFilter::BaseModels => None,
             QueryFilter::FullTerminalUseModels => None,
             QueryFilter::CurrentDirectoryConversations => None,
+            QueryFilter::CodeClasses => Some("bundled/svg/code-02.svg"),
+            QueryFilter::CodeSymbols => Some("bundled/svg/code-01.svg"),
         }
     }
 }

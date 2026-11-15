@@ -17,7 +17,9 @@ mod persist;
 mod scan;
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use instant::Instant;
 
 pub use cache::{default_snapshot_path, snapshot_path_in};
 pub use fuzzy::MatchTier;
@@ -51,7 +53,11 @@ pub fn open(root: &Path, snapshot: Option<&Path>, threads: usize) -> (CodeIndex,
         Some(Err(PersistError::Io(err))) if err.kind() == std::io::ErrorKind::NotFound => {
             (CodeIndex::new(PathBuf::from(root)), None, None)
         }
-        Some(Err(err)) => (CodeIndex::new(PathBuf::from(root)), None, Some(err.to_string())),
+        Some(Err(err)) => (
+            CodeIndex::new(PathBuf::from(root)),
+            None,
+            Some(err.to_string()),
+        ),
         None => (CodeIndex::new(PathBuf::from(root)), None, None),
     };
     let refresh_started = Instant::now();

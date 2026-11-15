@@ -3,7 +3,9 @@
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use instant::Instant;
 
 use serde_json::{Value, json};
 
@@ -117,7 +119,8 @@ impl Server {
             let changed = match &mut self.index {
                 Some(index) => index.refresh(threads) != Default::default(),
                 None => {
-                    let (index, report) = crate::open(&self.root, self.snapshot.as_deref(), threads);
+                    let (index, report) =
+                        crate::open(&self.root, self.snapshot.as_deref(), threads);
                     self.index = Some(index);
                     report.update != Default::default()
                 }
@@ -133,7 +136,13 @@ impl Server {
         self.index.as_ref().expect("index was opened above")
     }
 
-    fn find(&mut self, query: &str, scope: SearchScope, kind: Option<&str>, limit: usize) -> String {
+    fn find(
+        &mut self,
+        query: &str,
+        scope: SearchScope,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> String {
         let index = self.index();
         // Kind filtering happens after ranking, so ask for more and trim.
         let fetch = if kind.is_some() { MAX_LIMIT * 5 } else { limit };
@@ -167,8 +176,8 @@ impl Server {
         let mut lines = vec![format!("package {package}")];
         lines.extend(imports.iter().map(|import| format!("import {import}")));
         for symbol in index.file_symbols(&rel_path) {
-            let depth = symbol.container.matches('.').count()
-                + usize::from(!symbol.container.is_empty());
+            let depth =
+                symbol.container.matches('.').count() + usize::from(!symbol.container.is_empty());
             lines.push(format!(
                 "{}{} {}{} :{}",
                 "  ".repeat(depth),

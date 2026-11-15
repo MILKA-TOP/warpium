@@ -12,20 +12,63 @@
 //! projects so their paths stay out of logs).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use instant::Instant;
 
 use code_index::{CodeIndex, SearchScope, snapshot_path_in};
 
 /// Typical palette queries: abbreviations, prefixes, common words, members and extension
 /// receivers. Names sampled from each corpus are added at run time.
 const QUERIES: &[&str] = &[
-    "a", "vm", "UVM", "MVM", "Repo", "ViewModel", "Activity", "Fragment", "MainActivity",
-    "onCreate", "invoke", "toString", "Dao", "Impl", "Test", "Settings", "Account", "Message",
-    "Util", "Helper", "Manager", "Service", "Provider", "Module", "Factory", "Adapter", "Screen",
-    "State", "Event", "Builder", "Config", "Json", "Http", "get", "create", "load", "Mapper",
-    "UseCase", "Navigation", "Theme", "String.", "Preview", "Exception", "Listener", "RepoImpl",
-    "AcRe", "getUN", "data.Repo",
+    "a",
+    "vm",
+    "UVM",
+    "MVM",
+    "Repo",
+    "ViewModel",
+    "Activity",
+    "Fragment",
+    "MainActivity",
+    "onCreate",
+    "invoke",
+    "toString",
+    "Dao",
+    "Impl",
+    "Test",
+    "Settings",
+    "Account",
+    "Message",
+    "Util",
+    "Helper",
+    "Manager",
+    "Service",
+    "Provider",
+    "Module",
+    "Factory",
+    "Adapter",
+    "Screen",
+    "State",
+    "Event",
+    "Builder",
+    "Config",
+    "Json",
+    "Http",
+    "get",
+    "create",
+    "load",
+    "Mapper",
+    "UseCase",
+    "Navigation",
+    "Theme",
+    "String.",
+    "Preview",
+    "Exception",
+    "Listener",
+    "RepoImpl",
+    "AcRe",
+    "getUN",
+    "data.Repo",
 ];
 
 const SAMPLED_NAMES: usize = 30;
@@ -61,7 +104,12 @@ fn main() {
         if warm_child {
             run_warm(&root, &cache, threads);
         } else {
-            run(&root, &cache, name.as_deref().unwrap_or(&root.to_string_lossy()), threads);
+            run(
+                &root,
+                &cache,
+                name.as_deref().unwrap_or(&root.to_string_lossy()),
+                threads,
+            );
         }
         return;
     }
@@ -69,7 +117,10 @@ fn main() {
     for root in roots {
         let cache = std::env::temp_dir().join(format!("code-index-bench-{}", std::process::id()));
         for mode in ["--child", "--warm-child"] {
-            let mut command = Command::new(&exe);
+            // A developer tool that respawns itself; the lint is about console windows flashing
+            // in the app on Windows.
+            #[allow(clippy::disallowed_types)]
+            let mut command = std::process::Command::new(&exe);
             command
                 .arg(mode)
                 .arg("--threads")
@@ -132,7 +183,11 @@ fn run(root: &Path, cache: &Path, label: &str, threads: usize) {
     index.save(&snapshot).expect("save snapshot");
     let save = started.elapsed();
     let snapshot_bytes = std::fs::metadata(&snapshot).map(|m| m.len()).unwrap_or(0);
-    println!("snapshot save        {}  ({:.1} MB)", ms(save), mb(snapshot_bytes));
+    println!(
+        "snapshot save        {}  ({:.1} MB)",
+        ms(save),
+        mb(snapshot_bytes)
+    );
     let rss_after_cold = rss_now();
     drop(index);
 

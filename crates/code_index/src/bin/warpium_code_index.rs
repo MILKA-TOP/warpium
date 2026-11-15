@@ -9,9 +9,9 @@
 //! The root defaults to the current directory. Snapshots are shared with the app (same cache
 //! path per root).
 
+use instant::Instant;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Instant;
 
 use code_index::{SearchScope, default_snapshot_path, default_threads, mcp};
 

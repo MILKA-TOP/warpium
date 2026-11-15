@@ -29,7 +29,9 @@ pub(crate) fn scan(root: &Path, threads: usize) -> Vec<FoundFile> {
         .threads(threads)
         .filter_entry(|entry| {
             entry.depth() == 0
-                || !entry.file_type().is_some_and(|file_type| file_type.is_dir())
+                || !entry
+                    .file_type()
+                    .is_some_and(|file_type| file_type.is_dir())
                 || entry.file_name().to_str().is_some_and(is_walkable_dir)
         })
         .build_parallel()
@@ -40,7 +42,10 @@ pub(crate) fn scan(root: &Path, threads: usize) -> Vec<FoundFile> {
                 let Ok(entry) = entry else {
                     return WalkState::Continue;
                 };
-                if !entry.file_type().is_some_and(|file_type| file_type.is_file()) {
+                if !entry
+                    .file_type()
+                    .is_some_and(|file_type| file_type.is_file())
+                {
                     return WalkState::Continue;
                 }
                 let file_name = entry.file_name();
@@ -58,7 +63,9 @@ pub(crate) fn scan(root: &Path, threads: usize) -> Vec<FoundFile> {
         });
 
     let mut found = found.into_inner().unwrap_or_else(|err| err.into_inner());
-    let module_dirs = module_dirs.into_inner().unwrap_or_else(|err| err.into_inner());
+    let module_dirs = module_dirs
+        .into_inner()
+        .unwrap_or_else(|err| err.into_inner());
     for module_dir in module_dirs {
         let generated = module_dir.join("build").join("generated");
         if generated.is_dir() {
@@ -77,7 +84,9 @@ fn scan_generated(root: &Path, generated: &Path, found: &mut Vec<FoundFile>) {
         .hidden(true)
         .build();
     for entry in walker.flatten() {
-        if entry.file_type().is_some_and(|file_type| file_type.is_file())
+        if entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
             && let Some(file) = found_file(root, entry.path(), entry.metadata().ok())
         {
             found.push(file);
@@ -120,7 +129,9 @@ pub(crate) fn rel_path(root: &Path, path: &Path) -> Option<String> {
 }
 
 pub(crate) fn abs_path(root: &Path, rel_path: &str) -> PathBuf {
-    rel_path.split('/').fold(root.to_path_buf(), |path, part| path.join(part))
+    rel_path
+        .split('/')
+        .fold(root.to_path_buf(), |path, part| path.join(part))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

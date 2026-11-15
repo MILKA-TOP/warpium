@@ -78,7 +78,13 @@ fn indexes_sources_but_not_build_or_hidden_dirs() {
 
 #[test]
 fn indexes_generated_sources_except_resource_classes() {
-    assert!(is_indexable("app/build/generated/ksp/debug/kotlin/com/Factory.kt"));
-    assert!(!is_indexable("app/build/generated/source/r/debug/com/app/R.java"));
-    assert!(!is_indexable(".hidden/build/generated/ksp/debug/kotlin/X.kt"));
+    assert!(is_indexable(
+        "app/build/generated/ksp/debug/kotlin/com/Factory.kt"
+    ));
+    assert!(!is_indexable(
+        "app/build/generated/source/r/debug/com/app/R.java"
+    ));
+    assert!(!is_indexable(
+        ".hidden/build/generated/ksp/debug/kotlin/X.kt"
+    ));
 }
