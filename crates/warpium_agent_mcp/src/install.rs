@@ -56,6 +56,8 @@ impl Environment {
             PathBuf::from("/opt/homebrew/bin"),
             PathBuf::from("/usr/local/bin"),
         ]);
+        // Claude Code keys local-scope servers by the real path of the project.
+        let project_root = project_root.map(|root| std::fs::canonicalize(&root).unwrap_or(root));
         Self {
             codex_home: from_env("CODEX_HOME"),
             kimi_home: from_env("KIMI_CODE_HOME"),
