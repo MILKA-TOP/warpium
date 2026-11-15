@@ -46,14 +46,18 @@ impl Workspace {
     /// The project toolbar's place in the title bar: it takes a share of the width the tabs leave
     /// and keeps to the right of it, so its buttons collapse into the overflow menu as the title
     /// bar fills up.
-    pub(super) fn render_project_toolbar_slot(&self) -> Box<dyn Element> {
-        Shrinkable::new(
+    pub(super) fn render_project_toolbar_slot(&self, ctx: &AppContext) -> Option<Box<dyn Element>> {
+        if !self.project_toolbar.as_ref(ctx).has_content() {
+            return None;
+        }
+        let slot = Shrinkable::new(
             PROJECT_TOOLBAR_FLEX,
             Align::new(ChildView::new(&self.project_toolbar).finish())
                 .right()
                 .finish(),
         )
-        .finish()
+        .finish();
+        Some(slot)
     }
 
     /// Points the toolbar at the active tab's project.
@@ -65,12 +69,12 @@ impl Workspace {
     }
 
     /// The active tab's pinned Project Explorer root and its local session's working directory.
-    fn project_toolbar_inputs(&self, app: &AppContext) -> (Option<PathBuf>, Option<PathBuf>) {
-        let pane_group = self.active_tab_pane_group().as_ref(app);
+    fn project_toolbar_inputs(&self, ctx: &AppContext) -> (Option<PathBuf>, Option<PathBuf>) {
+        let pane_group = self.active_tab_pane_group().as_ref(ctx);
         let pinned_root = pane_group.pinned_explorer_root().cloned();
         let cwd = pane_group
-            .active_session_view(app)
-            .and_then(|view| view.as_ref(app).active_session_path_if_local(app));
+            .active_session_view(ctx)
+            .and_then(|view| view.as_ref(ctx).active_session_path_if_local(ctx));
         (pinned_root, cwd)
     }
 
@@ -92,6 +96,8 @@ impl Workspace {
             ProjectToolbarEvent::OpenFile(path) => {
                 self.add_tab_for_code_file(path.clone(), None, ctx)
             }
+            ProjectToolbarEvent::MenuClosed => self.focus_active_tab(ctx),
+            ProjectToolbarEvent::ContentChanged => ctx.notify(),
         }
     }
 
@@ -223,15 +229,18 @@ impl Workspace {
         });
     }
 
-    /// The active session, if it is local and not running a command.
-    fn idle_local_session(&self, app: &AppContext) -> Option<ViewHandle<TerminalView>> {
+    /// The active session, if it is local, not running a command and has nothing typed in its
+    /// input (which running the command would replace).
+    fn idle_local_session(&self, ctx: &AppContext) -> Option<ViewHandle<TerminalView>> {
         self.active_tab_pane_group()
-            .as_ref(app)
-            .active_session_view(app)
+            .as_ref(ctx)
+            .active_session_view(ctx)
             .filter(|session| {
-                let view = session.as_ref(app);
-                view.active_session_is_local(app).unwrap_or(false)
-                    && !view.has_active_long_running_command()
+                let view = session.as_ref(ctx);
+                let is_executing = view.model.lock().block_list().active_block().is_executing();
+                view.active_session_is_local(ctx).unwrap_or(false)
+                    && !is_executing
+                    && view.input().as_ref(ctx).buffer_text(ctx).trim().is_empty()
             })
     }
 

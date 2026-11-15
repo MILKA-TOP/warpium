@@ -67,7 +67,7 @@ fn posix_runs_in_a_subshell_with_quoted_cwd_and_env() {
 
     assert_eq!(
         line,
-        r#"( cd -- '/work/it'\''s here' && export GRADLE_OPTS='-Xmx4g -Dx='\''y'\''' && ./gradlew assembleDebug )"#
+        "( cd -- '/work/it'\\''s here' && export GRADLE_OPTS='-Xmx4g -Dx='\\''y'\\''' && ./gradlew assembleDebug\n)"
     );
 }
 
@@ -75,7 +75,7 @@ fn posix_runs_in_a_subshell_with_quoted_cwd_and_env() {
 fn posix_env_only_still_uses_a_subshell() {
     assert_eq!(
         shell_line("make", None, &env(&[("A", "1")]), ShellFamily::Posix),
-        "( export A='1' && make )"
+        "( export A='1' && make\n)"
     );
 }
 
@@ -90,7 +90,7 @@ fn fish_restores_the_directory_and_scopes_env_to_the_block() {
 
     assert_eq!(
         line,
-        r"if pushd '/work/it\'s'; set -lx A 'a\\b'; make; popd; end"
+        "if pushd '/work/it\\'s'; set -lx A 'a\\\\b'; make\npopd; end"
     );
 }
 
@@ -98,7 +98,7 @@ fn fish_restores_the_directory_and_scopes_env_to_the_block() {
 fn fish_env_only_uses_a_block() {
     assert_eq!(
         shell_line("make", None, &env(&[("A", "1")]), ShellFamily::Fish),
-        "begin; set -lx A '1'; make; end"
+        "begin; set -lx A '1'; make\nend"
     );
 }
 
@@ -113,7 +113,7 @@ fn powershell_pushes_and_pops_the_location() {
 
     assert_eq!(
         line,
-        "& { Push-Location -LiteralPath 'C:/work/it''s'; try { $env:A = '1'; ./gradlew.bat test } finally { Pop-Location } }"
+        "& { Push-Location -LiteralPath 'C:/work/it''s'; try { $env:A = '1'; ./gradlew.bat test\n} finally { Pop-Location } }"
     );
 }
 

@@ -210,9 +210,12 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
   `action` ids are the parameterless UI actions of the `warpctrl` catalog.
 - **Layout.** Buttons with `run_config = true` and the launch configurations with a pane inside
   the project go in the run-configurations dropdown, with a run button; the selection is
-  remembered per project. The other buttons sit in a flexible title-bar slot (a share of the
-  width the tabs leave, like one more tab); the ones that don't fit move, in order, into the
-  overflow menu.
+  remembered per project. The other buttons sit in a flexible title-bar slot, added only while
+  the toolbar has something to show: it gets a share of the width like one more tab (with
+  vertical tabs, half of the space the title-bar search bar would otherwise take). The buttons
+  that don't fit move, in order, into the overflow menu.
+- **Merge leniency.** A personal override without an action whose team button no longer exists
+  is ignored rather than invalidating the toolbar.
 - **Trust.** Commands whose action comes from the team file run only after the user trusts that
   exact file version (its SHA-256). The prompt lists every team command with its target, `cwd` and
   `env`, and comes back whenever the file changes. Personal commands and non-command actions

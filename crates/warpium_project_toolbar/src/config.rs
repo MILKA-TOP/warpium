@@ -373,7 +373,9 @@ fn parse_entry(raw: RawButton, source: ConfigSource) -> Result<PartialButton, St
 
 /// Merges the personal overrides into the team config by button `id`: a personal entry with a
 /// team button's id overrides the fields it sets (an action key replaces the whole action) or,
-/// with `hidden = true`, removes the button; other personal entries add buttons after the team's.
+/// with `hidden = true`, removes the button; other personal entries with an action add buttons
+/// after the team's. Overrides without an action whose team button is gone are ignored, so a
+/// team change never breaks the toolbar of someone who customized a removed button.
 pub fn merge(
     team: Option<&ParsedConfig>,
     personal: Option<&ParsedConfig>,
@@ -383,7 +385,8 @@ pub fn merge(
         for entry in &personal.entries {
             match merged.iter_mut().find(|button| button.id == entry.id) {
                 Some(base) => apply_override(base, entry),
-                None => merged.push(entry.clone()),
+                None if entry.action.is_some() => merged.push(entry.clone()),
+                None => {}
             }
         }
     }

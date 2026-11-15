@@ -21425,7 +21425,10 @@ impl Workspace {
                 .with_child(tab_bar.finish())
                 .with_child(search_bar_slot);
             #[cfg(not(target_family = "wasm"))]
-            let tab_bar = tab_bar.with_child(self.render_project_toolbar_slot());
+            let tab_bar = match self.render_project_toolbar_slot(ctx) {
+                Some(slot) => tab_bar.with_child(slot),
+                None => tab_bar,
+            };
             let tab_bar = tab_bar.with_child(right_controls.finish()).finish();
 
             return EventHandler::new(
@@ -21566,7 +21569,9 @@ impl Workspace {
         // the freed flex is distributed accross the remaining flex items in the tab bar.
         tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
         #[cfg(not(target_family = "wasm"))]
-        tab_bar.add_child(self.render_project_toolbar_slot());
+        if let Some(slot) = self.render_project_toolbar_slot(ctx) {
+            tab_bar.add_child(slot);
+        }
 
         self.add_configurable_right_side_tab_bar_controls(
             &mut tab_bar,

@@ -91,7 +91,8 @@ pub fn resolve_cwd(project_root: &Path, cwd: Option<&str>) -> PathBuf {
 
 /// The line to type into an existing session so `command` runs in `cwd` with `env`, without
 /// changing that session's own directory or (except in PowerShell) its environment. With no
-/// `cwd` and no `env` the command is returned unchanged.
+/// `cwd` and no `env` the command is returned unchanged. The wrapper's closing part goes on its
+/// own line, so a trailing `#` comment or newline in `command` can't swallow it.
 pub fn shell_line(
     command: &str,
     cwd: Option<&Path>,
@@ -111,7 +112,7 @@ pub fn shell_line(
                 parts.push(format!("export {name}={}", posix_quote(value)));
             }
             parts.push(command.to_owned());
-            format!("( {} )", parts.join(" && "))
+            format!("( {}\n)", parts.join(" && "))
         }
         ShellFamily::Fish => {
             let env = env
@@ -120,10 +121,10 @@ pub fn shell_line(
                 .collect::<String>();
             match cwd {
                 Some(cwd) => format!(
-                    "if pushd {}; {env}{command}; popd; end",
+                    "if pushd {}; {env}{command}\npopd; end",
                     fish_quote(&cwd.to_string_lossy())
                 ),
-                None => format!("begin; {env}{command}; end"),
+                None => format!("begin; {env}{command}\nend"),
             }
         }
         ShellFamily::PowerShell => {
@@ -133,10 +134,10 @@ pub fn shell_line(
                 .collect::<String>();
             match cwd {
                 Some(cwd) => format!(
-                    "& {{ Push-Location -LiteralPath {}; try {{ {env}{command} }} finally {{ Pop-Location }} }}",
+                    "& {{ Push-Location -LiteralPath {}; try {{ {env}{command}\n}} finally {{ Pop-Location }} }}",
                     powershell_quote(&cwd.to_string_lossy())
                 ),
-                None => format!("& {{ {env}{command} }}"),
+                None => format!("& {{ {env}{command}\n}}"),
             }
         }
     }

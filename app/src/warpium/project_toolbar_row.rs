@@ -75,14 +75,10 @@ impl Element for ToolbarRow {
             .iter_mut()
             .map(|button| button.layout(child_constraint, ctx, app).x())
             .collect::<Vec<_>>();
-        let overflow_width = self
-            .overflow_button
-            .layout(child_constraint, ctx, app)
-            .x();
-        let trailing_width = self
-            .trailing
-            .as_mut()
-            .map_or(0., |trailing| trailing.layout(child_constraint, ctx, app).x());
+        let overflow_width = self.overflow_button.layout(child_constraint, ctx, app).x();
+        let trailing_width = self.trailing.as_mut().map_or(0., |trailing| {
+            trailing.layout(child_constraint, ctx, app).x()
+        });
 
         let fit = fit_inline_buttons(
             &button_widths,

@@ -54,7 +54,7 @@ use super::sync_settings::{
 use crate::launch_configs::launch_config::PaneTemplateType;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::ToggleSettingActionPair;
-use crate::user_config::WarpConfig;
+use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::BindingGroup;
 use crate::workspace::WorkspaceAction;
 
@@ -220,8 +220,8 @@ impl ProjectToolbarStore {
 }
 
 /// Whether the project toolbar is shown at all.
-pub(crate) fn is_enabled(app: &AppContext) -> bool {
-    is_warpium_channel() && *WarpiumSettings::as_ref(app).project_toolbar
+pub(crate) fn is_enabled(ctx: &AppContext) -> bool {
+    is_warpium_channel() && *WarpiumSettings::as_ref(ctx).project_toolbar
 }
 
 /// The personal overrides file of a project, when the home config directory is known.
@@ -254,6 +254,10 @@ pub(crate) enum ProjectToolbarEvent {
         personal: bool,
     },
     OpenFile(PathBuf),
+    /// The toolbar's menu closed, so focus can go back to the session.
+    MenuClosed,
+    /// [`ProjectToolbarView::has_content`] changed, so its title-bar slot appears or goes away.
+    ContentChanged,
 }
 
 enum LoadedConfig {
@@ -308,6 +312,8 @@ pub(crate) struct ProjectToolbarView {
     mouse_states: MouseStates,
     /// How many toolbar buttons fit inline at the last layout; the overflow menu lists the rest.
     visible_buttons: Arc<AtomicUsize>,
+    /// [`Self::has_content`] when it was last reported to the workspace.
+    had_content: bool,
 }
 
 impl ProjectToolbarView {
@@ -322,6 +328,7 @@ impl ProjectToolbarView {
         ctx.subscribe_to_view(&menu, |me, _, event, ctx| match event {
             MenuEvent::Close { .. } => {
                 me.open_menu = None;
+                ctx.emit(ProjectToolbarEvent::MenuClosed);
                 ctx.notify();
             }
             MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
@@ -343,8 +350,10 @@ impl ProjectToolbarView {
                 me.update_context(pinned_root, cwd, true, ctx);
             }
         });
-        ctx.subscribe_to_model(&WarpConfig::handle(ctx), |me, _, _, ctx| {
-            me.refresh_run_configs(ctx);
+        ctx.subscribe_to_model(&WarpConfig::handle(ctx), |me, _, event, ctx| {
+            if let WarpConfigUpdateEvent::LaunchConfigs = event {
+                me.refresh_run_configs(ctx);
+            }
         });
         Self {
             inputs: (None, None),
@@ -358,6 +367,19 @@ impl ProjectToolbarView {
             button_mouse_states: HashMap::new(),
             mouse_states: MouseStates::default(),
             visible_buttons: Arc::new(AtomicUsize::new(usize::MAX)),
+            had_content: false,
+        }
+    }
+
+    /// Whether the toolbar shows anything: buttons, the run-configurations widget or an invalid
+    /// config warning.
+    pub(crate) fn has_content(&self) -> bool {
+        match &self.loaded {
+            Some(LoadedConfig::Invalid { .. }) => true,
+            Some(LoadedConfig::Buttons { buttons, .. }) => {
+                !toolbar_buttons(buttons).is_empty() || !self.run_configs.is_empty()
+            }
+            None => false,
         }
     }
 
@@ -504,12 +526,17 @@ impl ProjectToolbarView {
             .map(|root| project_launch_configs(root, ctx))
             .unwrap_or_default();
         self.run_configs = run_config_items(self.buttons(), &launch_configs);
+        let has_content = self.has_content();
+        if has_content != self.had_content {
+            self.had_content = has_content;
+            ctx.emit(ProjectToolbarEvent::ContentChanged);
+        }
         ctx.notify();
     }
 
-    fn selected_run_config<'a>(&'a self, app: &AppContext) -> Option<&'a RunConfigItem> {
+    fn selected_run_config<'a>(&'a self, ctx: &AppContext) -> Option<&'a RunConfigItem> {
         let remembered = self.project_root().and_then(|root| {
-            ProjectToolbarStore::as_ref(app)
+            ProjectToolbarStore::as_ref(ctx)
                 .state()
                 .selected_run_config(root)
         });
@@ -691,7 +718,7 @@ impl ProjectToolbarView {
         button: &ToolbarButton,
         root: &Path,
         appearance: &Appearance,
-        app: &AppContext,
+        ctx: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let color = theme.sub_text_color(theme.background());
@@ -732,7 +759,7 @@ impl ProjectToolbarView {
             button,
             root,
             self.team_hash(),
-            ProjectToolbarStore::as_ref(app).state(),
+            ProjectToolbarStore::as_ref(ctx).state(),
         )
         .then(|| "Asks you to trust this project's toolbar first".to_owned());
         let ui_builder = appearance.ui_builder().clone();
@@ -790,10 +817,10 @@ impl ProjectToolbarView {
             .finish()
     }
 
-    fn render_run_widget(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    fn render_run_widget(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let text_color = theme.main_text_color(theme.background());
-        let selected = self.selected_run_config(app);
+        let selected = self.selected_run_config(ctx);
         let chip_label = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
@@ -1074,8 +1101,8 @@ fn read_config(
 }
 
 /// Names of the launch configurations with a session starting inside `root`.
-fn project_launch_configs(root: &Path, app: &AppContext) -> Vec<String> {
-    WarpConfig::as_ref(app)
+fn project_launch_configs(root: &Path, ctx: &AppContext) -> Vec<String> {
+    WarpConfig::as_ref(ctx)
         .launch_configs()
         .iter()
         .filter(|config| {

@@ -337,14 +337,29 @@ fn rejects_unknown_icons_and_escaping_svg_paths() {
 
 #[test]
 fn error_display_names_the_file() {
-    let error = parse_config("[[button]]\nid = \"x\"\n", ConfigSource::Personal)
-        .and_then(|config| merge(None, Some(&config)))
-        .unwrap_err();
+    let error = parse_config(
+        "[[button]]\nid = \"x\"\nurl = \"ftp://x\"\n",
+        ConfigSource::Personal,
+    )
+    .unwrap_err();
 
     assert_eq!(
         error.to_string(),
-        "Invalid personal toolbar overrides: button `x` has no action"
+        "Invalid personal toolbar overrides: button 1: `x`: `url` must start with https:// or \
+         http://, got `ftp://x`"
     );
+}
+
+#[test]
+fn override_of_a_removed_team_button_is_ignored() {
+    let team_config = team("[[button]]\nid = \"test\"\ncommand = \"make test\"\n");
+    let personal_config = personal(
+        "[[button]]\nid = \"assemble\"\ntarget = \"split_right\"\n[[button]]\nid = \"ci\"\nhidden = true\n",
+    );
+
+    let buttons = merge(Some(&team_config), Some(&personal_config)).unwrap();
+
+    assert_eq!(ids(&buttons), vec!["test"]);
 }
 
 #[test]
@@ -457,21 +472,6 @@ fn hidden_personal_button_with_an_unknown_id_is_ignored() {
     let personal_config = personal("[[button]]\nid = \"nope\"\nhidden = true\n");
 
     assert_eq!(merge(None, Some(&personal_config)).unwrap(), vec![]);
-}
-
-#[test]
-fn partial_personal_button_with_an_unknown_id_is_an_error() {
-    let personal_config = personal("[[button]]\nid = \"nope\"\nlabel = \"Nope\"\n");
-
-    let error = merge(None, Some(&personal_config)).unwrap_err();
-
-    assert_eq!(
-        error,
-        ConfigError {
-            source: ConfigSource::Personal,
-            message: "button `nope` has no action".to_owned(),
-        }
-    );
 }
 
 #[test]
