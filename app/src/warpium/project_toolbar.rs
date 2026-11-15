@@ -43,7 +43,6 @@ use warpui::{
     AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
-use warpui_extras::user_preferences::UserPreferences as _;
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
 use super::is_warpium_channel;
