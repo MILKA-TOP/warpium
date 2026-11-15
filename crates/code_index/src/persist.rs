@@ -1,8 +1,8 @@
 //! The on-disk snapshot of an index, loaded for a fast warm start.
 //!
 //! Layout: `MAGIC`, format version (u32 LE), the root path, a table of every string the index
-//! references (deduplicated, so a symbol stores string ids), the files with their symbols and
-//! imports, and `END_MAGIC`. Integers are LEB128 varints.
+//! references (deduplicated, so a symbol stores string ids), the files with their symbols, imports
+//! and identifier sets, and `END_MAGIC`. Integers are LEB128 varints.
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -16,7 +16,7 @@ use crate::model::{FileData, Import, Language, Origin, Position, Symbol, SymbolK
 const MAGIC: &[u8; 4] = b"WPCI";
 const END_MAGIC: &[u8; 4] = b"END!";
 /// Bump whenever the layout or the extraction rules change, so stale snapshots are rebuilt.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PersistError {
@@ -61,6 +61,9 @@ impl CodeIndex {
                 if let Some(alias) = import.alias {
                     table.add(alias, &self.interner);
                 }
+            }
+            for identifier in &file.identifiers {
+                table.add(*identifier, &self.interner);
             }
             for symbol in &file.symbols {
                 table.add(symbol.name, &self.interner);
@@ -120,6 +123,10 @@ impl CodeIndex {
                     &mut out,
                     u64::from(symbol.end_line.saturating_sub(symbol.name_pos.line)),
                 );
+            }
+            write_varint(&mut out, file.identifiers.len() as u64);
+            for identifier in &file.identifiers {
+                write_varint(&mut out, table.id(*identifier));
             }
         }
         out.extend_from_slice(END_MAGIC);
@@ -212,6 +219,13 @@ impl CodeIndex {
                     end_line: line.saturating_add(after),
                 });
             }
+            let identifier_count = reader.len()?;
+            let mut identifiers = Vec::with_capacity(identifier_count);
+            for _ in 0..identifier_count {
+                identifiers.push(sym(reader.varint()?)?);
+            }
+            // Snapshot ids follow first use; lookups binary-search by interned id.
+            identifiers.sort_unstable();
             files.push(FileData {
                 rel_path,
                 language,
@@ -221,6 +235,7 @@ impl CodeIndex {
                 package,
                 imports,
                 symbols,
+                identifiers,
                 mtime_ns,
                 size,
             });

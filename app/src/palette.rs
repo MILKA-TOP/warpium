@@ -12,4 +12,6 @@ pub enum PaletteMode {
     CodeClasses,
     /// Warpium: Go to Symbol, over the project's code index.
     CodeSymbols,
+    /// Warpium: the results of Go to Definition or Find Usages.
+    CodeNavigation,
 }

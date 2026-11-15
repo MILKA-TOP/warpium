@@ -1,8 +1,9 @@
-//! Command palette data source and rows for Go to Class / Go to Symbol.
+//! Command palette data sources and rows for Go to Class / Go to Symbol and for the results of
+//! Go to Definition and Find Usages.
 
 use std::path::PathBuf;
 
-use code_index::{SearchScope, SymbolInfo, SymbolKind, flags};
+use code_index::{SearchScope, SymbolInfo, SymbolKind, Usage, flags};
 use futures_lite::FutureExt as _;
 use ordered_float::OrderedFloat;
 use warp_util::path::LineAndColumnArg;
@@ -10,7 +11,7 @@ use warpui::elements::{Align, ConstrainedBox, Flex, Highlight, ParentElement, Sh
 use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Element, Entity, SingletonEntity};
 
-use super::code_index::{CodeIndexModel, IndexState};
+use super::code_index::{CodeIndexModel, IndexState, NavigationItem};
 use crate::appearance::Appearance;
 use crate::search::action::search_item::styles;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
@@ -92,6 +93,86 @@ impl AsyncDataSource for CodeSymbolDataSource {
     }
 }
 
+/// Lists the results of the last Go to Definition or Find Usages, filtered by the query.
+pub(crate) struct CodeNavigationDataSource;
+
+impl Entity for CodeNavigationDataSource {
+    type Event = ();
+}
+
+impl AsyncDataSource for CodeNavigationDataSource {
+    type Action = CommandPaletteItemAction;
+
+    fn run_query(
+        &self,
+        query: &Query,
+        app: &AppContext,
+    ) -> BoxFuture<'static, Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper>> {
+        let results = app
+            .has_singleton_model::<CodeIndexModel>()
+            .then(|| CodeIndexModel::as_ref(app).navigation_results())
+            .flatten();
+        let filter = query.text.trim().to_lowercase();
+        async move {
+            let Some(results) = results else {
+                return Ok(vec![QueryResult::from(StatusItem {
+                    message: "Use Go to Definition or Find Usages in a Kotlin or Java file"
+                        .to_owned(),
+                })]);
+            };
+            let count = results.items.len();
+            let mut items: Vec<QueryResult<CommandPaletteItemAction>> = results
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| filter.is_empty() || matches_filter(item, &filter))
+                .map(|(rank, item)| {
+                    // The mixer sorts by score, so the score keeps the index's order.
+                    let score = (count - rank) as f64;
+                    match item {
+                        NavigationItem::Definition(definition) => {
+                            QueryResult::from(SymbolSearchItem {
+                                root: results.root.clone(),
+                                symbol: definition.symbol.clone(),
+                                score,
+                                matched_indices: Vec::new(),
+                            })
+                        }
+                        NavigationItem::Usage(usage) => QueryResult::from(UsageSearchItem {
+                            root: results.root.clone(),
+                            usage: usage.clone(),
+                            score,
+                        }),
+                    }
+                })
+                .collect();
+            items.push(QueryResult::from(StatusItem {
+                message: results.summary.clone(),
+            }));
+            Ok(items)
+        }
+        .boxed()
+    }
+}
+
+/// Whether the lowercase `filter` occurs in the item's path, line or name.
+fn matches_filter(item: &NavigationItem, filter: &str) -> bool {
+    match item {
+        NavigationItem::Definition(definition) => {
+            definition.symbol.rel_path.to_lowercase().contains(filter)
+                || definition
+                    .symbol
+                    .qualified_name()
+                    .to_lowercase()
+                    .contains(filter)
+        }
+        NavigationItem::Usage(usage) => {
+            usage.rel_path.to_lowercase().contains(filter)
+                || usage.line_text.to_lowercase().contains(filter)
+        }
+    }
+}
+
 /// Converts byte offsets in `name` to the character indices text highlighting uses.
 fn char_indices(name: &str, byte_offsets: &[usize]) -> Vec<usize> {
     name.char_indices()
@@ -168,47 +249,21 @@ impl SearchItem for SymbolSearchItem {
         highlight_state: ItemHighlightState,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let appearance = Appearance::as_ref(app);
         let receiver_len = self
             .symbol
             .receiver
             .as_ref()
             .map_or(0, |receiver| receiver.chars().count() + 1);
-        let name = Text::new_inline(
+        render_row(
             self.label(),
-            appearance.ui_font_family(),
-            appearance.monospace_font_size(),
-        )
-        .with_color(highlight_state.main_text_fill(appearance).into_solid())
-        .with_style(Properties::default().weight(Weight::Normal))
-        .with_single_highlight(
-            Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
             self.matched_indices
                 .iter()
                 .map(|index| index + receiver_len)
                 .collect(),
-        )
-        .finish();
-        let details = Text::new_inline(
             format!("  {}  {}", self.symbol.kind.label(), self.details()),
-            appearance.ui_font_family(),
-            appearance.monospace_font_size() - 1.,
+            highlight_state,
+            app,
         )
-        .with_color(highlight_state.sub_text_fill(appearance).into_solid())
-        .finish();
-
-        ConstrainedBox::new(
-            Align::new(
-                Flex::row()
-                    .with_child(name)
-                    .with_child(Shrinkable::new(1., details).finish())
-                    .finish(),
-            )
-            .left()
-            .finish(),
-        )
-        .with_height(styles::SEARCH_ITEM_HEIGHT)
-        .finish()
     }
 
     fn score(&self) -> OrderedFloat<f64> {
@@ -241,6 +296,133 @@ impl SearchItem for SymbolSearchItem {
 
     fn accessibility_help_message(&self) -> Option<String> {
         Some("Press Enter to open the declaration".to_owned())
+    }
+}
+
+/// A row: the label in the main text color (bold where `highlighted`), then dimmer details.
+fn render_row(
+    label: String,
+    highlighted: Vec<usize>,
+    details: String,
+    highlight_state: ItemHighlightState,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let label = Text::new_inline(
+        label,
+        appearance.ui_font_family(),
+        appearance.monospace_font_size(),
+    )
+    .with_color(highlight_state.main_text_fill(appearance).into_solid())
+    .with_style(Properties::default().weight(Weight::Normal))
+    .with_single_highlight(
+        Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+        highlighted,
+    )
+    .finish();
+    let details = Text::new_inline(
+        details,
+        appearance.ui_font_family(),
+        appearance.monospace_font_size() - 1.,
+    )
+    .with_color(highlight_state.sub_text_fill(appearance).into_solid())
+    .finish();
+
+    ConstrainedBox::new(
+        Align::new(
+            Flex::row()
+                .with_child(label)
+                .with_child(Shrinkable::new(1., details).finish())
+                .finish(),
+        )
+        .left()
+        .finish(),
+    )
+    .with_height(styles::SEARCH_ITEM_HEIGHT)
+    .finish()
+}
+
+/// One usage: `NewsViewModel.kt:11  val items = repository.getNewsResources()`.
+#[derive(Debug)]
+struct UsageSearchItem {
+    root: PathBuf,
+    usage: Usage,
+    score: f64,
+}
+
+impl UsageSearchItem {
+    fn label(&self) -> String {
+        let file_name = self.usage.rel_path.rsplit('/').next().unwrap_or_default();
+        format!("{file_name}:{}", self.usage.position.line + 1)
+    }
+
+    /// The line, then `≈` for a usage matched by name only, then the directory.
+    fn details(&self) -> String {
+        let directory = self
+            .usage
+            .rel_path
+            .rsplit_once('/')
+            .map_or("", |(directory, _)| directory);
+        let approximate = if self.usage.exact { "" } else { "≈ " };
+        format!("  {approximate}{}  · {directory}", self.usage.line_text)
+    }
+}
+
+impl SearchItem for UsageSearchItem {
+    type Action = CommandPaletteItemAction;
+
+    fn render_icon(
+        &self,
+        highlight_state: ItemHighlightState,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        render_util::render_search_item_icon(
+            appearance,
+            UiIcon::Code1,
+            highlight_state.icon_fill(appearance).into_solid(),
+            highlight_state,
+        )
+    }
+
+    fn render_item(
+        &self,
+        highlight_state: ItemHighlightState,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_row(
+            self.label(),
+            Vec::new(),
+            self.details(),
+            highlight_state,
+            app,
+        )
+    }
+
+    fn score(&self) -> OrderedFloat<f64> {
+        OrderedFloat(self.score)
+    }
+
+    fn accept_result(&self) -> CommandPaletteItemAction {
+        CommandPaletteItemAction::OpenFile {
+            path: self.usage.rel_path.clone(),
+            project_directory: self.root.to_string_lossy().into_owned(),
+            line_and_column_arg: Some(LineAndColumnArg {
+                line_num: self.usage.position.line as usize + 1,
+                column_num: Some(self.usage.position.column as usize + 1),
+            }),
+        }
+    }
+
+    fn execute_result(&self) -> CommandPaletteItemAction {
+        self.accept_result()
+    }
+
+    fn accessibility_label(&self) -> String {
+        format!("Usage in {}: {}", self.label(), self.usage.line_text)
+    }
+
+    fn accessibility_help_message(&self) -> Option<String> {
+        Some("Press Enter to open the usage".to_owned())
     }
 }
 

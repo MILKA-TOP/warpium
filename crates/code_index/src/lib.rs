@@ -2,8 +2,9 @@
 //!
 //! Sources are parsed with the tree-sitter grammars the app already links (through `arborium`),
 //! declarations are kept in memory for one-frame fuzzy lookups ("Go to Class/Symbol"), and a
-//! compact snapshot in the user cache directory makes later starts fast. No Gradle, JVM or
-//! language server is involved.
+//! compact snapshot in the user cache directory makes later starts fast. References resolve to
+//! their declarations ("Go to Definition") and to their usages ("Find Usages") through imports,
+//! packages and scopes. No Gradle, JVM or language server is involved.
 
 mod cache;
 mod extract;
@@ -11,10 +12,13 @@ pub mod fuzzy;
 mod index;
 mod interner;
 mod layout;
+mod lex;
 pub mod mcp;
 mod model;
 mod persist;
+mod resolve;
 mod scan;
+mod usages;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -30,6 +34,23 @@ pub use index::{
 pub use interner::Sym;
 pub use model::{Language, Origin, Position, SymbolKind, Visibility, flags};
 pub use persist::{FORMAT_VERSION, PersistError, write_snapshot};
+pub use resolve::{Definition, DefinitionResult, Resolution, SourceFile};
+pub use usages::{Usage, UsagesResult};
+
+/// Whether `position` (zero-based line and character column) is on an identifier in code: not a
+/// keyword, comment or string. Cheap enough for every hovered word.
+pub fn is_identifier_at(text: &str, language: Language, position: Position) -> bool {
+    let Some(offset) = lex::offset_of(text, &lex::line_starts(text), position) else {
+        return false;
+    };
+    let mut found = false;
+    lex::for_each_identifier(text, language, |name, start| {
+        if (start..=start + name.len()).contains(&offset) && !lex::is_keyword(name, language) {
+            found = true;
+        }
+    });
+    found
+}
 
 /// How [`open`] got its index.
 #[derive(Clone, Debug)]

@@ -72,10 +72,13 @@ pub(crate) fn place(rel_path: &str) -> Placement {
     match dirs.iter().position(|dir| *dir == "src") {
         Some(src) => {
             let source_set = dirs.get(src + 1).copied().unwrap_or_default();
+            let module = &dirs[..src];
             Placement {
-                module: dirs[..src].join("/"),
+                module: module.join("/"),
                 source_set: source_set.to_owned(),
-                origin: if is_test_source_set(source_set) {
+                origin: if is_test_source_set(source_set)
+                    || module.last().is_some_and(|name| is_test_module(name))
+                {
                     Origin::Test
                 } else {
                     Origin::Main
@@ -92,6 +95,34 @@ fn is_source_set_name(name: &str) -> bool {
         || name.ends_with("Test")
         || name.ends_with("Debug")
         || name.ends_with("Release")
+}
+
+/// Modules that only hold test doubles and helpers, by naming convention: `testing`,
+/// `data-test`, `screenshot-testing`, `test-fixtures`, `testFixtures`, `test-utils`, …
+fn is_test_module(name: &str) -> bool {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    for c in name.chars() {
+        if c == '-' || c == '_' || c == '.' || (c.is_uppercase() && !word.is_empty()) {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            if c == '-' || c == '_' || c == '.' {
+                continue;
+            }
+        }
+        word.extend(c.to_lowercase());
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    match words.last().map(String::as_str) {
+        Some("test" | "tests" | "testing") => true,
+        Some("fixtures" | "utils" | "util" | "support" | "helpers") => {
+            words.iter().any(|word| word == "test" || word == "testing")
+        }
+        _ => false,
+    }
 }
 
 /// `test`, `androidTest`, `testFixtures`, `commonTest`, `jvmTest`, `androidUnitTest`, …
