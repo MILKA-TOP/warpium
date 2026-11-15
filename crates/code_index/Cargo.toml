@@ -1,0 +1,31 @@
+[package]
+name = "code_index"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: in-process declaration index for Kotlin and Java projects (Go to Class/Symbol)"
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "warpium-code-index"
+path = "src/bin/warpium_code_index.rs"
+
+[dependencies]
+# The same tree-sitter runtime and grammars the `languages` crate links through `arborium`.
+arborium-tree-sitter = "2.13"
+arborium-kotlin = "2.13"
+arborium-java = "2.13"
+dirs.workspace = true
+instant.workspace = true
+ignore = "0.4.23"
+log.workspace = true
+rayon.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

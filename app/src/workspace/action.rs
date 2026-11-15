@@ -897,6 +897,8 @@ pub enum WorkspaceAction {
     RestartForWarpiumUpdate,
     /// Warpium: shows the downloaded Warpium disk image in Finder after an update failed.
     RevealWarpiumUpdateDmg,
+    /// Warpium: toggles the Kotlin/Java code index behind Go to Class and Go to Symbol.
+    ToggleCodeIndex,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1243,6 +1245,7 @@ impl WorkspaceAction {
             | SkipWarpiumUpdate
             | RestartForWarpiumUpdate
             | RevealWarpiumUpdateDmg
+            | ToggleCodeIndex
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }

@@ -11,6 +11,9 @@ pub(crate) const UPSTREAM_CHECK_CONTEXT_FLAG: &str = "WarpiumUpstreamCheck";
 /// Keymap context flag present while [`WarpiumSettings::update_check`] is on.
 pub(crate) const UPDATE_CHECK_CONTEXT_FLAG: &str = "WarpiumUpdateCheck";
 
+/// Keymap context flag present while [`WarpiumSettings::code_index`] is on.
+pub(crate) const CODE_INDEX_CONTEXT_FLAG: &str = "WarpiumCodeIndex";
+
 define_settings_group!(WarpiumSettings, settings: [
     sync_from_warp: SyncFromWarp {
         type: bool,
@@ -71,5 +74,15 @@ define_settings_group!(WarpiumSettings, settings: [
         private: false,
         toml_path: "warpium.update_check_interval_hours",
         description: "Hours between automatic checks for new Warpium releases (1 to 168).",
+    },
+    code_index: CodeIndex {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: ::settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "warpium.code_index",
+        description: "Whether Warpium indexes Kotlin and Java declarations of the open project for Go to Class and Go to Symbol. The index lives in the user cache directory, never in the project.",
     },
 ]);
