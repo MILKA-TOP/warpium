@@ -5,10 +5,11 @@
 //! ```
 //!
 //! `--root` is the Android project, for resolving stack frames to files and finding the SDK
-//! through its `local.properties`. The adb server port honors `ANDROID_ADB_SERVER_PORT`, and
+//! through its `local.properties`. Without it, the current directory is used when it is a Gradle
+//! project (agents start their MCP servers in the project they work on). The adb server port honors `ANDROID_ADB_SERVER_PORT`, and
 //! `ANDROID_SERIAL` picks the default device.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use warpium_android::AdbClient;
@@ -30,7 +31,13 @@ fn main() -> ExitCode {
             _ => return usage(),
         }
     }
-    let root = root.map(|root| std::fs::canonicalize(&root).unwrap_or(root));
+    let root = root
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .filter(|dir| is_gradle_project(dir))
+        })
+        .map(|root| std::fs::canonicalize(&root).unwrap_or(root));
     let adb = adb.or_else(|| find_sdk(root.as_deref(), &SdkEnv::from_process()).map(|sdk| sdk.adb));
     let client = AdbClient::new(server_port_from_env(), adb);
     let options = ServerOptions {
@@ -50,6 +57,18 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Whether `dir` is the root of a Gradle build.
+fn is_gradle_project(dir: &Path) -> bool {
+    [
+        "settings.gradle.kts",
+        "settings.gradle",
+        "build.gradle.kts",
+        "build.gradle",
+    ]
+    .iter()
+    .any(|name| dir.join(name).is_file())
 }
 
 fn usage() -> ExitCode {

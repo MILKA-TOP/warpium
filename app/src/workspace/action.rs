@@ -918,8 +918,10 @@ pub enum WorkspaceAction {
     ToggleAndroidTools,
     /// Warpium: toggles registering the Logcat MCP server in Warp's MCP servers.
     ToggleLogcatMcp,
-    /// Warpium: copies the `claude mcp add` command for the Logcat MCP server.
-    CopyLogcatMcpConfig,
+    /// Warpium: installs its MCP servers (Logcat, code index) into the coding agents found.
+    InstallAgentMcpServers,
+    /// Warpium: removes its MCP servers from the coding agents' configs.
+    UninstallAgentMcpServers,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1276,7 +1278,8 @@ impl WorkspaceAction {
             | LaunchAndroidAvd
             | ToggleAndroidTools
             | ToggleLogcatMcp
-            | CopyLogcatMcpConfig
+            | InstallAgentMcpServers
+            | UninstallAgentMcpServers
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }

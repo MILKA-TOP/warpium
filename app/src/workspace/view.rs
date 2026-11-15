@@ -25096,6 +25096,26 @@ impl TypedActionView for Workspace {
                 );
                 ctx.notify();
             }
+            ToggleLogcatMcp => {
+                #[cfg(not(target_family = "wasm"))]
+                self.update_agent_mcp_project(ctx);
+                crate::warpium::sync_settings::WarpiumAgentSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.logcat_mcp.toggle_and_save_value(ctx));
+                    },
+                );
+                ctx.notify();
+            }
+            InstallAgentMcpServers | UninstallAgentMcpServers => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    self.update_agent_mcp_project(ctx);
+                    let install = matches!(action, InstallAgentMcpServers);
+                    crate::warpium::agent_mcp::AgentMcpModel::handle(ctx)
+                        .update(ctx, |model, ctx| model.install_into_agents(install, ctx));
+                }
+            }
             OpenLocalToCloudHandoffPane {
                 launch,
                 environment_id,
@@ -27419,6 +27439,11 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::ANDROID_CONTEXT_FLAG);
+        }
+        if *crate::warpium::sync_settings::WarpiumAgentSettings::as_ref(app).logcat_mcp {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::LOGCAT_MCP_CONTEXT_FLAG);
         }
 
         if self.team_uid(app).is_some() {

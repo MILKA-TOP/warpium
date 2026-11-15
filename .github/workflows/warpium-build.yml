@@ -218,7 +218,7 @@ jobs:
             --features warp_control_cli \
             --dmg-name-suffix "$WARPIUM_VERSION_TAG-arm64"
 
-      - name: Verify bundle version, icon and warpctrl
+      - name: Verify bundle version, icon, warpctrl and MCP servers
         env:
           DMG_PATH: ${{ steps.bundle.outputs.dmg_path }}
           EXPECTED_PLIST_VERSION: ${{ needs.preflight.outputs.plist_version }}
@@ -253,6 +253,14 @@ jobs:
             exit 1
           fi
           echo "warpctrl wrapper in .dmg: Warpium.app/Contents/Resources/bin/$WARPCTRL_COMMAND_NAME"
+          # The MCP servers the app installs into coding agents.
+          for bin in warpium-logcat warpium-code-index; do
+            if [[ ! -x "$mount_dir/Warpium.app/Contents/MacOS/$bin" ]]; then
+              echo "::error::$bin is missing from the .dmg"
+              exit 1
+            fi
+            echo "MCP server in .dmg: Warpium.app/Contents/MacOS/$bin"
+          done
 
       - name: Report disk usage
         if: always()

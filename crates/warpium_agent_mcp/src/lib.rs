@@ -54,3 +54,10 @@ pub enum Change {
     /// Nothing to remove.
     Absent,
 }
+
+impl Change {
+    /// Whether the config was modified.
+    pub fn is_change(self) -> bool {
+        matches!(self, Change::Added | Change::Updated | Change::Removed)
+    }
+}

@@ -697,6 +697,39 @@ if [[ "$ARTIFACT" == "app" ]]; then
     cp -HR "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" "$OUT_DIR/"
   fi
 
+  # Warpium: the MCP servers for coding agents, next to the app's executable, where the app looks
+  # for them (app/src/warpium/agent_mcp.rs).
+  if [[ $RELEASE_CHANNEL = "oss" ]]; then
+    WARPIUM_MCP_BINS=(warpium-logcat warpium-code-index)
+    WARPIUM_MCP_TARGETS=("$DEFAULT_TARGET")
+    if [[ $UNIVERSAL_BINARY = true ]]; then
+      WARPIUM_MCP_TARGETS+=("$ADDITIONAL_TARGET")
+    fi
+    if [[ $BUILD_BINARY = true ]]; then
+      for target in "${WARPIUM_MCP_TARGETS[@]}"; do
+        echo "Building Warpium MCP servers for $target"
+        cargo build --profile "$CARGO_PROFILE" --target "$target" \
+          -p warpium_logcat_mcp --bin warpium-logcat \
+          -p code_index --bin warpium-code-index
+      done
+    fi
+    for bin in "${WARPIUM_MCP_BINS[@]}"; do
+      inputs=()
+      for target in "${WARPIUM_MCP_TARGETS[@]}"; do
+        if [[ -e "target/$target/$TARGET_PROFILE_DIR/$bin" ]]; then
+          inputs+=("target/$target/$TARGET_PROFILE_DIR/$bin")
+        fi
+      done
+      if [[ ${#inputs[@]} -eq 0 ]]; then
+        echo "Warning: $bin wasn't built; the app won't offer it to agents."
+      elif [[ ${#inputs[@]} -eq 1 ]]; then
+        cp "${inputs[0]}" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS/$bin"
+      else
+        lipo -create -output "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS/$bin" "${inputs[@]}"
+      fi
+    done
+  fi
+
   # Note that the dock tile plugin is pre-built for both arm64 and x86_64 so we don't need to run lipo on it.
   echo "Creating PlugIns directory and copying pre-built DockTilePlugin..."
   mkdir -p "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/PlugIns"
@@ -931,6 +964,11 @@ if [[ $SELFSIGN = true ]]; then
     echo "Found Apple Development certificate"
   fi
   if [[ "$ARTIFACT" == app ]]; then
+    for helper in "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS"/warpium-*; do
+      if [[ -f "$helper" ]]; then
+        codesign --force --options runtime --sign "$SIGNING_CERT" "$helper"
+      fi
+    done
     echo "Self-signing $BUNDLE_DIR/$WARP_APP_NAME.app with ${SIGNING_CERT}..."
     codesign --force --deep --options runtime --sign "$SIGNING_CERT" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Debug-Entitlements.plist
   elif [[ "$ARTIFACT" == cli || "$ARTIFACT" == warpctrl || "$ARTIFACT" == tui ]]; then
@@ -939,6 +977,11 @@ if [[ $SELFSIGN = true ]]; then
   fi
 elif [[ $CODESIGN = true ]]; then
   if [[ "$ARTIFACT" == app ]]; then
+    for helper in "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/MacOS"/warpium-*; do
+      if [[ -f "$helper" ]]; then
+        codesign_with_retry -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$helper"
+      fi
+    done
     echo "Codesigning $BUNDLE_DIR/$WARP_APP_NAME.app..."
     # Use --deep so we sign bundled frameworks as well
     codesign_with_retry --deep -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Entitlements.plist
