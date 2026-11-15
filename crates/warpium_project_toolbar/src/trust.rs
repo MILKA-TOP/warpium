@@ -49,7 +49,8 @@ impl ToolbarUserState {
             .is_some_and(|trusted| trusted == team_hash)
     }
 
-    /// Trusts this version of the team config, whose merged buttons are `buttons`.
+    /// Trusts this version of the team config, whose buttons (without personal overrides) are
+    /// `buttons`.
     pub fn trust(&mut self, root: &Path, team_hash: &str, buttons: &[ToolbarButton]) {
         self.trusted.insert(key(root), team_hash.to_owned());
         self.trusted_commands
@@ -173,11 +174,13 @@ pub fn trust_review(
         .collect::<Vec<_>>();
     // A stable sort keeps file order within each group.
     listings.sort_by_key(|listing| listing.change);
-    let current = command_signatures(buttons);
+    let current = commands_needing_trust(buttons)
+        .map(|(button, _)| button.id.as_str())
+        .collect::<BTreeSet<_>>();
     let removed = previous.map_or(0, |previous| {
         previous
             .keys()
-            .filter(|id| !current.contains_key(*id))
+            .filter(|id| !current.contains(id.as_str()))
             .count()
     });
     TrustReview {
@@ -209,12 +212,7 @@ fn signature(button: &ToolbarButton, command: &CommandAction) -> String {
         "label": button.display_label(),
         "command": command.command,
         // The config's own names, so rewording the prompt doesn't change stored signatures.
-        "target": match command.target {
-            CommandTarget::Current => "current",
-            CommandTarget::NewTab => "new_tab",
-            CommandTarget::SplitRight => "split_right",
-            CommandTarget::SplitDown => "split_down",
-        },
+        "target": command.target.as_str(),
         "cwd": command.cwd,
         "env": command.env,
     });

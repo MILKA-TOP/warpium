@@ -16604,9 +16604,14 @@ impl Workspace {
             pane_group::Event::PaneTitleUpdated => {
                 self.update_window_title(ctx);
                 // An editor's title changes with its file, which can move the project toolbar to
-                // another project.
+                // another project. Only the active tab decides the toolbar's project.
                 #[cfg(not(target_family = "wasm"))]
-                self.refresh_project_toolbar(ctx);
+                if self
+                    .get_pane_group_view(self.active_tab_index)
+                    .is_some_and(|active| active.id() == pane_group.id())
+                {
+                    self.refresh_project_toolbar(ctx);
+                }
                 ctx.notify();
             }
             pane_group::Event::ShowCommandSearch(options) => {

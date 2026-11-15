@@ -509,13 +509,15 @@ impl ProjectToolbarView {
     }
 
     /// Follows the active tab: its pinned Project Explorer root and where its focused pane is.
+    /// `force` detects the project again even when these are unchanged.
     pub(crate) fn set_context(
         &mut self,
         pinned_root: Option<PathBuf>,
         location: ProjectLocation,
+        force: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.update_context(pinned_root, location, false, ctx);
+        self.update_context(pinned_root, location, force, ctx);
     }
 
     fn update_context(

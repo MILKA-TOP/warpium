@@ -65,17 +65,29 @@ impl Workspace {
 
     /// Points the toolbar at the active tab's project.
     pub(super) fn refresh_project_toolbar(&mut self, ctx: &mut ViewContext<Self>) {
-        let (pinned_root, location) = self.project_toolbar_inputs(ctx);
+        self.update_project_toolbar_context(false, ctx);
+    }
+
+    /// Like [`Self::refresh_project_toolbar`], but `force` detects the project again even when
+    /// the tab's inputs are unchanged (a `.git` or `.warpium` may have been created since).
+    fn update_project_toolbar_context(&mut self, force: bool, ctx: &mut ViewContext<Self>) {
+        // Title and focus events can arrive while a tab is closing and the index is out of range.
+        let Some((pinned_root, location)) = self.project_toolbar_inputs(ctx) else {
+            return;
+        };
         self.project_toolbar.update(ctx, |toolbar, ctx| {
-            toolbar.set_context(pinned_root, location, ctx);
+            toolbar.set_context(pinned_root, location, force, ctx);
         });
     }
 
     /// The active tab's pinned Project Explorer root and where it is working: the folder of the
     /// focused editor's file, else the working directory of the tab's active (most recently
     /// focused) session if it is local.
-    fn project_toolbar_inputs(&self, ctx: &AppContext) -> (Option<PathBuf>, ProjectLocation) {
-        let pane_group = self.active_tab_pane_group().as_ref(ctx);
+    fn project_toolbar_inputs(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<(Option<PathBuf>, ProjectLocation)> {
+        let pane_group = self.get_pane_group_view(self.active_tab_index)?.as_ref(ctx);
         let pinned_root = pane_group.pinned_explorer_root().cloned();
         let focused = pane_group.focused_pane_id(ctx);
         let editor_file = pane_group
@@ -91,7 +103,7 @@ impl Workspace {
             .and_then(Path::parent)
             .filter(|dir| !dir.as_os_str().is_empty())
         {
-            return (pinned_root, ProjectLocation::Directory(dir.to_path_buf()));
+            return Some((pinned_root, ProjectLocation::Directory(dir.to_path_buf())));
         }
         let location = match pane_group.active_session_view(ctx) {
             Some(view) => match view.as_ref(ctx).active_session_path_if_local(ctx) {
@@ -100,7 +112,7 @@ impl Workspace {
             },
             None => ProjectLocation::Unknown,
         };
-        (pinned_root, location)
+        Some((pinned_root, location))
     }
 
     fn handle_project_toolbar_event(
@@ -383,7 +395,7 @@ impl Workspace {
         personal: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.refresh_project_toolbar(ctx);
+        self.update_project_toolbar_context(true, ctx);
         let Some(root) = self
             .project_toolbar
             .as_ref(ctx)
