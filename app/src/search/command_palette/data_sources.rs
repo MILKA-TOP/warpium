@@ -148,7 +148,9 @@ impl DataSourceStore {
             if crate::warpium::code_index::is_enabled(ctx) && !is_shared_session_viewer {
                 use code_index::SearchScope;
 
-                use crate::warpium::code_index_palette::CodeSymbolDataSource;
+                use crate::warpium::code_index_palette::{
+                    CodeNavigationDataSource, CodeSymbolDataSource,
+                };
 
                 for (scope, filter) in [
                     (SearchScope::Types, QueryFilter::CodeClasses),
@@ -166,6 +168,17 @@ impl DataSourceStore {
                         ctx,
                     );
                 }
+                let source = ctx.add_model(|_| CodeNavigationDataSource);
+                mixer.add_async_source(
+                    source,
+                    HashSet::from([QueryFilter::CodeNavigation]),
+                    AddAsyncSourceOptions {
+                        debounce_interval: None,
+                        run_in_zero_state: true,
+                        run_when_unfiltered: false,
+                    },
+                    ctx,
+                );
             }
 
             // Add conversation search if AI is enabled

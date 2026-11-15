@@ -117,11 +117,21 @@ pub enum Language {
 }
 
 impl Language {
+    /// The language of an indexed source file (`.kt`, `.java`).
     pub fn from_path(path: &std::path::Path) -> Option<Self> {
         match path.extension()?.to_str()? {
             "kt" => Some(Language::Kotlin),
             "java" => Some(Language::Java),
             _ => None,
+        }
+    }
+
+    /// The language of a file navigation works in: indexed sources plus Kotlin scripts
+    /// (`.kts`), which aren't indexed but can refer to indexed declarations.
+    pub fn of_editable_path(path: &std::path::Path) -> Option<Self> {
+        match path.extension()?.to_str()? {
+            "kts" => Some(Language::Kotlin),
+            _ => Self::from_path(path),
         }
     }
 
@@ -229,6 +239,8 @@ pub struct FileData {
     pub package: Sym,
     pub imports: Vec<Import>,
     pub symbols: Vec<Symbol>,
+    /// Every distinct identifier used in the file's code, sorted, for finding usage candidates.
+    pub identifiers: Vec<Sym>,
     /// Modification time in nanoseconds since the Unix epoch, for change detection.
     pub mtime_ns: u64,
     pub size: u64,

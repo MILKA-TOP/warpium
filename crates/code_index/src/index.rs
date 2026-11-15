@@ -35,6 +35,9 @@ pub struct CodeIndex {
     pub(crate) files: Vec<Option<FileData>>,
     pub(crate) free_slots: Vec<u32>,
     pub(crate) by_path: HashMap<String, u32>,
+    /// `(file slot, symbol index)` of every declaration, by name, for definition and usage
+    /// lookups.
+    pub(crate) by_name: HashMap<Sym, Vec<(u32, u32)>>,
     pub(crate) symbol_count: usize,
 }
 
@@ -148,6 +151,7 @@ impl CodeIndex {
             files: Vec::new(),
             free_slots: Vec::new(),
             by_path: HashMap::new(),
+            by_name: HashMap::new(),
             symbol_count: 0,
         }
     }
@@ -214,11 +218,18 @@ impl CodeIndex {
     pub fn stats(&self) -> IndexStats {
         let mut heap_bytes = self.interner.heap_bytes()
             + self.files.capacity() * std::mem::size_of::<Option<FileData>>()
-            + self.by_path.capacity() * (std::mem::size_of::<(String, u32)>() + 1);
+            + self.by_path.capacity() * (std::mem::size_of::<(String, u32)>() + 1)
+            + self.by_name.capacity() * (std::mem::size_of::<(Sym, Vec<(u32, u32)>)>() + 1)
+            + self
+                .by_name
+                .values()
+                .map(|entries| entries.capacity() * std::mem::size_of::<(u32, u32)>())
+                .sum::<usize>();
         for file in self.live_files() {
             heap_bytes += file.rel_path.capacity() * 2
                 + file.symbols.capacity() * std::mem::size_of::<Symbol>()
-                + file.imports.capacity() * std::mem::size_of::<Import>();
+                + file.imports.capacity() * std::mem::size_of::<Import>()
+                + file.identifiers.capacity() * std::mem::size_of::<Sym>();
         }
         IndexStats {
             files: self.by_path.len(),
@@ -522,6 +533,14 @@ impl CodeIndex {
         };
         if let Some(file) = self.files[slot as usize].take() {
             self.symbol_count -= file.symbols.len();
+            for symbol in &file.symbols {
+                if let Some(entries) = self.by_name.get_mut(&symbol.name) {
+                    entries.retain(|(entry_slot, _)| *entry_slot != slot);
+                    if entries.is_empty() {
+                        self.by_name.remove(&symbol.name);
+                    }
+                }
+            }
         }
         self.free_slots.push(slot);
         true
@@ -531,6 +550,7 @@ impl CodeIndex {
         self.remove_file(&file.rel_path.clone());
         self.symbol_count += file.symbols.len();
         let rel_path = file.rel_path.clone();
+        let names: Vec<Sym> = file.symbols.iter().map(|symbol| symbol.name).collect();
         let slot = match self.free_slots.pop() {
             Some(slot) => {
                 self.files[slot as usize] = Some(file);
@@ -542,6 +562,27 @@ impl CodeIndex {
             }
         };
         self.by_path.insert(rel_path, slot);
+        for (index, name) in names.into_iter().enumerate() {
+            self.by_name
+                .entry(name)
+                .or_default()
+                .push((slot, index as u32));
+        }
+    }
+
+    /// Every declaration named `name`, with its file.
+    pub(crate) fn declarations_named(
+        &self,
+        name: Sym,
+    ) -> impl Iterator<Item = (&FileData, &Symbol)> {
+        self.by_name
+            .get(&name)
+            .into_iter()
+            .flatten()
+            .filter_map(|(slot, index)| {
+                let file = self.files[*slot as usize].as_ref()?;
+                Some((file, file.symbols.get(*index as usize)?))
+            })
     }
 
     fn insert_file(&mut self, found: FoundFile, raw: RawFile) {
@@ -575,6 +616,13 @@ impl CodeIndex {
                 is_static: import.is_static,
             })
             .collect();
+        let mut identifiers: Vec<Sym> = raw
+            .identifiers
+            .iter()
+            .map(|identifier| interner.intern(identifier))
+            .collect();
+        identifiers.sort_unstable();
+        identifiers.dedup();
         let file = FileData {
             module: interner.intern(&placement.module),
             source_set: interner.intern(&placement.source_set),
@@ -584,6 +632,7 @@ impl CodeIndex {
             origin: placement.origin,
             imports,
             symbols,
+            identifiers,
             mtime_ns: found.mtime_ns,
             size: found.size,
         };
@@ -709,7 +758,7 @@ pub fn prepare_changes(root: &Path, paths: &[PathBuf], threads: usize) -> Pendin
 const SERIAL_PARSE_LIMIT: usize = 4;
 
 /// A bounded pool for one build or update, dropped (with its threads) afterwards.
-fn worker_pool(threads: usize) -> Option<rayon::ThreadPool> {
+pub(crate) fn worker_pool(threads: usize) -> Option<rayon::ThreadPool> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads.clamp(1, MAX_THREADS))
         .thread_name(|i| format!("code-index-{i}"))

@@ -14824,9 +14824,12 @@ impl Workspace {
         });
     }
 
-    /// Warpium: opens Go to Class or Go to Symbol over the current project's code index.
+    /// Warpium: opens Go to Class or Go to Symbol over the current project's code index, or the
+    /// results of the last Go to Definition or Find Usages (`QueryFilter::CodeNavigation`).
     fn open_code_index_palette(&mut self, filter: QueryFilter, ctx: &mut ViewContext<Self>) {
-        self.ensure_code_index_project(ctx);
+        if filter != QueryFilter::CodeNavigation {
+            self.ensure_code_index_project(ctx);
+        }
         self.palette.update(ctx, |view, ctx| {
             view.reset(ctx);
             let mixer = view.search_bar.as_ref(ctx).mixer().clone();
@@ -14835,6 +14838,92 @@ impl Workspace {
             });
             view.set_active_query_filter(filter, ctx);
         });
+    }
+
+    /// Warpium: Go to Definition or Find Usages for a name in a Kotlin or Java editor. One
+    /// declaration opens; several, or usages, are listed in the palette.
+    #[cfg_attr(target_family = "wasm", allow(unused_variables))]
+    fn navigate_code_index(
+        &mut self,
+        request: crate::warpium::code_navigation::CodeNavigationRequest,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use crate::warpium::code_index::{self, CodeIndexModel, NavigationOutcome};
+
+            if !code_index::is_enabled(ctx) {
+                return;
+            }
+            // The index root is canonical; so must the file be for prefix checks.
+            let mut request = request;
+            if let Ok(path) = std::fs::canonicalize(&request.path) {
+                request.path = path;
+            }
+            code_index::ensure_project_for_file(&request.path, ctx);
+            let window_id = ctx.window_id();
+            let handle = ctx
+                .has_singleton_model::<CodeIndexModel>()
+                .then(|| CodeIndexModel::as_ref(ctx).handle_for_search())
+                .flatten()
+                .filter(|handle| request.path.starts_with(&handle.root));
+            let Some(handle) = handle else {
+                WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    let toast = DismissibleToast::default(
+                        "Open the file's project folder to use Go to Definition and Find Usages"
+                            .to_owned(),
+                    );
+                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                });
+                return;
+            };
+            ctx.spawn(
+                async move { code_index::navigate(&handle, &request) },
+                move |me, outcome, ctx| match outcome {
+                    #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
+                    NavigationOutcome::Open { path, position } => {
+                        #[cfg(feature = "local_fs")]
+                        {
+                            let line_col = LineAndColumnArg {
+                                line_num: position.line as usize + 1,
+                                column_num: Some(position.column as usize + 1),
+                            };
+                            me.open_code(
+                                CodeSource::Link {
+                                    path,
+                                    range_start: Some(line_col),
+                                    range_end: None,
+                                },
+                                *EditorSettings::as_ref(ctx).open_file_layout.value(),
+                                Some(line_col),
+                                false,
+                                &[],
+                                ctx,
+                            );
+                        }
+                    }
+                    NavigationOutcome::Show(results) => {
+                        CodeIndexModel::handle(ctx).update(ctx, |model, _| {
+                            model.set_navigation_results(results);
+                        });
+                        me.open_palette(
+                            PaletteMode::CodeNavigation,
+                            PaletteSource::Keybinding,
+                            ctx,
+                        );
+                    }
+                    NavigationOutcome::Nothing(message) => {
+                        WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                            toast_stack.add_ephemeral_toast(
+                                DismissibleToast::default(message),
+                                window_id,
+                                ctx,
+                            );
+                        });
+                    }
+                },
+            );
+        }
     }
 
     /// Warpium: refreshes an open Go to palette once indexing finishes, replacing partial results.
@@ -15176,6 +15265,9 @@ impl Workspace {
             PaletteMode::Conversations => self.open_conversations_palette(ctx),
             PaletteMode::CodeClasses => self.open_code_index_palette(QueryFilter::CodeClasses, ctx),
             PaletteMode::CodeSymbols => self.open_code_index_palette(QueryFilter::CodeSymbols, ctx),
+            PaletteMode::CodeNavigation => {
+                self.open_code_index_palette(QueryFilter::CodeNavigation, ctx);
+            }
         }
 
         ctx.focus(&self.palette);
@@ -25696,6 +25788,7 @@ impl TypedActionView for Workspace {
             OpenFilePath { path } => {
                 ctx.open_file_path(path);
             }
+            CodeIndexNavigate(request) => self.navigate_code_index(request.clone(), ctx),
             NewTabInAgentMode {
                 entrypoint,
                 zero_state_prompt_suggestion_type,

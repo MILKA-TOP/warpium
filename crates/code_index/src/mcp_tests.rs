@@ -79,7 +79,16 @@ fn lists_the_tools() {
         .iter()
         .map(|tool| tool["name"].as_str().expect("tool name"))
         .collect();
-    assert_eq!(names, vec!["find_class", "find_symbol", "file_outline"]);
+    assert_eq!(
+        names,
+        vec![
+            "find_class",
+            "find_symbol",
+            "file_outline",
+            "find_definition",
+            "find_usages"
+        ]
+    );
 }
 
 #[test]
@@ -146,4 +155,74 @@ fn missing_arguments_are_tool_errors() {
 
     assert!(is_error);
     assert_eq!(text, "Missing required argument: query");
+}
+
+fn nav_server() -> Server {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("nav-kmp");
+    Server::new(root, None)
+}
+
+#[test]
+fn find_definition_locates_a_reference_by_name_on_a_line() {
+    let (text, is_error) = tool_text(
+        &mut nav_server(),
+        "find_definition",
+        json!({
+            "path": "feature/news/src/commonMain/kotlin/com/example/feature/news/NewsViewModel.kt",
+            "line": 11,
+            "name": "getNewsResources",
+        }),
+    );
+
+    assert!(!is_error, "{text}");
+    assert_eq!(
+        text,
+        "fun getNewsResources  com.example.data.NewsRepository  \
+         core/data/src/commonMain/kotlin/com/example/data/NewsRepository.kt:6:9  [commonMain]  \
+         (receiver type)"
+    );
+}
+
+#[test]
+fn find_usages_lists_usages_with_their_lines() {
+    let (text, is_error) = tool_text(
+        &mut nav_server(),
+        "find_usages",
+        json!({
+            "path": "core/data/src/commonMain/kotlin/com/example/data/NewsRepository.kt",
+            "line": 6,
+            "column": 9,
+        }),
+    );
+
+    assert!(!is_error, "{text}");
+    assert_eq!(
+        text,
+        "1 usage of com.example.data.NewsRepository.getNewsResources \
+         (core/data/src/commonMain/kotlin/com/example/data/NewsRepository.kt:6):\n\
+         feature/news/src/commonMain/kotlin/com/example/feature/news/NewsViewModel.kt:11:36  \
+         val items = newsRepository.getNewsResources()"
+    );
+}
+
+#[test]
+fn position_tools_report_a_missing_name() {
+    let (text, is_error) = tool_text(
+        &mut nav_server(),
+        "find_definition",
+        json!({
+            "path": "feature/news/src/commonMain/kotlin/com/example/feature/news/NewsViewModel.kt",
+            "line": 1,
+            "name": "nowhere",
+        }),
+    );
+
+    assert!(is_error);
+    assert_eq!(
+        text,
+        "\"nowhere\" isn't on line 1 of \
+         feature/news/src/commonMain/kotlin/com/example/feature/news/NewsViewModel.kt."
+    );
 }

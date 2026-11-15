@@ -228,6 +228,9 @@ pub enum QueryFilter {
 
     /// Warpium: every Kotlin/Java declaration from the project's code index ("Go to Symbol").
     CodeSymbols,
+
+    /// Warpium: the results of Go to Definition or Find Usages over the project's code index.
+    CodeNavigation,
 }
 
 impl QueryFilter {
@@ -270,6 +273,7 @@ impl QueryFilter {
             }
             QueryFilter::CodeClasses => "Go to class (UVM finds UserViewModel)",
             QueryFilter::CodeSymbols => "Go to symbol",
+            QueryFilter::CodeNavigation => "Filter by file or code",
         }
     }
 
@@ -304,6 +308,7 @@ impl QueryFilter {
             QueryFilter::CurrentDirectoryConversations => &NO_FILTER_ATOM,
             QueryFilter::CodeClasses => &NO_FILTER_ATOM,
             QueryFilter::CodeSymbols => &NO_FILTER_ATOM,
+            QueryFilter::CodeNavigation => &NO_FILTER_ATOM,
         }
     }
 
@@ -338,6 +343,7 @@ impl QueryFilter {
             QueryFilter::CurrentDirectoryConversations => "current directory conversations",
             QueryFilter::CodeClasses => "classes",
             QueryFilter::CodeSymbols => "symbols",
+            QueryFilter::CodeNavigation => "definitions and usages",
         }
     }
 
@@ -379,6 +385,7 @@ impl QueryFilter {
             QueryFilter::CurrentDirectoryConversations => None,
             QueryFilter::CodeClasses => Some("bundled/svg/code-02.svg"),
             QueryFilter::CodeSymbols => Some("bundled/svg/code-01.svg"),
+            QueryFilter::CodeNavigation => Some("bundled/svg/code-01.svg"),
         }
     }
 }

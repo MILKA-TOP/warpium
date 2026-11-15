@@ -560,6 +560,8 @@ pub enum WorkspaceAction {
         full_path: PathBuf,
         line_and_column: Option<LineAndColumnArg>,
     },
+    /// Warpium: Go to Definition or Find Usages for a Kotlin/Java name, over the code index.
+    CodeIndexNavigate(crate::warpium::code_navigation::CodeNavigationRequest),
     OpenNotebook {
         id: SyncId,
     },
@@ -1188,6 +1190,7 @@ impl WorkspaceAction {
             | AttemptLoginGatedAIUpgrade
             | UndoTrash(_)
             | OpenFilePath { .. }
+            | CodeIndexNavigate(_)
             | ViewObjectInWarpDrive(_)
             | OpenObjectSharingSettings { .. }
             | TerminateApp
