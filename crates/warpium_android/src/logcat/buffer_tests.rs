@@ -219,3 +219,17 @@ fn row_index_of_finds_the_first_row_of_an_entry() {
     assert_eq!(buffer.row_index_of(seq_of_c), Some(2));
     assert_eq!(buffer.row_index_of(seq_of_c + 1), None);
 }
+
+#[test]
+fn entries_keep_sequence_numbers_across_evictions() {
+    let mut buffer = LogBuffer::new(2);
+
+    buffer.push_batch(vec![info(1, "a"), info(1, "b"), info(1, "c")]);
+
+    let entries: Vec<(u64, &str)> = buffer
+        .entries()
+        .map(|(seq, entry)| (seq, &*entry.message))
+        .collect();
+    assert_eq!(entries, vec![(1, "b"), (2, "c")]);
+    assert_eq!(buffer.next_seq(), 3);
+}

@@ -112,3 +112,21 @@ define_settings_group!(WarpiumSettings, settings: [
         description: "Whether Warpium offers its Android tools: the device picker, running apps on an emulator or device, and the Logcat pane. adb is only contacted once one of them is used.",
     },
 ]);
+
+/// Keymap context flag present while [`WarpiumAgentSettings::logcat_mcp`] is on.
+pub(crate) const LOGCAT_MCP_CONTEXT_FLAG: &str = "WarpiumLogcatMcp";
+
+// Kept apart from `WarpiumSettings` so the many subscribers matching on its events don't need an
+// arm for every agent setting.
+define_settings_group!(WarpiumAgentSettings, settings: [
+    logcat_mcp: LogcatMcp {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: ::settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "warpium.logcat_mcp",
+        description: "Whether Warpium registers its Logcat MCP server in Warp's MCP servers, so agents can read the project's Android app logs and crashes. The server keeps logs in memory only, scoped to one app unless an agent asks for all.",
+    },
+]);

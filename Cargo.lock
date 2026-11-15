@@ -16381,6 +16381,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "warpium_logcat_mcp"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "code_index",
+ "instant",
+ "log",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "warpium_android",
+]
+
+[[package]]
 name = "warpium_project_toolbar"
 version = "0.1.0"
 dependencies = [
