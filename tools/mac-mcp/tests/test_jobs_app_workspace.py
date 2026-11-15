@@ -11,7 +11,7 @@ import pytest
 from warpium_mac_mcp.app import AppManager, filter_log_lines
 from warpium_mac_mcp.audit import AuditLog, audited, redact_args
 from warpium_mac_mcp.config import REPO_URL, Config
-from warpium_mac_mcp.jobs import JobError, JobManager, tail_file
+from warpium_mac_mcp.jobs import JobCancelled, JobError, JobManager, run_tracked, tail_file
 from warpium_mac_mcp.pathjail import PathJail
 from warpium_mac_mcp.validation import ValidationError
 from warpium_mac_mcp.workspace import (
@@ -62,6 +62,63 @@ def test_job_cancel_kills_group(tmp_path):
     jm.cancel(job.id)
     wait(job)
     assert job.state == "cancelled"
+
+
+def test_cancel_kills_python_step_subprocess(tmp_path):
+    jm = JobManager(tmp_path)
+    marker = tmp_path / "later-step-ran"
+
+    def long_step(log):
+        run_tracked(["sleep", "600"])
+        marker.write_text("x")  # must not run after a cancel
+
+    def later_step(log):
+        marker.write_text("x")
+
+    job = jm.start("t", "py", [long_step, later_step])
+    end = time.time() + 5
+    while job._proc is None and time.time() < end:
+        time.sleep(0.05)
+    proc = job._proc
+    assert proc is not None, "run_tracked did not register its child with the job"
+    t0 = time.monotonic()
+    jm.cancel(job.id)
+    assert job.summary()["cancel_requested"]
+    wait(job, 5)
+    assert job.state == "cancelled", job.summary()
+    assert time.monotonic() - t0 < 3
+    assert proc.poll() is not None
+    assert not marker.exists()
+    assert job.steps_done == 0
+
+
+def test_run_tracked_outside_job_and_timeout(tmp_path):
+    r = run_tracked(
+        [sys.executable, "-c", "import sys; print('out'); print('err', file=sys.stderr)"]
+    )
+    assert (r.returncode, r.stdout.strip(), r.stderr.strip()) == (0, "out", "err")
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_tracked(["sleep", "600"], timeout=0.3)
+
+
+def test_run_tracked_not_cancellable_runs_after_cancel(tmp_path):
+    jm = JobManager(tmp_path)
+    seen = {}
+
+    def step(log):
+        jm.cancel(job_holder[0].id)
+        try:
+            run_tracked(["true"])
+        except JobCancelled:
+            seen["cancelled"] = True
+        seen["cleanup_rc"] = run_tracked(["true"], cancellable=False).returncode
+
+    job_holder = []
+    job = jm.start("t", "py", [lambda log: time.sleep(0.2), step])
+    job_holder.append(job)
+    wait(job)
+    assert job.state == "cancelled"
+    assert seen == {"cancelled": True, "cleanup_rc": 0}
 
 
 def test_exclusive_jobs(tmp_path):
@@ -555,9 +612,111 @@ def test_install_artifact_removes_self_update_backup(ws, monkeypatch):
             shutil.copytree(argv[1], argv[2], symlinks=True)
         return subprocess.CompletedProcess(argv, 0, out, "")
 
-    monkeypatch.setattr("warpium_mac_mcp.workspace.subprocess.run", fake_run)
+    monkeypatch.setattr("warpium_mac_mcp.workspace.run_tracked", fake_run)
     job = wait(w.install_artifact("123"))
     assert job.state == "succeeded", job.error
     assert sorted(p.name for p in cfg.apps_dir.iterdir()) == ["Warpium.app"]
     assert w.app_executable(w.installed_app()).name == "new"
     assert ["hdiutil", "detach"] in calls
+
+
+# --- install_artifact with fake gh/hdiutil/ditto on PATH ------------------------
+
+
+def _fake_tools(tmp_path: Path, monkeypatch, download_body: str) -> Path:
+    """Puts fake gh, hdiutil, ditto and xattr on PATH. Each tool appends its
+    name to ``calls.log``; ``download_body`` is the shell code for
+    ``gh run download`` ($DIR is the --dir argument)."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    (bindir / "run.json").write_text(json.dumps(_run()))
+    (bindir / "artifacts.json").write_text(
+        json.dumps({"artifacts": [{"name": "Warpium-abc", "expired": False}]})
+    )
+    calls = tmp_path / "calls.log"
+    scripts = {
+        "gh": f"""
+echo "gh $1 $2" >> {calls}
+if [ "$1" = api ]; then
+  case "$2" in *artifacts*) cat {bindir}/artifacts.json ;; *) cat {bindir}/run.json ;; esac
+  exit 0
+fi
+DIR=""
+while [ $# -gt 0 ]; do [ "$1" = --dir ] && DIR="$2"; shift; done
+echo $$ > {tmp_path}/gh.pid
+{download_body}
+""",
+        "hdiutil": f"""
+echo "hdiutil $1" >> {calls}
+if [ "$1" = attach ]; then
+  while [ $# -gt 0 ]; do [ "$1" = -mountpoint ] && MNT="$2"; shift; done
+  mkdir -p "$MNT/Warpium.app/Contents"
+fi
+""",
+        "ditto": f'echo ditto >> {calls}\ncp -R "$1" "$2"\n',
+        "xattr": f"echo xattr >> {calls}\n",
+    }
+    for name, body in scripts.items():
+        f = bindir / name
+        f.write_text("#!/bin/sh\n" + body)
+        f.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    return calls
+
+
+def test_install_artifact_cancel_kills_download(ws, tmp_path, monkeypatch):
+    w, cfg = ws
+    calls = _fake_tools(tmp_path, monkeypatch, "exec sleep 600")
+    job = w.install_artifact("123")
+    pidfile = tmp_path / "gh.pid"
+    end = time.time() + 10
+    while not (pidfile.exists() and pidfile.read_text().strip()) and time.time() < end:
+        time.sleep(0.05)
+    assert job.current_step == "download", job.summary()
+    pid = int(pidfile.read_text())
+    t0 = time.monotonic()
+    w.jobs.cancel(job.id)
+    wait(job, 5)
+    assert job.state == "cancelled", job.summary()
+    assert time.monotonic() - t0 < 4
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    log = calls.read_text()
+    assert "hdiutil" not in log and "ditto" not in log, log
+    assert not (cfg.downloads_dir / "123-tmp").exists()
+
+
+def test_install_artifact_logs_download_progress(ws, tmp_path, monkeypatch):
+    w, cfg = ws
+    w.download_tick_s = 0.2
+    body = """
+i=0
+while [ $i -lt 8 ]; do
+  head -c 40000 /dev/zero >> "$TMPDIR/gh-artifact.1.zip"
+  sleep 0.15
+  i=$((i+1))
+done
+echo dmg > "$DIR/Warpium.dmg"
+"""
+    calls = _fake_tools(tmp_path, monkeypatch, body)
+    job = wait(w.install_artifact("123"), 20)
+    assert job.state == "succeeded", (job.summary(), w.jobs.logs(job.id, 100))
+    progress = w.jobs.logs(job.id, 200, grep="download: zip")
+    assert progress, w.jobs.logs(job.id, 100)
+    assert "KB/s" in progress
+    sizes = [float(line.split("zip ")[1].split(" MB")[0]) for line in progress.splitlines()]
+    assert max(sizes) > 0
+    assert "download: done" in w.jobs.logs(job.id, 200)
+    assert "hdiutil detach" in calls.read_text()
+
+
+def test_install_artifact_download_stall_fails(ws, tmp_path, monkeypatch):
+    w, cfg = ws
+    w.download_tick_s, w.download_stall_s = 0.2, 0.7
+    calls = _fake_tools(tmp_path, monkeypatch, "exec sleep 600")
+    job = wait(w.install_artifact("123"), 10)
+    assert job.state == "failed", job.summary()
+    assert "stalled" in job.error
+    with pytest.raises(ProcessLookupError):
+        os.kill(int((tmp_path / "gh.pid").read_text()), 0)
+    assert "hdiutil" not in calls.read_text()

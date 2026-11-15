@@ -3,10 +3,16 @@
 A job is a sequence of steps. A step is either an argv list (run as a
 subprocess, never through a shell) or a Python callable that receives a
 ``log(str)`` function. Output goes to ``<jobs_dir>/<job_id>.log``.
+
+Python steps must start their subprocesses through :func:`run_tracked`, never
+``subprocess.run``: it registers the child with the job (own session/process
+group) so ``job_cancel`` and the job timeout can kill it, and it raises
+:class:`JobCancelled` so no later code in the step runs after a cancel.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -24,6 +30,18 @@ Step = Sequence[str] | Callable[[Callable[[str], None]], dict | None]
 
 class JobError(RuntimeError):
     pass
+
+
+class JobCancelled(JobError):
+    """Raised inside a job's thread when the job was cancelled or timed out."""
+
+
+# Grace period between SIGTERM and SIGKILL for a step's process group.
+KILL_GRACE_S = 5.0
+_POLL_S = 0.5
+
+# The job whose thread is running (set by JobManager._run for Python steps).
+_current = threading.local()
 
 
 @dataclass
@@ -44,6 +62,8 @@ class Job:
     result: dict = field(default_factory=dict)
     _proc: subprocess.Popen | None = None
     _cancel: threading.Event = field(default_factory=threading.Event)
+    _deadline: float | None = None
+    _log: Callable[[str], None] | None = None
 
     def summary(self) -> dict:
         now = self.finished_at or time.time()
@@ -52,6 +72,8 @@ class Job:
             "kind": self.kind,
             "description": self.description,
             "state": self.state,
+            # True between job_cancel and the step's subprocess actually exiting.
+            "cancel_requested": self._cancel.is_set(),
             "exit_code": self.exit_code,
             "error": self.error,
             "current_step": self.current_step,
@@ -128,13 +150,16 @@ class JobManager:
         timeout_s: float | None,
     ) -> None:
         deadline = time.monotonic() + timeout_s if timeout_s else None
+        job._deadline = deadline
         job.state = "running"
+        _current.job = job
         with open(job.log_path, "a", encoding="utf-8", errors="replace") as logf:
 
             def log(msg: str) -> None:
                 logf.write(msg if msg.endswith("\n") else msg + "\n")
                 logf.flush()
 
+            job._log = log
             try:
                 for step in steps:
                     if job._cancel.is_set():
@@ -149,7 +174,7 @@ class JobManager:
                         argv = list(step)
                         job.current_step = " ".join(argv)
                         log(f"$ {job.current_step}")
-                        rc = self._run_proc(job, argv, cwd, env, logf, deadline)
+                        rc = self._run_proc(job, argv, cwd, env, logf)
                         if rc != 0:
                             job.exit_code = rc
                             if not job._cancel.is_set():
@@ -162,13 +187,15 @@ class JobManager:
                     job.state = "succeeded"
             except Exception as e:  # noqa: BLE001 - recorded on the job
                 job.state = "failed"
-                job.error = f"{type(e).__name__}: {e}"
+                if not (isinstance(e, JobCancelled) and job.error):
+                    job.error = f"{type(e).__name__}: {e}"
                 log(f"error: {job.error}")
             finally:
                 if job._cancel.is_set():
                     job.state = "cancelled"
                 job.finished_at = time.time()
                 job._proc = None
+                _current.job = None
                 log(f"== job {job.state} (exit={job.exit_code}) ==")
 
     def _run_proc(
@@ -178,7 +205,6 @@ class JobManager:
         cwd: Path | None,
         env: dict | None,
         logf,
-        deadline: float | None,
     ) -> int:
         proc = subprocess.Popen(
             argv,
@@ -192,15 +218,10 @@ class JobManager:
         job._proc = proc
         while True:
             try:
-                return proc.wait(timeout=0.5)
+                return proc.wait(timeout=_POLL_S)
             except subprocess.TimeoutExpired:
                 pass
-            if deadline is not None and time.monotonic() > deadline:
-                logf.write("timeout: killing job\n")
-                job.error = "timed out"
-                _kill_group(proc)
-                job._cancel.set()
-            if job._cancel.is_set():
+            if _check_deadline(job, logf.write):
                 _kill_group(proc)
                 return proc.wait()
 
@@ -231,21 +252,112 @@ class JobManager:
                 self.cancel(job.id)
 
 
-def _kill_group(proc: subprocess.Popen) -> None:
+def _check_deadline(job: Job, log: Callable[[str], object]) -> bool:
+    """Marks ``job`` cancelled once its timeout passed; True if it should stop."""
+    if job._deadline is not None and time.monotonic() > job._deadline and not job._cancel.is_set():
+        log("timeout: killing job\n")
+        job.error = "timed out"
+        job._cancel.set()
+    return job._cancel.is_set()
+
+
+def _kill_group(proc: subprocess.Popen, grace_s: float = KILL_GRACE_S) -> None:
+    """SIGTERM the child's process group, SIGKILL it if it outlives ``grace_s``.
+
+    Children are started with ``start_new_session=True``, so the group id is
+    the child's pid; using it directly (instead of ``getpgid``) still reaches
+    grandchildren after the leader itself has exited."""
+    pgid = proc.pid
     if proc.poll() is not None:
+        # Leader gone; a grandchild may still hold the group (and our pipes).
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(pgid, signal.SIGKILL)
         return
     try:
-        pgid = os.getpgid(proc.pid)
         os.killpg(pgid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         return
     try:
-        proc.wait(timeout=5)
+        proc.wait(timeout=grace_s)
     except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def run_tracked(
+    argv: Sequence[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    cwd: Path | None = None,
+    timeout: float | None = None,
+    cancellable: bool = True,
+    on_tick: Callable[[], None] | None = None,
+    tick_s: float = 15.0,
+) -> subprocess.CompletedProcess:
+    """``subprocess.run(argv, capture_output=True, text=True, timeout=...)`` for
+    job steps, in its own process group.
+
+    Inside a job thread the child is registered as the job's live process, and
+    a cancel (or the job's timeout) kills its process group and raises
+    :class:`JobCancelled`. ``cancellable=False`` is for cleanup that must run
+    even after a cancel (e.g. ``hdiutil detach`` in a ``finally``): the job's
+    cancel flag is ignored and only ``timeout`` applies. ``on_tick`` is called
+    every ``tick_s`` seconds while the child runs; if it raises, the child is
+    killed and the exception propagates (used as a stall guard).
+    """
+    job: Job | None = getattr(_current, "job", None) if cancellable else None
+    if job is not None and _check_deadline(job, job._log or (lambda _m: None)):
+        raise JobCancelled(f"cancelled before running {argv[0]}")
+    proc = subprocess.Popen(
+        list(argv),
+        cwd=cwd,
+        env=dict(env) if env is not None else None,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        start_new_session=True,
+    )
+    if job is not None:
+        job._proc = proc
+    start = time.monotonic()
+    next_tick = start + tick_s
+    try:
+        while True:
+            try:
+                out, err = proc.communicate(timeout=_POLL_S)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            now = time.monotonic()
+            if job is not None and _check_deadline(job, job._log or (lambda _m: None)):
+                _kill_group(proc)
+                raise JobCancelled(f"cancelled while running {argv[0]}")
+            if timeout is not None and now - start > timeout:
+                _kill_group(proc)
+                raise subprocess.TimeoutExpired(list(argv), timeout)
+            if on_tick is not None and now >= next_tick:
+                next_tick = now + tick_s
+                on_tick()
+    except BaseException:
+        _kill_group(proc)
         try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
+            proc.communicate(timeout=KILL_GRACE_S)
+        except (subprocess.TimeoutExpired, ValueError, OSError):
             pass
+        raise
+    finally:
+        if job is not None and job._proc is proc:
+            job._proc = None
+    # job_cancel kills the group from another thread, so the child usually
+    # "exits normally" (-SIGTERM) here; never hand that back to the step.
+    if job is not None and job._cancel.is_set():
+        raise JobCancelled(f"cancelled while running {argv[0]}")
+    return subprocess.CompletedProcess(list(argv), proc.returncode, out or "", err or "")
 
 
 def tail_file(
