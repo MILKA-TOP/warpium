@@ -123,17 +123,89 @@ pub(crate) fn for_each_identifier(
 /// Hard keywords, which never name a declaration and are left out of identifier sets.
 pub(crate) fn is_keyword(word: &str, language: Language) -> bool {
     const KOTLIN: &[&str] = &[
-        "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in",
-        "interface", "is", "null", "object", "package", "return", "super", "this", "throw",
-        "true", "try", "typealias", "typeof", "val", "var", "when", "while",
+        "as",
+        "break",
+        "class",
+        "continue",
+        "do",
+        "else",
+        "false",
+        "for",
+        "fun",
+        "if",
+        "in",
+        "interface",
+        "is",
+        "null",
+        "object",
+        "package",
+        "return",
+        "super",
+        "this",
+        "throw",
+        "true",
+        "try",
+        "typealias",
+        "typeof",
+        "val",
+        "var",
+        "when",
+        "while",
     ];
     const JAVA: &[&str] = &[
-        "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class",
-        "const", "continue", "default", "do", "double", "else", "enum", "extends", "false",
-        "final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof",
-        "int", "interface", "long", "native", "new", "null", "package", "private", "protected",
-        "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized",
-        "this", "throw", "throws", "transient", "true", "try", "void", "volatile", "while",
+        "abstract",
+        "assert",
+        "boolean",
+        "break",
+        "byte",
+        "case",
+        "catch",
+        "char",
+        "class",
+        "const",
+        "continue",
+        "default",
+        "do",
+        "double",
+        "else",
+        "enum",
+        "extends",
+        "false",
+        "final",
+        "finally",
+        "float",
+        "for",
+        "goto",
+        "if",
+        "implements",
+        "import",
+        "instanceof",
+        "int",
+        "interface",
+        "long",
+        "native",
+        "new",
+        "null",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "return",
+        "short",
+        "static",
+        "strictfp",
+        "super",
+        "switch",
+        "synchronized",
+        "this",
+        "throw",
+        "throws",
+        "transient",
+        "true",
+        "try",
+        "void",
+        "volatile",
+        "while",
     ];
     match language {
         Language::Kotlin => KOTLIN.contains(&word),
@@ -142,7 +214,10 @@ pub(crate) fn is_keyword(word: &str, language: Language) -> bool {
 }
 
 fn is_identifier_start(byte: u8, language: Language) -> bool {
-    byte.is_ascii_alphabetic() || byte == b'_' || byte >= 0x80 || (byte == b'$' && language == Language::Java)
+    byte.is_ascii_alphabetic()
+        || byte == b'_'
+        || byte >= 0x80
+        || (byte == b'$' && language == Language::Java)
 }
 
 fn identifier_end(bytes: &[u8], start: usize, language: Language) -> usize {
@@ -215,7 +290,9 @@ pub(crate) fn line_starts(source: &str) -> Vec<usize> {
 
 /// The zero-based line and character column of `offset`, given [`line_starts`].
 pub(crate) fn position_of(source: &str, starts: &[usize], offset: usize) -> crate::Position {
-    let line = starts.partition_point(|start| *start <= offset).saturating_sub(1);
+    let line = starts
+        .partition_point(|start| *start <= offset)
+        .saturating_sub(1);
     let column = source[starts[line]..offset].chars().count();
     crate::Position {
         line: line as u32,
@@ -224,7 +301,11 @@ pub(crate) fn position_of(source: &str, starts: &[usize], offset: usize) -> crat
 }
 
 /// The byte offset of a zero-based line and character column, clamped to the line's end.
-pub(crate) fn offset_of(source: &str, starts: &[usize], position: crate::Position) -> Option<usize> {
+pub(crate) fn offset_of(
+    source: &str,
+    starts: &[usize],
+    position: crate::Position,
+) -> Option<usize> {
     let start = *starts.get(position.line as usize)?;
     let line_end = starts
         .get(position.line as usize + 1)

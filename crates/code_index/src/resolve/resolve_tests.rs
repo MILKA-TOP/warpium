@@ -64,7 +64,8 @@ fn targets(result: &DefinitionResult) -> Vec<(&str, u32, bool)> {
         .collect()
 }
 
-const VIEW_MODEL: &str = "feature/news/src/commonMain/kotlin/com/example/feature/news/NewsViewModel.kt";
+const VIEW_MODEL: &str =
+    "feature/news/src/commonMain/kotlin/com/example/feature/news/NewsViewModel.kt";
 const REPOSITORY: &str = "core/data/src/commonMain/kotlin/com/example/data/NewsRepository.kt";
 const RESOURCE: &str = "core/model/src/commonMain/kotlin/com/example/model/NewsResource.kt";
 
@@ -72,7 +73,12 @@ const RESOURCE: &str = "core/model/src/commonMain/kotlin/com/example/model/NewsR
 fn resolves_a_type_through_an_explicit_import() {
     let index = CodeIndex::build(fixture("nav-kmp"), 1);
 
-    let result = definition(&index, VIEW_MODEL, "newsRepository: NewsRepository", "NewsRepository");
+    let result = definition(
+        &index,
+        VIEW_MODEL,
+        "newsRepository: NewsRepository",
+        "NewsRepository",
+    );
 
     assert_eq!(targets(&result), vec![(REPOSITORY, 4, false)]);
     assert_eq!(result.definitions[0].resolution, Resolution::Import);
@@ -181,9 +187,21 @@ fn common_code_goes_to_the_expect_declaration_with_actuals_as_counterparts() {
     assert_eq!(
         targets(&result),
         vec![
-            ("core/data/src/commonMain/kotlin/com/example/data/Platform.kt", 2, false),
-            ("core/data/src/androidMain/kotlin/com/example/data/Platform.android.kt", 2, true),
-            ("core/data/src/iosMain/kotlin/com/example/data/Platform.ios.kt", 2, true),
+            (
+                "core/data/src/commonMain/kotlin/com/example/data/Platform.kt",
+                2,
+                false
+            ),
+            (
+                "core/data/src/androidMain/kotlin/com/example/data/Platform.android.kt",
+                2,
+                true
+            ),
+            (
+                "core/data/src/iosMain/kotlin/com/example/data/Platform.ios.kt",
+                2,
+                true
+            ),
         ]
     );
 }
@@ -199,8 +217,16 @@ fn platform_code_goes_to_the_actual_of_its_own_source_set() {
         targets(&result),
         vec![
             (android, 2, false),
-            ("core/data/src/commonMain/kotlin/com/example/data/Platform.kt", 2, true),
-            ("core/data/src/iosMain/kotlin/com/example/data/Platform.ios.kt", 2, true),
+            (
+                "core/data/src/commonMain/kotlin/com/example/data/Platform.kt",
+                2,
+                true
+            ),
+            (
+                "core/data/src/iosMain/kotlin/com/example/data/Platform.ios.kt",
+                2,
+                true
+            ),
         ]
     );
 }
@@ -209,7 +235,12 @@ fn platform_code_goes_to_the_actual_of_its_own_source_set() {
 fn a_declaration_name_resolves_to_itself() {
     let index = CodeIndex::build(fixture("nav-kmp"), 1);
 
-    let result = definition(&index, REPOSITORY, "fun getNewsResources", "getNewsResources");
+    let result = definition(
+        &index,
+        REPOSITORY,
+        "fun getNewsResources",
+        "getNewsResources",
+    );
 
     assert!(result.at_declaration);
     assert_eq!(targets(&result), vec![(REPOSITORY, 5, false)]);
@@ -220,7 +251,12 @@ fn a_constructed_receiver_resolves_to_the_override_in_its_class() {
     let index = CodeIndex::build(fixture("nav-kmp"), 1);
     let test = "feature/news/src/commonTest/kotlin/com/example/feature/news/NewsViewModelTest.kt";
 
-    let result = definition(&index, test, "repository.getNewsResources()", "getNewsResources");
+    let result = definition(
+        &index,
+        test,
+        "repository.getNewsResources()",
+        "getNewsResources",
+    );
 
     assert_eq!(
         targets(&result),
@@ -246,7 +282,8 @@ fn an_unknown_receiver_falls_back_to_members_with_the_name() {
 #[test]
 fn resolves_against_unsaved_text() {
     let index = CodeIndex::build(fixture("nav-kmp"), 1);
-    let text = "package com.example.feature.news\n\nfun draft() {\n    val fresh = 1\n    fresh\n}\n";
+    let text =
+        "package com.example.feature.news\n\nfun draft() {\n    val fresh = 1\n    fresh\n}\n";
     let file = SourceFile {
         rel_path: VIEW_MODEL,
         text,
@@ -286,7 +323,10 @@ fn whitespace_has_no_definition() {
         language: Language::Kotlin,
     };
 
-    assert_eq!(index.find_definition(&file, Position { line: 2, column: 0 }), None);
+    assert_eq!(
+        index.find_definition(&file, Position { line: 2, column: 0 }),
+        None
+    );
 }
 
 const SCREEN: &str = "src/main/kotlin/org/acme/UserScreen.kt";
@@ -352,7 +392,10 @@ fn java_resolves_a_method_through_a_field_of_a_nested_class_type() {
     let result = java_definition(&index, LEGACY, "cache.lookup", "lookup");
 
     assert_eq!(targets(&result), vec![(LEGACY, 14, false)]);
-    assert_eq!(result.definitions[0].symbol.container, "LegacyUserService.Cache");
+    assert_eq!(
+        result.definitions[0].symbol.container,
+        "LegacyUserService.Cache"
+    );
 }
 
 #[test]

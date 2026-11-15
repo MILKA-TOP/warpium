@@ -122,7 +122,10 @@ fn loaded_snapshot_finds_the_same_usages_as_a_fresh_build() {
         text: &text,
         language: Language::Kotlin,
     };
-    let at_class_name = Position { line: 2, column: 11 };
+    let at_class_name = Position {
+        line: 2,
+        column: 11,
+    };
 
     let fresh = index.find_usages(&file, at_class_name, 100, 1);
     let warm = loaded.find_usages(&file, at_class_name, 100, 1);

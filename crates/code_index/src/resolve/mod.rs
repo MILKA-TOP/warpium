@@ -16,11 +16,11 @@ use crate::layout::{Placement, place};
 use crate::lex::{line_starts, offset_of};
 use crate::model::{Language, Origin, Position, SymbolKind, Visibility, flags};
 
-pub(crate) use syntax::{Want, identifier_name, is_identifier};
 use syntax::{
     EnclosingClass, LocalDecl, Lookup, Receiver, TypeNode, classify, dotted_name,
     enclosing_classes, find_local, property_type, receiver_shape, supertypes, type_path,
 };
+pub(crate) use syntax::{Want, identifier_name, is_identifier};
 
 /// Most declarations a name-only fallback returns.
 const MAX_FALLBACK: usize = 50;
@@ -292,7 +292,13 @@ impl<'a> Resolver<'a> {
         }
 
         let mut imported = Vec::new();
-        for import in self.file.raw.imports.iter().filter(|import| !import.wildcard) {
+        for import in self
+            .file
+            .raw
+            .imports
+            .iter()
+            .filter(|import| !import.wildcard)
+        {
             let visible_name = import
                 .alias
                 .as_deref()
@@ -314,7 +320,13 @@ impl<'a> Resolver<'a> {
         }
 
         let mut starred = Vec::new();
-        for import in self.file.raw.imports.iter().filter(|import| import.wildcard) {
+        for import in self
+            .file
+            .raw
+            .imports
+            .iter()
+            .filter(|import| import.wildcard)
+        {
             starred.extend(self.declarations(Some(&import.path), Some(""), name));
             for class in self.qualified(&import.path, None) {
                 if class.info.kind.is_type() {
@@ -417,8 +429,9 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        let (extensions, resolution) =
-            self.name(name, at, want, &|candidate| candidate.info.receiver.is_some());
+        let (extensions, resolution) = self.name(name, at, want, &|candidate| {
+            candidate.info.receiver.is_some()
+        });
         if !extensions.is_empty() && resolution != Resolution::Name {
             return (extensions, resolution);
         }
@@ -484,7 +497,8 @@ impl<'a> Resolver<'a> {
                 })
             }
             Receiver::Member { receiver, name } => {
-                let (members, _) = self.member(receiver, identifier_name(name, source), Want::Value, at);
+                let (members, _) =
+                    self.member(receiver, identifier_name(name, source), Want::Value, at);
                 let types: Vec<Candidate> = members
                     .into_iter()
                     .filter(|candidate| candidate.info.kind.is_type())
@@ -496,7 +510,9 @@ impl<'a> Resolver<'a> {
             }
             Receiver::Call(callee) => {
                 let (candidates, _) =
-                    self.name(identifier_name(callee, source), callee, Want::Call, &|_| true);
+                    self.name(identifier_name(callee, source), callee, Want::Call, &|_| {
+                        true
+                    });
                 let types: Vec<Candidate> = candidates
                     .into_iter()
                     .filter(|candidate| candidate.info.kind.is_type())
@@ -595,7 +611,9 @@ impl<'a> Resolver<'a> {
             .raw
             .symbols
             .iter()
-            .filter(|symbol| symbol.container == container && symbol.kind == SymbolKind::CompanionObject)
+            .filter(|symbol| {
+                symbol.container == container && symbol.kind == SymbolKind::CompanionObject
+            })
             .flat_map(|companion| self.file_members(&join(container, &companion.name), name))
             .collect()
     }
@@ -756,7 +774,10 @@ impl<'a> Resolver<'a> {
         candidates.sort_by_cached_key(|candidate| self.rank(&candidate.info));
         let mut unique: Vec<Candidate> = Vec::new();
         for candidate in candidates {
-            if !unique.iter().any(|seen| same_declaration(&seen.info, &candidate.info)) {
+            if !unique
+                .iter()
+                .any(|seen| same_declaration(&seen.info, &candidate.info))
+            {
                 unique.push(candidate);
             }
         }
@@ -787,7 +808,9 @@ impl<'a> Resolver<'a> {
                 });
                 for (index, member) in group.into_iter().enumerate() {
                     if index != primary
-                        && !definitions.iter().any(|d| same_declaration(&d.symbol, &member))
+                        && !definitions
+                            .iter()
+                            .any(|d| same_declaration(&d.symbol, &member))
                     {
                         definitions.push(Definition {
                             symbol: member,
@@ -822,7 +845,11 @@ impl<'a> Resolver<'a> {
         group
             .iter()
             .position(|symbol| symbol.has_flag(flags::ACTUAL) && own_set(symbol))
-            .or_else(|| group.iter().position(|symbol| symbol.has_flag(flags::EXPECT)))
+            .or_else(|| {
+                group
+                    .iter()
+                    .position(|symbol| symbol.has_flag(flags::EXPECT))
+            })
             .unwrap_or(0)
     }
 
@@ -852,7 +879,9 @@ impl<'a> Resolver<'a> {
         let hidden_platform_set = same_module
             && symbol.source_set != here.source_set
             && is_platform_main_set(&symbol.source_set)
-            && !here.source_set.starts_with(symbol.source_set.trim_end_matches("Main"));
+            && !here
+                .source_set
+                .starts_with(symbol.source_set.trim_end_matches("Main"));
         let origin_mismatch = here.origin == Origin::Main && symbol.origin == Origin::Test;
         (
             hidden_platform_set,

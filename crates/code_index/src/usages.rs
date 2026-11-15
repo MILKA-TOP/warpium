@@ -84,9 +84,9 @@ impl CodeIndex {
             });
         }
         let only_local = definition.definitions.iter().all(|d| d.local)
-            || targets
-                .iter()
-                .all(|target| target.visibility == Visibility::Private && target.rel_path == file.rel_path);
+            || targets.iter().all(|target| {
+                target.visibility == Visibility::Private && target.rel_path == file.rel_path
+            });
         let search = Search {
             index: self,
             name: &definition.name,
@@ -115,7 +115,9 @@ impl CodeIndex {
         let files_scanned = jobs.len();
 
         let run = |(job, scan): &(Job, Scan)| search.scan(job, *scan);
-        let pool = (jobs.len() > SERIAL_FILES).then(|| worker_pool(threads)).flatten();
+        let pool = (jobs.len() > SERIAL_FILES)
+            .then(|| worker_pool(threads))
+            .flatten();
         let mut usages: Vec<Usage> = match &pool {
             Some(pool) => pool.install(|| jobs.par_iter().flat_map_iter(run).collect()),
             None => jobs.iter().flat_map(run).collect(),
@@ -169,20 +171,26 @@ impl<'a> Search<'a> {
                 })
             })
             .collect();
-        let declaring_other: HashSet<&str> =
-            others.iter().map(|(file, _)| file.rel_path.as_str()).collect();
-        let is_member = self
-            .targets
+        let declaring_other: HashSet<&str> = others
             .iter()
-            .all(|target| !target.container.is_empty() && target.receiver.is_none() && !target.kind.is_type());
+            .map(|(file, _)| file.rel_path.as_str())
+            .collect();
+        let is_member = self.targets.iter().all(|target| {
+            !target.container.is_empty() && target.receiver.is_none() && !target.kind.is_type()
+        });
 
         let mut jobs = Vec::new();
         for file in self.index.live_files() {
-            if file.rel_path == self.current.rel_path || file.identifiers.binary_search(&name).is_err() {
+            if file.rel_path == self.current.rel_path
+                || file.identifiers.binary_search(&name).is_err()
+            {
                 continue;
             }
             let declares_other = declaring_other.contains(file.rel_path.as_str());
-            let is_target_file = self.targets.iter().any(|target| target.rel_path == file.rel_path);
+            let is_target_file = self
+                .targets
+                .iter()
+                .any(|target| target.rel_path == file.rel_path);
             let sees_target = self.sees_any_target(file);
             let scan = if is_target_file {
                 Scan::Resolve
@@ -209,7 +217,11 @@ impl<'a> Search<'a> {
             } else {
                 Scan::All { exact: true }
             };
-            if self.targets.iter().all(|target| !self.may_access(file, target)) {
+            if self
+                .targets
+                .iter()
+                .all(|target| !self.may_access(file, target))
+            {
                 continue;
             }
             let scan = match scan {
@@ -235,7 +247,11 @@ impl<'a> Search<'a> {
     /// target itself.
     fn mentions_target_class(&self, file: &FileData) -> bool {
         self.targets.iter().any(|target| {
-            let class = target.container.rsplit('.').next().filter(|class| !class.is_empty());
+            let class = target
+                .container
+                .rsplit('.')
+                .next()
+                .filter(|class| !class.is_empty());
             self.index
                 .interner
                 .get(class.unwrap_or(&target.name))
@@ -269,17 +285,25 @@ impl<'a> Search<'a> {
         if interner.resolve(file.package) == symbol.package {
             return true;
         }
-        let top_level = symbol.container.split('.').next().filter(|top| !top.is_empty());
+        let top_level = symbol
+            .container
+            .split('.')
+            .next()
+            .filter(|top| !top.is_empty());
         let fqn = symbol.qualified_name();
         let top_fqn = top_level.map(|top| join(&symbol.package, top));
         file.imports.iter().any(|import| {
             let path = interner.resolve(import.path);
             if import.wildcard {
                 path == symbol.package && top_level.is_none()
-                    || top_fqn.as_deref().is_some_and(|top| path == top || path.starts_with(&format!("{top}.")))
+                    || top_fqn
+                        .as_deref()
+                        .is_some_and(|top| path == top || path.starts_with(&format!("{top}.")))
             } else {
                 path == fqn
-                    || top_fqn.as_deref().is_some_and(|top| path == top || path.starts_with(&format!("{top}.")))
+                    || top_fqn
+                        .as_deref()
+                        .is_some_and(|top| path == top || path.starts_with(&format!("{top}.")))
             }
         })
     }
@@ -353,8 +377,8 @@ impl<'a> Search<'a> {
                                 .iter()
                                 .any(|target| is_same_target(&definition.symbol, target))
                         })?;
-                        let ambiguous = hit.resolution == Resolution::Name
-                            && result.primary().count() > 1;
+                        let ambiguous =
+                            hit.resolution == Resolution::Name && result.primary().count() > 1;
                         if ambiguous && !plausible {
                             return None;
                         }

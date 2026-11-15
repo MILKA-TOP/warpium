@@ -277,7 +277,10 @@ fn run(root: &Path, cache: &Path, label: &str, threads: usize) {
         "usages               {}  ({} declarations, median {} usages, max {})",
         percentiles(&mut latencies),
         usage_counts.len(),
-        usage_counts.get(usage_counts.len() / 2).copied().unwrap_or(0),
+        usage_counts
+            .get(usage_counts.len() / 2)
+            .copied()
+            .unwrap_or(0),
         usage_counts.last().copied().unwrap_or(0)
     );
 
@@ -348,7 +351,8 @@ fn reference_samples(index: &CodeIndex) -> Vec<(String, String, Language, Positi
             }
             let chars: Vec<char> = line.chars().collect();
             for (column, c) in chars.iter().enumerate() {
-                let starts_word = column == 0 || !(chars[column - 1].is_alphanumeric() || chars[column - 1] == '_');
+                let starts_word = column == 0
+                    || !(chars[column - 1].is_alphanumeric() || chars[column - 1] == '_');
                 let after_dot = column > 0 && chars[column - 1] == '.';
                 if starts_word && c.is_alphabetic() && (after_dot || c.is_uppercase()) {
                     positions.push(Position {
@@ -359,7 +363,11 @@ fn reference_samples(index: &CodeIndex) -> Vec<(String, String, Language, Positi
             }
         }
         let step = (positions.len() / REFERENCES_PER_FILE).max(1);
-        for position in positions.into_iter().step_by(step).take(REFERENCES_PER_FILE) {
+        for position in positions
+            .into_iter()
+            .step_by(step)
+            .take(REFERENCES_PER_FILE)
+        {
             samples.push((rel_path.clone(), text.clone(), language, position));
         }
     }
@@ -376,7 +384,8 @@ fn usage_targets(index: &CodeIndex) -> Vec<code_index::SymbolInfo> {
             .map(|result| result.symbol)
             .filter(|symbol| {
                 symbol.origin == code_index::Origin::Main
-                    && (scope == SearchScope::Types || symbol.kind == code_index::SymbolKind::Function)
+                    && (scope == SearchScope::Types
+                        || symbol.kind == code_index::SymbolKind::Function)
             })
             .collect();
         let step = (found.len() / USAGE_TARGETS).max(1);

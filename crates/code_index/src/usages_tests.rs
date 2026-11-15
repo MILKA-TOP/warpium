@@ -26,7 +26,12 @@ fn usages_at(
         language,
     };
     index
-        .find_usages(&file, position_of(&text, &line_starts(&text), offset), 100, 2)
+        .find_usages(
+            &file,
+            position_of(&text, &line_starts(&text), offset),
+            100,
+            2,
+        )
         .expect("an identifier is at the position")
 }
 
@@ -39,10 +44,12 @@ fn found(result: &UsagesResult) -> Vec<(&str, u32, bool)> {
         .collect()
 }
 
-const VIEW_MODEL: &str = "feature/news/src/commonMain/kotlin/com/example/feature/news/NewsViewModel.kt";
+const VIEW_MODEL: &str =
+    "feature/news/src/commonMain/kotlin/com/example/feature/news/NewsViewModel.kt";
 const REPOSITORY: &str = "core/data/src/commonMain/kotlin/com/example/data/NewsRepository.kt";
 const RESOURCE: &str = "core/model/src/commonMain/kotlin/com/example/model/NewsResource.kt";
-const FAKE: &str = "core/data-test/src/commonMain/kotlin/com/example/data/test/FakeNewsRepository.kt";
+const FAKE: &str =
+    "core/data-test/src/commonMain/kotlin/com/example/data/test/FakeNewsRepository.kt";
 
 #[test]
 fn interface_method_usages_leave_out_overrides_other_receivers_comments_and_strings() {
@@ -117,7 +124,11 @@ fn expect_function_usages_include_calls_resolved_to_actuals() {
     assert_eq!(
         found(&result),
         vec![
-            ("core/data/src/androidMain/kotlin/com/example/data/Platform.android.kt", 4, true),
+            (
+                "core/data/src/androidMain/kotlin/com/example/data/Platform.android.kt",
+                4,
+                true
+            ),
             (VIEW_MODEL, 3, true),
             (VIEW_MODEL, 13, true),
         ]
@@ -131,7 +142,10 @@ fn usages_report_the_line_text() {
 
     let result = usages_at(&index, VIEW_MODEL, Language::Kotlin, "val items", "items");
 
-    assert_eq!(result.usages[0].line_text, "val first: NewsResource = items.first()");
+    assert_eq!(
+        result.usages[0].line_text,
+        "val first: NewsResource = items.first()"
+    );
 }
 
 #[test]
@@ -145,7 +159,15 @@ fn usages_stop_at_the_limit() {
     };
 
     let result = index
-        .find_usages(&file, Position { line: 2, column: 11 }, 3, 1)
+        .find_usages(
+            &file,
+            Position {
+                line: 2,
+                column: 11,
+            },
+            3,
+            1,
+        )
         .expect("an identifier is at the position");
 
     assert_eq!(result.usages.len(), 3);

@@ -563,12 +563,18 @@ impl CodeIndex {
         };
         self.by_path.insert(rel_path, slot);
         for (index, name) in names.into_iter().enumerate() {
-            self.by_name.entry(name).or_default().push((slot, index as u32));
+            self.by_name
+                .entry(name)
+                .or_default()
+                .push((slot, index as u32));
         }
     }
 
     /// Every declaration named `name`, with its file.
-    pub(crate) fn declarations_named(&self, name: Sym) -> impl Iterator<Item = (&FileData, &Symbol)> {
+    pub(crate) fn declarations_named(
+        &self,
+        name: Sym,
+    ) -> impl Iterator<Item = (&FileData, &Symbol)> {
         self.by_name
             .get(&name)
             .into_iter()

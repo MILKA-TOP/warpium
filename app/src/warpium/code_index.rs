@@ -1,5 +1,5 @@
-//! Go to Class / Go to Symbol for Kotlin and Java projects, backed by the in-process index in
-//! `crates/code_index`.
+//! Go to Class / Go to Symbol, Go to Definition and Find Usages for Kotlin and Java projects,
+//! backed by the in-process index in `crates/code_index`.
 //!
 //! One project is indexed at a time: the pinned Project Explorer root or the repository of the
 //! active session, picked when a Go to palette opens. The index is built (or loaded from its
@@ -13,7 +13,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use code_index::{CodeIndex, PersistError, write_snapshot};
+use code_index::{
+    CodeIndex, Definition, Language, PersistError, Position, SourceFile, Usage, write_snapshot,
+};
 use futures::channel::oneshot;
 use instant::Instant;
 use parking_lot::RwLock;
@@ -24,8 +26,12 @@ use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::keymap::EditableBinding;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WeakModelHandle};
 
+use super::code_navigation::{
+    CODE_NAVIGATION_CONTEXT_FLAG, CodeNavigationKind, CodeNavigationRequest,
+};
 use super::is_warpium_channel;
 use super::sync_settings::{CODE_INDEX_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent};
+use crate::code::local_code_editor::LocalCodeEditorAction;
 use crate::palette::PaletteMode;
 use crate::server::telemetry::PaletteSource;
 use crate::settings_view::ToggleSettingActionPair;
@@ -36,6 +42,10 @@ use crate::workspace::WorkspaceAction;
 const SAVE_DELAY: Duration = Duration::from_secs(10);
 /// Worker threads for incremental updates; a save touches one or a few files.
 const UPDATE_THREADS: usize = 2;
+/// Worker threads for scanning the files of a Find Usages query.
+const USAGES_THREADS: usize = 4;
+/// Most usages a Find Usages query lists.
+const MAX_USAGES: usize = 500;
 
 /// Whether the project's index is still being built or brought up to date.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +66,34 @@ pub(crate) struct CodeIndexModel {
     project: Option<Project>,
     /// Bumped for every new project, so results of work started for an older one are dropped.
     generation: u64,
+    /// What the navigation palette lists: the last Find Usages, or a Go to Definition with
+    /// several candidates.
+    navigation: Option<Arc<NavigationResults>>,
+}
+
+/// Results of a Go to Definition or Find Usages for the navigation palette.
+#[derive(Debug)]
+pub(crate) struct NavigationResults {
+    pub root: PathBuf,
+    /// What was looked up, as the palette's summary row says it.
+    pub summary: String,
+    pub items: Vec<NavigationItem>,
+}
+
+#[derive(Debug)]
+pub(crate) enum NavigationItem {
+    Definition(Definition),
+    Usage(Usage),
+}
+
+/// What a Go to Definition or Find Usages request came to.
+pub(crate) enum NavigationOutcome {
+    /// One declaration: open it.
+    Open { path: PathBuf, position: Position },
+    /// Several declarations, or usages: list them in the navigation palette.
+    Show(NavigationResults),
+    /// Nothing to go to; tell the user why.
+    Nothing(String),
 }
 
 struct Project {
@@ -104,6 +142,7 @@ pub(crate) fn init(ctx: &mut AppContext) {
         CodeIndexModel {
             project: None,
             generation: 0,
+            navigation: None,
         }
     });
 }
@@ -137,6 +176,28 @@ pub(crate) fn init_bindings(ctx: &mut AppContext) {
         .with_group(BindingGroup::Navigation.as_str())
         .with_context_predicate(id!("Workspace") & id!(CODE_INDEX_CONTEXT_FLAG))
         .with_mac_key_binding("ctrl-alt-cmd-o"),
+    ]);
+
+    // JetBrains keys. Warp's code editor binds neither cmd-B nor alt-F7.
+    let in_navigable_editor =
+        id!("LocalCodeEditorView") & id!(CODE_NAVIGATION_CONTEXT_FLAG) & !id!("IMEOpen");
+    ctx.register_editable_bindings([
+        EditableBinding::new(
+            "editor:code_index_go_to_definition",
+            "Go to Definition (Kotlin/Java code index)",
+            LocalCodeEditorAction::CodeIndexNavigate(CodeNavigationKind::Definition),
+        )
+        .with_group(BindingGroup::Navigation.as_str())
+        .with_context_predicate(in_navigable_editor.clone())
+        .with_mac_key_binding("cmd-b"),
+        EditableBinding::new(
+            "editor:code_index_find_usages",
+            "Find Usages (Kotlin/Java code index)",
+            LocalCodeEditorAction::CodeIndexNavigate(CodeNavigationKind::Usages),
+        )
+        .with_group(BindingGroup::Navigation.as_str())
+        .with_context_predicate(in_navigable_editor)
+        .with_mac_key_binding("alt-f7"),
     ]);
 
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
@@ -175,6 +236,150 @@ pub(crate) fn ensure_project(
     CodeIndexModel::handle(ctx).update(ctx, |model, ctx| model.open_project(root, ctx));
 }
 
+/// Makes sure the project holding `file` is indexed, when the current project doesn't hold it:
+/// the enclosing repository, else the outermost directory with Gradle settings.
+pub(crate) fn ensure_project_for_file(file: &Path, ctx: &mut AppContext) {
+    if !ctx.has_singleton_model::<CodeIndexModel>() {
+        return;
+    }
+    let holds_file = CodeIndexModel::as_ref(ctx)
+        .project
+        .as_ref()
+        .is_some_and(|project| file.starts_with(&project.root));
+    if holds_file {
+        return;
+    }
+    let ancestors = || file.ancestors().skip(1);
+    let root = ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .or_else(|| {
+            ancestors()
+                .filter(|dir| {
+                    dir.join("settings.gradle.kts").is_file()
+                        || dir.join("settings.gradle").is_file()
+                })
+                .last()
+        })
+        .map(Path::to_path_buf);
+    ensure_project(root, true, ctx);
+}
+
+/// Resolves `request` against the index on the calling (background) thread.
+pub(crate) fn navigate(handle: &IndexHandle, request: &CodeNavigationRequest) -> NavigationOutcome {
+    let Some(rel_path) = request
+        .path
+        .strip_prefix(&handle.root)
+        .ok()
+        .and_then(|relative| relative.to_str())
+        .map(|relative| relative.replace(std::path::MAIN_SEPARATOR, "/"))
+    else {
+        return NavigationOutcome::Nothing(
+            "Open the file's project folder to navigate its code".to_owned(),
+        );
+    };
+    let Some(language) = Language::of_editable_path(&request.path) else {
+        return NavigationOutcome::Nothing(
+            "Go to Definition works in Kotlin and Java files".to_owned(),
+        );
+    };
+    let file = SourceFile {
+        rel_path: &rel_path,
+        text: &request.text,
+        language,
+    };
+    let position = Position {
+        line: request.line,
+        column: request.column,
+    };
+    let indexing_note = if handle.state == IndexState::Indexing {
+        " (still indexing, results may be incomplete)"
+    } else {
+        ""
+    };
+    let index = handle.index.read();
+    match request.kind {
+        CodeNavigationKind::Definition => {
+            let Some(result) = index.find_definition(&file, position) else {
+                return NavigationOutcome::Nothing("No name at the cursor".to_owned());
+            };
+            let primary: Vec<&Definition> = result.primary().collect();
+            let points_here = primary.iter().all(|definition| {
+                definition.symbol.rel_path == rel_path
+                    && definition.symbol.name_pos.line == request.line
+            });
+            if result.at_declaration && points_here {
+                drop(index);
+                // On a declaration, like the JetBrains IDEs, show where it's used instead.
+                return navigate(
+                    handle,
+                    &CodeNavigationRequest {
+                        kind: CodeNavigationKind::Usages,
+                        ..request.clone()
+                    },
+                );
+            }
+            match primary.as_slice() {
+                [] => NavigationOutcome::Nothing(format!(
+                    "No declaration of {} in the project{indexing_note}",
+                    result.name
+                )),
+                [only] => NavigationOutcome::Open {
+                    path: index.abs_path(&only.symbol.rel_path),
+                    position: only.symbol.name_pos,
+                },
+                several => NavigationOutcome::Show(NavigationResults {
+                    root: handle.root.clone(),
+                    summary: format!(
+                        "{} declarations of {}{}{indexing_note}",
+                        several.len(),
+                        result.name,
+                        if several[0].resolution.is_exact() {
+                            ""
+                        } else {
+                            " matched by name"
+                        }
+                    ),
+                    items: result
+                        .definitions
+                        .into_iter()
+                        .map(NavigationItem::Definition)
+                        .collect(),
+                }),
+            }
+        }
+        CodeNavigationKind::Usages => {
+            let Some(result) = index.find_usages(&file, position, MAX_USAGES, USAGES_THREADS)
+            else {
+                return NavigationOutcome::Nothing("No name at the cursor".to_owned());
+            };
+            if result.targets.is_empty() {
+                return NavigationOutcome::Nothing(format!(
+                    "No declaration of {} in the project{indexing_note}",
+                    result.name
+                ));
+            }
+            let target = result.targets[0].qualified_name();
+            if result.usages.is_empty() {
+                return NavigationOutcome::Nothing(format!("No usages of {target}{indexing_note}"));
+            }
+            let count = result.usages.len();
+            NavigationOutcome::Show(NavigationResults {
+                root: handle.root.clone(),
+                summary: format!(
+                    "{count}{} usage{} of {target}{indexing_note}",
+                    if result.complete { "" } else { "+" },
+                    if count == 1 { "" } else { "s" },
+                ),
+                items: result
+                    .usages
+                    .into_iter()
+                    .map(NavigationItem::Usage)
+                    .collect(),
+            })
+        }
+    }
+}
+
 fn is_indexable_root(root: &Path, require_build_files: bool) -> bool {
     const BUILD_FILES: &[&str] = &[
         "settings.gradle.kts",
@@ -188,6 +393,14 @@ fn is_indexable_root(root: &Path, require_build_files: bool) -> bool {
 }
 
 impl CodeIndexModel {
+    pub(crate) fn navigation_results(&self) -> Option<Arc<NavigationResults>> {
+        self.navigation.clone()
+    }
+
+    pub(crate) fn set_navigation_results(&mut self, results: NavigationResults) {
+        self.navigation = Some(Arc::new(results));
+    }
+
     /// The current project's index, if there is one.
     pub(crate) fn handle_for_search(&self) -> Option<IndexHandle> {
         self.project.as_ref().map(|project| IndexHandle {
@@ -238,6 +451,7 @@ impl CodeIndexModel {
             return;
         };
         self.generation += 1;
+        self.navigation = None;
         project.cancelled.store(true, Ordering::Relaxed);
         if let Some(save) = project.save {
             save.abort();
@@ -282,13 +496,16 @@ impl CodeIndexModel {
                     return;
                 }
                 if let Some(report) = report {
+                    let snapshot = report.loaded_in.map_or_else(
+                        || "no snapshot".to_owned(),
+                        |loaded| format!("snapshot loaded in {} ms", loaded.as_millis()),
+                    );
                     log::info!(
-                        "[Code index] Indexed {} files, {} symbols in {} ms (snapshot loaded in \
-                         {:?} ms, {} files parsed)",
+                        "[Code index] Indexed {} files, {} symbols in {} ms ({snapshot}, {} files \
+                         parsed)",
                         report.files,
                         report.symbols,
                         report.total.as_millis(),
-                        report.loaded_in.map(|loaded| loaded.as_millis()),
                         report.parsed
                     );
                 }

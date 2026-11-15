@@ -187,23 +187,27 @@ silicon Macs only (releases ship arm64 disk images).
   match the release's plist version, so the override only changes what is offered, not what is
   accepted.
 
-## Kotlin/Java code index (Go to Class / Go to Symbol)
+## Kotlin/Java code index (Go to Class / Symbol / Definition, Find Usages)
 
 An in-process declaration index for Kotlin and Java projects, KMP and plain JVM alike: phases 0
-and 1 of [the research report](docs/warpium/research/kotlin-navigation-and-toolchain.md). No
+to 2 of [the research report](docs/warpium/research/kotlin-navigation-and-toolchain.md). No
 Gradle, JVM or language server is involved. Fork-only code lives in `crates/code_index`
 (protoc-free, unit-tested with `cargo test -p code_index`), `app/src/warpium/code_index.rs` (model,
-watcher, snapshots) and `app/src/warpium/code_index_palette.rs` (palette rows).
+watcher, snapshots, navigation requests), `app/src/warpium/code_index_palette.rs` (palette rows)
+and `app/src/warpium/code_navigation.rs` (the editor's request type).
 
 - **What is indexed.** `.kt` and `.java` files under the project root, honoring `.gitignore` (also
   outside git) and skipping hidden and `build/` directories, plus each Gradle module's
   `build/generated/` sources (`R.java`/`BR.java` excluded). Declarations: classes, interfaces,
   objects, companion objects, enums and entries, annotations, records, type aliases, functions
   (with extension receivers), properties (including `val`/`var` constructor parameters),
-  constructors and nested types, with package, file, span, visibility, `expect`/`actual` and the
-  file's imports (for phase 2). Local declarations inside function bodies are left out. The module
-  and source set (`commonMain`, `iosMain`, `main`, `test`, …) come from the path, so test and
-  generated code can rank lower and `expect` declarations link to their `actual`s by qualified name.
+  constructors and nested types, with package, file, span, visibility, `expect`/`actual`, the
+  file's imports and the set of identifiers its code uses (outside comments and strings, for Find
+  Usages). Local declarations inside function bodies are left out. The module and source set
+  (`commonMain`, `iosMain`, `main`, `test`, …) come from the path, so test and generated code can
+  rank lower and `expect` declarations link to their `actual`s by qualified name. Modules named as
+  test fixtures (`core/testing`, `*-test`, `*-testing`, `test-fixtures`, `testFixtures`, …) count as
+  test code.
 - **Search.** Tiers: exact > prefix > camel humps from the first word (`UVM`, `UsViMo` →
   `UserViewModel`) > camel humps from a later word (`VM`) > subsequence. Within a tier, project
   sources rank above tests and generated code, then shorter names. `pkg.Name` narrows by package or
@@ -211,6 +215,31 @@ watcher, snapshots) and `app/src/warpium/code_index_palette.rs` (palette rows).
 - **Palettes.** **Go to Class** (`ctrl-cmd-O`) and **Go to Symbol** (`ctrl-alt-cmd-O`), both
   editable and listed in the command palette. JetBrains' `cmd-O`/`cmd-alt-O` are taken by Warp
   (Files palette, `/open-repo`). Enter opens the declaration in the editor at its name.
+- **Go to Definition** (`cmd-B`, cmd-click, or the editor's context menu) and **Find Usages**
+  (`alt-F7`) in `.kt`, `.kts` and `.java` editors, both editable. The editor sends its text
+  (unsaved edits included) and cursor to the workspace, which resolves it on a background executor
+  (`code_index::navigate`). One declaration opens at its name; several, or usages, are listed in a
+  palette (`QueryFilter::CodeNavigation`) that filters by path or line text. On a declaration's own
+  name, Go to Definition shows its usages instead, as in the JetBrains IDEs. The bindings only
+  apply where the editor's keymap context has `WarpiumCodeNavigation` (navigable file, setting on),
+  and cmd-click is only offered when no language server serves the file.
+- **Definition resolution** (`crates/code_index/src/resolve`). The current file is parsed; names
+  resolve through local variables and parameters, enclosing classes (with companion objects and
+  their declared supertypes), the file, explicit imports (aliases too), the package, star imports
+  and finally every declaration with the name (marked *name only*). `receiver.member` uses the
+  receiver's type when it is written nearby: a declared or constructed type of a local, parameter
+  or property, a class name (static access), `this`, or `new Foo()`. Callable references
+  (`Type::member`) and fully qualified names work. An `expect`/`actual` group resolves to the
+  `actual` of the reference's own source set, else the `expect`, with the others as counterparts.
+  Platform source sets the reference can't see rank last.
+- **Usages** (`crates/code_index/src/usages.rs`). Candidate files are the ones whose identifier set
+  holds the name. A type or top-level declaration counts in files that can see it (same package,
+  import, star import); a member counts in files that name its class (a receiver type or supertype
+  has to be written down for exact resolution). Files that also see or declare another declaration
+  with the name are parsed and each mention resolved; otherwise every mention counts. Usages only
+  matched by name are marked `≈`. At most 400 files are parsed per query and files over 128 KB never
+  are (parsing is most of the cost, about 1 ms per 7 KB); past that, mentions in files naming the
+  class count as approximate.
 - **Project root.** When a Go to palette opens: the tab's pinned Project Explorer root, else the
   repository of the active session, else its directory if that holds Gradle or Maven build files.
   The home directory and `/` are never indexed. One project is held at a time; switching cancels
@@ -221,6 +250,8 @@ watcher, snapshots) and `app/src/warpium/code_index_palette.rs` (palette rows).
   cores, at most 8) that exists only for the build, parsing in batches of 512 files. The palette
   searches on a background executor under a shared read lock. Saves are reparsed off the main
   thread from `repo_metadata` watcher events.
+  Go to Definition and Find Usages index the project holding the file (its git repository, else
+  the outermost directory with Gradle settings) when the current project doesn't.
 - **Snapshot.** `<user cache dir>/dev.milka.Warpium/code-index/<hash of the root>/index.bin`
   (`~/Library/Caches/…` on macOS): a versioned binary format (`FORMAT_VERSION`) with a deduplicated
   string table. Nothing is written inside the project. On open, the snapshot is loaded (the palette
@@ -233,9 +264,12 @@ watcher, snapshots) and `app/src/warpium/code_index_palette.rs` (palette rows).
 ### MCP server for agents
 
 `warpium-code-index` serves the index over MCP (stdio) as a candidate replacement for `ast-index`.
-Tools: `find_class`, `find_symbol` (optional `kind`) and `file_outline`. Results are compact text
-lines with kind, name, package, `file:line` and source set, with `expect`/`actual` counterparts
-listed under each hit. It shares the app's snapshot for the same root and rescans before a call when
+Tools: `find_class`, `find_symbol` (optional `kind`), `file_outline`, `find_definition` and
+`find_usages`. The last two take `path`, a 1-based `line`, and either a 1-based `column` or the
+identifier's `name` on that line (agents usually know the name, not the column). Results are compact
+text lines with kind, name, package, `file:line` and source set, with `expect`/`actual` counterparts
+listed under each hit; usages are `path:line:column` plus the line, `≈` when only the name
+matched. It shares the app's snapshot for the same root and rescans before a call when
 its last scan is more than 2 s old.
 
 ```bash
@@ -245,8 +279,7 @@ claude mcp add code-index -- "$PWD/target/release/warpium-code-index" mcp --root
 target/release/warpium-code-index search --root /path/to/project --types UVM
 ```
 
-Not done yet: shipping the binary in `Warpium.app`, registering it in Warpium's MCP settings, and
-usages/definition tools (phase 2).
+Not done yet: shipping the binary in `Warpium.app` and registering it in Warpium's MCP settings.
 
 ### Benchmark (phase 0)
 
@@ -254,8 +287,10 @@ usages/definition tools (phase 2).
 (nowinandroid, Thunderbird, DuckDuckGo, Signal) at pinned commits into the user cache dir and runs
 `crates/code_index/examples/bench.rs` in release mode. For each root it reports cold full-index time,
 snapshot size, warm start (load, and load plus rescan), p50/p95/max latency of ~100 Go to Class and
-Go to Symbol queries (a fixed list plus names sampled from the corpus), update time after editing a
-file, and peak RSS. A separate process measures the warm start, so its peak RSS is what the index
+Go to Symbol queries (a fixed list plus names sampled from the corpus), Go to Definition latency on
+~550 references sampled from the corpus (names after a dot and capitalized names; the share
+resolved is low where most references are to libraries, which aren't indexed), Find Usages latency
+for 50 sampled classes and functions, update time after editing a file, and peak RSS. A separate process measures the warm start, so its peak RSS is what the index
 keeps resident.
 
 ```bash

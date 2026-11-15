@@ -70,6 +70,10 @@ use crate::code_review::comments::CommentId;
 use crate::menu::{Event, Menu, MenuItem, MenuItemFields};
 use crate::settings::{AISettings, CodeSettings};
 use crate::terminal::TerminalView;
+use crate::warpium::code_navigation::{
+    CODE_NAVIGATION_CONTEXT_FLAG, CodeNavigationKind, CodeNavigationRequest,
+};
+use crate::workspace::WorkspaceAction;
 
 const DROP_SHADOW_COLOR: ColorU = ColorU {
     r: 0,
@@ -200,6 +204,12 @@ pub enum LocalCodeEditorAction {
     FetchAndShowFindReferences {
         lsp_position: lsp::types::Location,
         anchor_offset: CharOffset,
+    },
+    /// Warpium: Go to Definition or Find Usages at the cursor, over the Kotlin/Java code index.
+    CodeIndexNavigate(CodeNavigationKind),
+    /// Warpium: Go to Definition of the name at `offset` (a cmd-click), over the code index.
+    CodeIndexDefinitionAt {
+        offset: CharOffset,
     },
 }
 
@@ -426,6 +436,8 @@ impl LocalCodeEditorView {
                 if *cmd {
                     if me.is_lsp_server_available(ctx) {
                         me.definition_for_hovered_range(*offset, ctx);
+                    } else if me.is_code_index_navigable(ctx) {
+                        me.code_index_link_for_hover(*offset, ctx);
                     }
                 } else {
                     me.editor.update(ctx, |editor, ctx| {
@@ -2124,6 +2136,92 @@ impl LocalCodeEditorView {
         ]
     }
 
+    /// Warpium: whether Go to Definition and Find Usages over the code index apply to this file.
+    #[cfg_attr(target_family = "wasm", allow(unused_variables))]
+    fn is_code_index_navigable(&self, app: &AppContext) -> bool {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.file_path()
+                .is_some_and(crate::warpium::code_navigation::is_navigable_path)
+                && crate::warpium::code_index::is_enabled(app)
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            false
+        }
+    }
+
+    /// Warpium: asks the workspace to resolve the name at `offset`, or at the cursor.
+    fn request_code_index_navigation(
+        &self,
+        kind: CodeNavigationKind,
+        offset: Option<CharOffset>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(path) = self.file_path().map(Path::to_path_buf) else {
+            return;
+        };
+        let editor = self.editor.as_ref(ctx);
+        let position = match offset {
+            Some(offset) => editor.offset_to_lsp_position(offset, ctx),
+            None => editor.cursor_lsp_position(ctx),
+        };
+        let request = CodeNavigationRequest {
+            kind,
+            path,
+            text: editor.text(ctx).into_string().into(),
+            line: position.line as u32,
+            column: position.column as u32,
+        };
+        ctx.dispatch_typed_action(&WorkspaceAction::CodeIndexNavigate(request));
+    }
+
+    /// Warpium: underlines the cmd-hovered name as a link to its definition in the code index.
+    fn code_index_link_for_hover(&mut self, offset: CharOffset, ctx: &mut ViewContext<Self>) {
+        let editor = self.editor.as_ref(ctx);
+        if editor
+            .hovered_symbol_range(ctx)
+            .is_some_and(|range| range.contains(&offset))
+        {
+            return;
+        }
+        let Some(word) = editor.word_range_at_offset(offset, ctx) else {
+            return;
+        };
+        let highlight_range = word.start.saturating_sub(&CharOffset::from(1))
+            ..word.end.saturating_sub(&CharOffset::from(1));
+        let view_id = ctx.view_id();
+        let window_id = ctx.window_id();
+        let link = HoverableLink::new(highlight_range).with_on_click(Box::new(move |app| {
+            app.dispatch_typed_action_for_view(
+                window_id,
+                view_id,
+                &LocalCodeEditorAction::CodeIndexDefinitionAt { offset },
+            );
+        }));
+        self.editor.update(ctx, |editor, ctx| {
+            if editor.set_hovered_symbol_range(Some(link), ctx) {
+                ctx.notify();
+            }
+        });
+    }
+
+    /// Warpium: context menu items for files the code index navigates without a language server.
+    fn code_index_context_menu_items(&self) -> Vec<MenuItem<LocalCodeEditorAction>> {
+        vec![
+            MenuItemFields::new("Go to definition")
+                .with_on_select_action(LocalCodeEditorAction::CodeIndexNavigate(
+                    CodeNavigationKind::Definition,
+                ))
+                .into_item(),
+            MenuItemFields::new("Find usages")
+                .with_on_select_action(LocalCodeEditorAction::CodeIndexNavigate(
+                    CodeNavigationKind::Usages,
+                ))
+                .into_item(),
+        ]
+    }
+
     /// Perform find references at the cursor position and show the references card.
     fn find_references_at_cursor(&mut self, ctx: &mut ViewContext<Self>) {
         if !self.is_lsp_server_available(ctx) {
@@ -2244,6 +2342,14 @@ impl Entity for LocalCodeEditorView {
 impl View for LocalCodeEditorView {
     fn ui_name() -> &'static str {
         "LocalCodeEditorView"
+    }
+
+    fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.is_code_index_navigable(app) {
+            context.set.insert(CODE_NAVIGATION_CONTEXT_FLAG);
+        }
+        context
     }
 
     fn on_focus(&mut self, focus_ctx: &warpui::FocusContext, ctx: &mut ViewContext<Self>) {
@@ -2451,10 +2557,17 @@ impl TypedActionView for LocalCodeEditorView {
                 self.find_references_at_cursor(ctx);
             }
             LocalCodeEditorAction::OpenContextMenu => {
-                // Only show context menu if LSP is available
-                if self.is_lsp_server_available(ctx) {
+                // Only show context menu if LSP (or, for Kotlin and Java, the code index) is
+                // available.
+                let menu_items = if self.is_lsp_server_available(ctx) {
+                    Some(self.context_menu_items())
+                } else if self.is_code_index_navigable(ctx) {
+                    Some(self.code_index_context_menu_items())
+                } else {
+                    None
+                };
+                if let Some(menu_items) = menu_items {
                     self.context_menu_state.is_open = true;
-                    let menu_items = self.context_menu_items();
                     self.context_menu.update(ctx, move |menu, ctx| {
                         menu.set_items(menu_items, ctx);
                         ctx.notify();
@@ -2469,6 +2582,17 @@ impl TypedActionView for LocalCodeEditorView {
                 // Lazily fetch find-references as fallback when at the definition.
                 // This is triggered on cmd-click when go-to-definition has no different location.
                 self.fetch_find_references_and_show(lsp_position.clone(), *anchor_offset, ctx);
+            }
+            LocalCodeEditorAction::CodeIndexNavigate(kind) => {
+                self.context_menu_state.is_open = false;
+                self.request_code_index_navigation(*kind, None, ctx);
+            }
+            LocalCodeEditorAction::CodeIndexDefinitionAt { offset } => {
+                self.request_code_index_navigation(
+                    CodeNavigationKind::Definition,
+                    Some(*offset),
+                    ctx,
+                );
             }
         }
     }

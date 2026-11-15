@@ -11,7 +11,10 @@ fn identifiers(source: &str, language: Language) -> Vec<String> {
 fn skips_comments_and_strings() {
     let source = "val a = b // c\n/* d */ e(\"f g\", 'h')";
 
-    assert_eq!(identifiers(source, Language::Kotlin), vec!["val", "a", "b", "e"]);
+    assert_eq!(
+        identifiers(source, Language::Kotlin),
+        vec!["val", "a", "b", "e"]
+    );
 }
 
 #[test]
@@ -72,7 +75,10 @@ fn escaped_quotes_stay_inside_strings() {
 
 #[test]
 fn number_suffixes_are_not_identifiers() {
-    assert_eq!(identifiers("x = 0xFFL + 1e10f", Language::Kotlin), vec!["x"]);
+    assert_eq!(
+        identifiers("x = 0xFFL + 1e10f", Language::Kotlin),
+        vec!["x"]
+    );
 }
 
 #[test]
@@ -92,7 +98,11 @@ fn offset_of_clamps_columns_past_the_line_end() {
     let source = "ab\ncd";
 
     assert_eq!(
-        offset_of(source, &line_starts(source), Position { line: 0, column: 9 }),
+        offset_of(
+            source,
+            &line_starts(source),
+            Position { line: 0, column: 9 }
+        ),
         Some(2)
     );
 }

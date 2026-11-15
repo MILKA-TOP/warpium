@@ -145,9 +145,16 @@ fn classify_kotlin<'tree>(id: Node<'tree>, source: &[u8]) -> Lookup<'tree> {
                 Lookup::QualifiedType(path)
             }
         }
-        "class_declaration" | "object_declaration" | "type_alias" | "function_declaration"
-        | "variable_declaration" | "class_parameter" | "parameter" | "enum_entry"
-        | "type_parameter" | "catch_block" => Lookup::Declaration,
+        "class_declaration"
+        | "object_declaration"
+        | "type_alias"
+        | "function_declaration"
+        | "variable_declaration"
+        | "class_parameter"
+        | "parameter"
+        | "enum_entry"
+        | "type_parameter"
+        | "catch_block" => Lookup::Declaration,
         "package_header" | "this_expression" | "super_expression" | "label" => Lookup::Nothing,
         "value_argument"
             if id
@@ -203,11 +210,21 @@ fn classify_java<'tree>(id: Node<'tree>, source: &[u8]) -> Lookup<'tree> {
             }
         }
         (
-            "class_declaration" | "interface_declaration" | "enum_declaration"
-            | "record_declaration" | "annotation_type_declaration" | "method_declaration"
-            | "constructor_declaration" | "compact_constructor_declaration" | "variable_declarator"
-            | "formal_parameter" | "catch_formal_parameter" | "enhanced_for_statement"
-            | "enum_constant" | "resource" | "type_parameter",
+            "class_declaration"
+            | "interface_declaration"
+            | "enum_declaration"
+            | "record_declaration"
+            | "annotation_type_declaration"
+            | "method_declaration"
+            | "constructor_declaration"
+            | "compact_constructor_declaration"
+            | "variable_declarator"
+            | "formal_parameter"
+            | "catch_formal_parameter"
+            | "enhanced_for_statement"
+            | "enum_constant"
+            | "resource"
+            | "type_parameter",
             Some("name"),
         )
         | ("lambda_expression", Some("parameters"))
@@ -228,13 +245,15 @@ fn compact(bytes: &[u8]) -> String {
 }
 
 fn is_callee(expression: Node) -> bool {
-    expression
-        .parent()
-        .is_some_and(|parent| parent.kind() == "call_expression" && is_first_named_child(parent, expression))
+    expression.parent().is_some_and(|parent| {
+        parent.kind() == "call_expression" && is_first_named_child(parent, expression)
+    })
 }
 
 fn is_first_named_child(parent: Node, child: Node) -> bool {
-    parent.named_child(0).is_some_and(|first| first.id() == child.id())
+    parent
+        .named_child(0)
+        .is_some_and(|first| first.id() == child.id())
 }
 
 fn ancestor_of_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
@@ -292,7 +311,10 @@ fn named(name: &str, node: Node, source: &[u8]) -> bool {
     identifier_name(node, source) == name
 }
 
-fn variable<'tree>(name_node: Node<'tree>, type_node: Option<TypeNode<'tree>>) -> ScopeResult<'tree> {
+fn variable<'tree>(
+    name_node: Node<'tree>,
+    type_node: Option<TypeNode<'tree>>,
+) -> ScopeResult<'tree> {
     ScopeResult::Found(LocalDecl {
         name: name_node,
         type_node,
@@ -523,7 +545,10 @@ fn java_scope_local<'tree>(
                         })
                         .collect()
                 };
-                if let Some(param_name) = candidates.into_iter().find(|node| named(name, *node, source)) {
+                if let Some(param_name) = candidates
+                    .into_iter()
+                    .find(|node| named(name, *node, source))
+                {
                     let type_node = param_name
                         .parent()
                         .and_then(|parameter| parameter.child_by_field_name("type"))
@@ -534,9 +559,10 @@ fn java_scope_local<'tree>(
             ScopeResult::Continue
         }
         "enhanced_for_statement" => match scope.child_by_field_name("name") {
-            Some(var_name) if named(name, var_name, source) => {
-                variable(var_name, scope.child_by_field_name("type").map(TypeNode::Type))
-            }
+            Some(var_name) if named(name, var_name, source) => variable(
+                var_name,
+                scope.child_by_field_name("type").map(TypeNode::Type),
+            ),
             _ => ScopeResult::Continue,
         },
         "catch_clause" => {
@@ -561,7 +587,10 @@ fn java_scope_local<'tree>(
                 if let Some(var_name) = resource.child_by_field_name("name")
                     && named(name, var_name, source)
                 {
-                    return variable(var_name, resource.child_by_field_name("type").map(TypeNode::Type));
+                    return variable(
+                        var_name,
+                        resource.child_by_field_name("type").map(TypeNode::Type),
+                    );
                 }
             }
             ScopeResult::Continue
@@ -613,16 +642,22 @@ pub(crate) fn enclosing_classes<'tree>(
     while let Some(node) = current {
         let name = match (language, node.kind()) {
             (Language::Kotlin, "class_declaration" | "object_declaration") => {
-                child_of_kind(node, "type_identifier").map(|name| identifier_name(name, source).to_owned())
-            }
-            (Language::Kotlin, "companion_object") => Some(
                 child_of_kind(node, "type_identifier")
-                    .map_or_else(|| "Companion".to_owned(), |name| identifier_name(name, source).to_owned()),
-            ),
+                    .map(|name| identifier_name(name, source).to_owned())
+            }
+            (Language::Kotlin, "companion_object") => {
+                Some(child_of_kind(node, "type_identifier").map_or_else(
+                    || "Companion".to_owned(),
+                    |name| identifier_name(name, source).to_owned(),
+                ))
+            }
             (
                 Language::Java,
-                "class_declaration" | "interface_declaration" | "enum_declaration"
-                | "record_declaration" | "annotation_type_declaration",
+                "class_declaration"
+                | "interface_declaration"
+                | "enum_declaration"
+                | "record_declaration"
+                | "annotation_type_declaration",
             ) => node
                 .child_by_field_name("name")
                 .map(|name| text(name, source).to_owned()),
@@ -701,15 +736,19 @@ pub(crate) fn property_type<'tree>(
             }?;
             named_children(body)
                 .filter(|member| member.kind() == "property_declaration")
-                .find_map(|property| match kotlin_property_local(property, name, source)? {
-                    ScopeResult::Found(local) => local.type_node,
-                    ScopeResult::Continue | ScopeResult::Stop => None,
-                })
+                .find_map(
+                    |property| match kotlin_property_local(property, name, source)? {
+                        ScopeResult::Found(local) => local.type_node,
+                        ScopeResult::Continue | ScopeResult::Stop => None,
+                    },
+                )
         }
         Language::Java => {
             let body = class.child_by_field_name("body")?;
             named_children(body)
-                .filter(|member| matches!(member.kind(), "field_declaration" | "constant_declaration"))
+                .filter(|member| {
+                    matches!(member.kind(), "field_declaration" | "constant_declaration")
+                })
                 .find_map(|field| match java_declarators(field, name, source)? {
                     ScopeResult::Found(local) => local.type_node,
                     ScopeResult::Continue | ScopeResult::Stop => None,
@@ -773,7 +812,10 @@ pub(crate) fn receiver_shape<'tree>(language: Language, node: Node<'tree>) -> Re
             }
         }
         (Language::Java, "field_access") => {
-            match (node.child_by_field_name("object"), node.child_by_field_name("field")) {
+            match (
+                node.child_by_field_name("object"),
+                node.child_by_field_name("field"),
+            ) {
                 (Some(receiver), Some(name)) => Receiver::Member { receiver, name },
                 _ => Receiver::Other,
             }
@@ -782,9 +824,9 @@ pub(crate) fn receiver_shape<'tree>(language: Language, node: Node<'tree>) -> Re
             Some(callee) if callee.kind() == "simple_identifier" => Receiver::Call(callee),
             _ => Receiver::Other,
         },
-        (Language::Java, "object_creation_expression") => {
-            node.child_by_field_name("type").map_or(Receiver::Other, Receiver::New)
-        }
+        (Language::Java, "object_creation_expression") => node
+            .child_by_field_name("type")
+            .map_or(Receiver::Other, Receiver::New),
         (Language::Kotlin, "parenthesized_expression") => node
             .named_child(0)
             .map_or(Receiver::Other, |inner| receiver_shape(language, inner)),
@@ -796,6 +838,11 @@ pub(crate) fn receiver_shape<'tree>(language: Language, node: Node<'tree>) -> Re
 pub(crate) fn dotted_name(node: Node, source: &[u8]) -> Option<String> {
     let text = compact_text(node, source);
     text.split('.')
-        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$'))
+        .all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+        })
         .then_some(text)
 }

@@ -490,8 +490,14 @@ fn ranks_declarations_in_test_fixture_modules_like_tests() {
             .collect::<Vec<_>>(),
         vec![
             ("com.example.data.NewsRepository".to_owned(), Origin::Main),
-            ("com.example.data.OfflineFirstNewsRepository".to_owned(), Origin::Main),
-            ("com.example.data.test.FakeNewsRepository".to_owned(), Origin::Test),
+            (
+                "com.example.data.OfflineFirstNewsRepository".to_owned(),
+                Origin::Main
+            ),
+            (
+                "com.example.data.test.FakeNewsRepository".to_owned(),
+                Origin::Test
+            ),
         ]
     );
 }

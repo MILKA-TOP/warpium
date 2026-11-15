@@ -292,11 +292,20 @@ impl Server {
                 .targets
                 .iter()
                 .map(|target| {
-                    format!("{} ({}:{})", target.qualified_name(), target.rel_path, target.name_pos.line + 1)
+                    format!(
+                        "{} ({}:{})",
+                        target.qualified_name(),
+                        target.rel_path,
+                        target.name_pos.line + 1
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
-            if result.complete { "" } else { " (more not shown)" },
+            if result.complete {
+                ""
+            } else {
+                " (more not shown)"
+            },
         )];
         for usage in &result.usages {
             lines.push(format!(

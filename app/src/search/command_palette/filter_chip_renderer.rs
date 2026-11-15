@@ -117,7 +117,8 @@ impl FilterChipRenderer for QueryFilter {
             | QueryFilter::FullTerminalUseModels
             | QueryFilter::CurrentDirectoryConversations
             | QueryFilter::CodeClasses
-            | QueryFilter::CodeSymbols => appearance
+            | QueryFilter::CodeSymbols
+            | QueryFilter::CodeNavigation => appearance
                 .theme()
                 .main_text_color(appearance.theme().surface_2())
                 .into_solid(),
