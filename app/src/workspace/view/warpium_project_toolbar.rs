@@ -9,6 +9,7 @@ use warpium_project_toolbar::{
     BuiltinAction, ButtonAction, CommandAction, CommandTarget, PERSONAL_TEMPLATE, ShellFamily,
     TEAM_TEMPLATE, ToolbarButton, detect_project, resolve_cwd, shell_line, team_config_path,
 };
+use warpui::elements::{Align, ChildView, Element, Shrinkable};
 use warpui::{AppContext, SingletonEntity as _, TypedActionView as _, ViewContext, ViewHandle};
 
 use super::Workspace;
@@ -28,6 +29,9 @@ use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::WorkspaceAction;
 use crate::workspace::util::TerminalSessionFallbackBehavior;
 
+/// The toolbar's flex factor in the title bar, relative to each tab's 1.
+const PROJECT_TOOLBAR_FLEX: f32 = 1.;
+
 impl Workspace {
     pub(super) fn build_project_toolbar_view(
         ctx: &mut ViewContext<Self>,
@@ -37,6 +41,19 @@ impl Workspace {
             me.handle_project_toolbar_event(event, ctx);
         });
         toolbar
+    }
+
+    /// The project toolbar's place in the title bar: it takes a share of the width the tabs leave
+    /// and keeps to the right of it, so its buttons collapse into the overflow menu as the title
+    /// bar fills up.
+    pub(super) fn render_project_toolbar_slot(&self) -> Box<dyn Element> {
+        Shrinkable::new(
+            PROJECT_TOOLBAR_FLEX,
+            Align::new(ChildView::new(&self.project_toolbar).finish())
+                .right()
+                .finish(),
+        )
+        .finish()
     }
 
     /// Points the toolbar at the active tab's project.

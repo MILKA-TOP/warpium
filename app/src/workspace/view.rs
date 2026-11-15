@@ -21423,9 +21423,10 @@ impl Workspace {
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(tab_bar.finish())
-                .with_child(search_bar_slot)
-                .with_child(right_controls.finish())
-                .finish();
+                .with_child(search_bar_slot);
+            #[cfg(not(target_family = "wasm"))]
+            let tab_bar = tab_bar.with_child(self.render_project_toolbar_slot());
+            let tab_bar = tab_bar.with_child(right_controls.finish()).finish();
 
             return EventHandler::new(
                 Container::new(tab_bar)
@@ -21564,6 +21565,8 @@ impl Workspace {
         // Trailing spacer fills only the leftover width. When groups are collapsed
         // the freed flex is distributed accross the remaining flex items in the tab bar.
         tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
+        #[cfg(not(target_family = "wasm"))]
+        tab_bar.add_child(self.render_project_toolbar_slot());
 
         self.add_configurable_right_side_tab_bar_controls(
             &mut tab_bar,
@@ -21714,10 +21717,6 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) {
-        // Warpium: the project toolbar sits first among the top-right controls.
-        #[cfg(not(target_family = "wasm"))]
-        target.add_child(ChildView::new(&self.project_toolbar).finish());
-
         if let Some(update_pill) = self.render_tab_overflow_menu(ctx, appearance) {
             target.add_child(
                 Container::new(update_pill)

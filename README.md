@@ -60,9 +60,18 @@ You need macOS with Xcode 26, Homebrew and `rustup`.
 
 To build a release `.dmg` like the published ones, see the [developer guide](WARPIUM.md#local-release-build).
 
+## Project toolbar
+
+Buttons for your project's everyday commands sit in the top-right corner of the window, like the toolbar in JetBrains IDEs, next to a run-configurations dropdown and a **Run** button. When the window gets narrow, the buttons that don't fit move into a **…** menu.
+
+- Run **Edit project toolbar** from the command palette to create `.warpium/toolbar.toml` in the project; commit it to share the buttons with your team. The file starts with commented examples.
+- Run **Edit personal toolbar overrides** to add, change or hide buttons just for yourself. These are kept in `~/.warp-oss/projects/`, never in the project.
+- A button can run a command in the current tab, a new tab or a split, run a saved workflow, open a launch configuration or tab config, open a link, or trigger a Warpium action such as opening the Project Explorer.
+- Commands from a committed `toolbar.toml` only run after you confirm that you trust it. Warpium lists them first, and asks again whenever the file changes. Your personal buttons never ask.
+- Turn the toolbar off in **Settings → Features → Warpium**, from the command palette, or with `warpium.project_toolbar = false` in `settings.toml`.
+
 ## Planned features
 
-- **Toolbar with custom command buttons.** Your own icons at the top of the window that run commands you choose, like the toolbar in JetBrains IDEs.
 - **Git log.** A JetBrains-style git log and graph with branches, commits and sorting.
 - **Upstream updates.** A notification when a new Warp version is available, so it can be merged into Warpium.
 - **Images for agents in Docker.** Paste images into CLI agents such as Claude Code that run inside Docker containers.

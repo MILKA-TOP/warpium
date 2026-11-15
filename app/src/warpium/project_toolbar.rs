@@ -4,14 +4,16 @@
 //! `.warpium/toolbar.toml` merged with the user's overrides in
 //! `~/.warp-oss/projects/<project-id>/toolbar.toml`. Buttons marked `run_config` and the
 //! project's launch configurations go in a run-configurations dropdown with a run button; the
-//! rest are icon buttons, with an overflow menu past
-//! [`warpium_project_toolbar::MAX_INLINE_BUTTONS`]. The config format,
-//! merge, detection and trust rules live in the `warpium_project_toolbar` crate; this module
-//! supplies the view, the file watching and the persisted state. The workspace runs the actions.
+//! rest are icon buttons, and those that don't fit the title bar go in an overflow menu. The
+//! config format, merge, detection and trust rules live in the `warpium_project_toolbar` crate;
+//! this module supplies the view, the file watching and the persisted state. The workspace runs
+//! the actions.
 
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
@@ -23,7 +25,7 @@ use warpium_project_toolbar::{
     ButtonIcon, ConfigError, ConfigSource, ProjectContext, RunConfigItem, RunConfigKind,
     ToolbarButton, ToolbarUserState, TrustListing, content_hash, detect_project, merge,
     needs_trust, parse_config, personal_config_path, run_config_items, selected_run_config,
-    team_config_path, toolbar_strip, trust_listings,
+    team_config_path, toolbar_buttons, trust_listings,
 };
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
@@ -45,6 +47,7 @@ use warpui_extras::user_preferences::UserPreferences as _;
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
 use super::is_warpium_channel;
+use super::project_toolbar_row::ToolbarRow;
 use super::sync_settings::{
     PROJECT_TOOLBAR_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent,
 };
@@ -303,6 +306,8 @@ pub(crate) struct ProjectToolbarView {
     /// Per button id, kept across reloads.
     button_mouse_states: HashMap<String, MouseStateHandle>,
     mouse_states: MouseStates,
+    /// How many toolbar buttons fit inline at the last layout; the overflow menu lists the rest.
+    visible_buttons: Arc<AtomicUsize>,
 }
 
 impl ProjectToolbarView {
@@ -352,6 +357,7 @@ impl ProjectToolbarView {
             trust_prompt: None,
             button_mouse_states: HashMap::new(),
             mouse_states: MouseStates::default(),
+            visible_buttons: Arc::new(AtomicUsize::new(usize::MAX)),
         }
     }
 
@@ -618,9 +624,9 @@ impl ProjectToolbarView {
     }
 
     fn overflow_menu_items(&self) -> Vec<MenuItem<ProjectToolbarAction>> {
-        let mut items = toolbar_strip(self.buttons())
-            .overflow
+        let mut items = toolbar_buttons(self.buttons())
             .into_iter()
+            .skip(self.visible_buttons.load(Ordering::Relaxed))
             .map(|button| {
                 MenuItem::Item(
                     MenuItemFields::new(button.display_label())
@@ -754,7 +760,7 @@ impl ProjectToolbarView {
         .finish()
     }
 
-    fn render_overflow_button(&self, count: usize, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_overflow_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let color = theme.sub_text_color(theme.background());
         let ui_builder = appearance.ui_builder().clone();
@@ -766,7 +772,7 @@ impl ProjectToolbarView {
         )
         .with_tooltip(move || {
             ui_builder
-                .tool_tip(format!("{count} more toolbar buttons"))
+                .tool_tip("More toolbar buttons".to_owned())
                 .build()
                 .finish()
         });
@@ -1217,33 +1223,30 @@ impl View for ProjectToolbarView {
             return Empty::new().finish();
         };
         let appearance = Appearance::as_ref(app);
-        let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        match loaded {
-            LoadedConfig::Invalid { error, .. } => {
-                row.add_child(self.render_invalid_config(error, appearance));
-            }
+        let row = match loaded {
+            LoadedConfig::Invalid { error, .. } => self.render_invalid_config(error, appearance),
             LoadedConfig::Buttons { buttons, .. } => {
-                let strip = toolbar_strip(buttons);
-                for button in &strip.inline {
-                    row.add_child(
+                let toolbar_buttons = toolbar_buttons(buttons);
+                if toolbar_buttons.is_empty() && self.run_configs.is_empty() {
+                    return Empty::new().finish();
+                }
+                let rendered_buttons = toolbar_buttons
+                    .iter()
+                    .map(|button| {
                         Container::new(self.render_button(button, root, appearance, app))
                             .with_margin_left(2.)
-                            .finish(),
-                    );
-                }
-                if !strip.overflow.is_empty() {
-                    row.add_child(
-                        Container::new(
-                            self.render_overflow_button(strip.overflow.len(), appearance),
-                        )
-                        .with_margin_left(2.)
-                        .finish(),
-                    );
-                }
-                if !self.run_configs.is_empty() {
-                    if !strip.inline.is_empty() {
+                            .finish()
+                    })
+                    .collect::<Vec<_>>();
+                let overflow_button = Container::new(self.render_overflow_button(appearance))
+                    .with_margin_left(2.)
+                    .finish();
+                let run_widget = (!self.run_configs.is_empty()).then(|| {
+                    let mut run_widget =
+                        Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+                    if !toolbar_buttons.is_empty() {
                         let theme = appearance.theme();
-                        row.add_child(
+                        run_widget.add_child(
                             Container::new(
                                 ConstrainedBox::new(
                                     Rect::new().with_background(theme.outline()).finish(),
@@ -1257,19 +1260,21 @@ impl View for ProjectToolbarView {
                             .finish(),
                         );
                     }
-                    row.add_child(self.render_run_widget(appearance, app));
-                }
-                if strip.inline.is_empty()
-                    && strip.overflow.is_empty()
-                    && self.run_configs.is_empty()
-                {
-                    return Empty::new().finish();
-                }
+                    run_widget.add_child(self.render_run_widget(appearance, app));
+                    run_widget.finish()
+                });
+                ToolbarRow::new(
+                    rendered_buttons,
+                    overflow_button,
+                    run_widget,
+                    self.visible_buttons.clone(),
+                )
+                .finish()
             }
-        }
+        };
 
         let mut stack = Stack::new();
-        stack.add_child(row.finish());
+        stack.add_child(row);
         let positioning = OffsetPositioning::offset_from_parent(
             vec2f(0., 6.),
             ParentOffsetBounds::WindowByPosition,

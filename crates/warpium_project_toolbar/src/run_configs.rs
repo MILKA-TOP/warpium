@@ -3,9 +3,6 @@
 
 use crate::config::{ButtonAction, ToolbarButton};
 
-/// Inline toolbar buttons before the rest move to the overflow menu.
-pub const MAX_INLINE_BUTTONS: usize = 5;
-
 /// What a run-configurations entry runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunConfigKind {
@@ -66,27 +63,53 @@ pub fn selected_run_config<'a>(
         .or_else(|| items.first())
 }
 
-/// The buttons shown on the toolbar itself.
-#[derive(Debug, PartialEq, Eq)]
-pub struct ToolbarStrip<'a> {
-    pub inline: Vec<&'a ToolbarButton>,
-    pub overflow: Vec<&'a ToolbarButton>,
+/// The buttons shown on the toolbar itself, in order: those not in the run-configurations
+/// dropdown.
+pub fn toolbar_buttons(buttons: &[ToolbarButton]) -> Vec<&ToolbarButton> {
+    buttons.iter().filter(|button| !button.run_config).collect()
 }
 
-/// Splits the toolbar buttons (those not in the run-configurations dropdown) into the inline
-/// ones and the overflow menu. When the overflow menu would hold a single button, that button is
-/// shown inline instead, since the menu button would take its place anyway.
-pub fn toolbar_strip(buttons: &[ToolbarButton]) -> ToolbarStrip<'_> {
-    let mut inline = buttons
+/// How the toolbar buttons fit in the space the title bar leaves for the toolbar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InlineFit {
+    /// How many leading buttons are shown inline; the rest go to the overflow menu.
+    pub visible: usize,
+    /// Whether the overflow menu button is shown.
+    pub overflow: bool,
+}
+
+/// Decides how many toolbar buttons fit in `available` width, given each button's width, the
+/// overflow menu button's width and the width of what always follows the buttons (the
+/// run-configurations widget). When every button fits there is no overflow menu; otherwise as
+/// many leading buttons as fit next to the overflow menu button stay inline, in order.
+pub fn fit_inline_buttons(
+    button_widths: &[f32],
+    overflow_width: f32,
+    trailing_width: f32,
+    available: f32,
+) -> InlineFit {
+    // Layout widths are fractional; don't collapse a button over rounding noise.
+    const TOLERANCE: f32 = 0.5;
+    let all = button_widths.iter().sum::<f32>() + trailing_width;
+    if button_widths.is_empty() || all <= available + TOLERANCE {
+        return InlineFit {
+            visible: button_widths.len(),
+            overflow: false,
+        };
+    }
+    let budget = available - trailing_width - overflow_width + TOLERANCE;
+    let mut used = 0.;
+    let visible = button_widths
         .iter()
-        .filter(|button| !button.run_config)
-        .collect::<Vec<_>>();
-    let overflow = if inline.len() > MAX_INLINE_BUTTONS + 1 {
-        inline.split_off(MAX_INLINE_BUTTONS)
-    } else {
-        Vec::new()
-    };
-    ToolbarStrip { inline, overflow }
+        .take_while(|width| {
+            used += **width;
+            used <= budget
+        })
+        .count();
+    InlineFit {
+        visible,
+        overflow: true,
+    }
 }
 
 #[cfg(test)]

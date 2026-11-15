@@ -6,28 +6,6 @@ fn buttons(text: &str) -> Vec<ToolbarButton> {
     merge(Some(&config), None).unwrap()
 }
 
-fn url_buttons(count: usize) -> Vec<ToolbarButton> {
-    let text = (0..count)
-        .map(|index| format!("[[button]]\nid = \"b{index}\"\nurl = \"https://x/{index}\"\n"))
-        .collect::<String>();
-    buttons(&text)
-}
-
-fn strip_ids(strip: &ToolbarStrip<'_>) -> (Vec<String>, Vec<String>) {
-    (
-        strip
-            .inline
-            .iter()
-            .map(|button| button.id.clone())
-            .collect(),
-        strip
-            .overflow
-            .iter()
-            .map(|button| button.id.clone())
-            .collect(),
-    )
-}
-
 #[test]
 fn run_config_buttons_come_first_then_project_launch_configs() {
     let buttons = buttons(
@@ -102,27 +80,114 @@ fn run_config_buttons_are_not_on_the_toolbar() {
         "[[button]]\nid = \"a\"\ncommand = \"a\"\nrun_config = true\n[[button]]\nid = \"b\"\nurl = \"https://b\"\n",
     );
 
-    let strip = toolbar_strip(&buttons);
+    let ids = toolbar_buttons(&buttons)
+        .into_iter()
+        .map(|button| button.id.as_str())
+        .collect::<Vec<_>>();
 
-    assert_eq!(strip_ids(&strip), (vec!["b".to_owned()], vec![]));
+    assert_eq!(ids, vec!["b"]);
 }
 
 #[test]
-fn up_to_one_more_than_the_limit_stays_inline() {
-    let buttons = url_buttons(MAX_INLINE_BUTTONS + 1);
+fn every_button_stays_inline_when_all_fit() {
+    let fit = fit_inline_buttons(&[26., 26., 60.], 26., 100., 212.);
 
-    let strip = toolbar_strip(&buttons);
-
-    assert_eq!(strip.inline.len(), MAX_INLINE_BUTTONS + 1);
-    assert!(strip.overflow.is_empty());
+    assert_eq!(
+        fit,
+        InlineFit {
+            visible: 3,
+            overflow: false
+        }
+    );
 }
 
 #[test]
-fn buttons_past_the_limit_move_to_the_overflow_menu_in_order() {
-    let buttons = url_buttons(MAX_INLINE_BUTTONS + 3);
+fn buttons_that_do_not_fit_move_to_the_overflow_menu() {
+    let fit = fit_inline_buttons(&[26., 26., 26., 26.], 26., 100., 200.);
 
-    let (inline, overflow) = strip_ids(&toolbar_strip(&buttons));
+    assert_eq!(
+        fit,
+        InlineFit {
+            visible: 2,
+            overflow: true
+        }
+    );
+}
 
-    assert_eq!(inline, vec!["b0", "b1", "b2", "b3", "b4"]);
-    assert_eq!(overflow, vec!["b5", "b6", "b7"]);
+#[test]
+fn last_button_moves_to_the_overflow_menu_when_it_is_wider_than_the_menu_button() {
+    let fit = fit_inline_buttons(&[26., 26., 80.], 26., 0., 120.);
+
+    assert_eq!(
+        fit,
+        InlineFit {
+            visible: 2,
+            overflow: true
+        }
+    );
+}
+
+#[test]
+fn a_wide_button_hides_the_narrow_ones_after_it_to_keep_the_order() {
+    let fit = fit_inline_buttons(&[26., 200., 26.], 26., 0., 100.);
+
+    assert_eq!(
+        fit,
+        InlineFit {
+            visible: 1,
+            overflow: true
+        }
+    );
+}
+
+#[test]
+fn no_room_at_all_leaves_only_the_overflow_menu() {
+    let fit = fit_inline_buttons(&[26., 26.], 26., 100., 110.);
+
+    assert_eq!(
+        fit,
+        InlineFit {
+            visible: 0,
+            overflow: true
+        }
+    );
+}
+
+#[test]
+fn rounding_noise_does_not_collapse_a_button() {
+    let fit = fit_inline_buttons(&[26.2, 26.2], 26., 0., 52.);
+
+    assert_eq!(
+        fit,
+        InlineFit {
+            visible: 2,
+            overflow: false
+        }
+    );
+}
+
+#[test]
+fn unbounded_space_shows_every_button() {
+    let fit = fit_inline_buttons(&[26.; 12], 26., 100., f32::INFINITY);
+
+    assert_eq!(
+        fit,
+        InlineFit {
+            visible: 12,
+            overflow: false
+        }
+    );
+}
+
+#[test]
+fn no_buttons_needs_no_overflow_menu() {
+    let fit = fit_inline_buttons(&[], 26., 100., 50.);
+
+    assert_eq!(
+        fit,
+        InlineFit {
+            visible: 0,
+            overflow: false
+        }
+    );
 }

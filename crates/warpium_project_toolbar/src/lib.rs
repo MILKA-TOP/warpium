@@ -25,8 +25,8 @@ pub use project::{
     personal_config_path, project_id, team_config_path,
 };
 pub use run_configs::{
-    MAX_INLINE_BUTTONS, RunConfigItem, RunConfigKind, ToolbarStrip, run_config_items,
-    selected_run_config, toolbar_strip,
+    InlineFit, RunConfigItem, RunConfigKind, fit_inline_buttons, run_config_items,
+    selected_run_config, toolbar_buttons,
 };
 pub use template::{PERSONAL_TEMPLATE, TEAM_TEMPLATE};
 pub use trust::{ToolbarUserState, TrustListing, content_hash, needs_trust, trust_listings};

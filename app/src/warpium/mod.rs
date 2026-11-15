@@ -3,6 +3,8 @@
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod project_toolbar;
 #[cfg(not(target_family = "wasm"))]
+mod project_toolbar_row;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod self_update;
 pub(crate) mod sync_settings;
 #[cfg(not(target_family = "wasm"))]

@@ -187,6 +187,45 @@ silicon Macs only (releases ship arm64 disk images).
   match the release's plist version, so the override only changes what is offered, not what is
   accepted.
 
+## Project toolbar
+
+A JetBrains-style toolbar in the top-right corner of the title bar, for the active tab's project.
+Fork-only code lives in `crates/warpium_project_toolbar` (protoc-free, unit-tested with
+`cargo test -p warpium_project_toolbar`: the config format, the override merge, project
+detection, trust bookkeeping, run-configuration entries and the overflow fit),
+`app/src/warpium/project_toolbar.rs` (the view, file watching, persisted state),
+`app/src/warpium/project_toolbar_row.rs` (the element that moves buttons into the overflow
+menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions) and
+`app/src/pane_group/warpium_project_toolbar.rs` (splits).
+
+- **Project.** First match wins: the tab's pinned Project Explorer root, the nearest ancestor of
+  the local session's working directory with a `.warpium/` directory, then its git repository
+  (a `.git` file counts, for worktrees). Remote sessions have no project.
+- **Config.** The team config is `<root>/.warpium/toolbar.toml` (`[[button]]` entries with an
+  `id` and one of `command`, `workflow`, `launch_config`, `tab_config`, `url` or `action`; see
+  `TEAM_TEMPLATE` in `crates/warpium_project_toolbar/src/template.rs`). Personal overrides are
+  `~/.warp-oss/projects/<folder-name>-<hash of the root path>/toolbar.toml`, merged by `id`: same
+  id overrides the fields it sets, `hidden = true` removes the button, a new id adds one. Both are
+  watched and reloaded on change; an invalid file shows a warning button that opens it.
+  `action` ids are the parameterless UI actions of the `warpctrl` catalog.
+- **Layout.** Buttons with `run_config = true` and the launch configurations with a pane inside
+  the project go in the run-configurations dropdown, with a run button; the selection is
+  remembered per project. The other buttons sit in a flexible title-bar slot (a share of the
+  width the tabs leave, like one more tab); the ones that don't fit move, in order, into the
+  overflow menu.
+- **Trust.** Commands whose action comes from the team file run only after the user trusts that
+  exact file version (its SHA-256). The prompt lists every team command with its target, `cwd` and
+  `env`, and comes back whenever the file changes. Personal commands and non-command actions
+  never ask. Trust and run-configuration selections are kept in private preferences under
+  `WarpiumProjectToolbarState`, never in the project.
+- **Running a command.** `current` types it into the active session wrapped so that `cwd` and
+  `env` don't leak into that session (a subshell in POSIX shells, `pushd`/`begin` in fish, a
+  script block in PowerShell); a busy or remote session falls back to a new tab. `new_tab`,
+  `split_right` and `split_down` start a new session in `cwd` with `env` set.
+- **Setting:** `warpium.project_toolbar` (default on), in Settings → Features → Warpium and as
+  "Enable/Disable project toolbar" in the command palette, next to "Edit project toolbar" and
+  "Edit personal toolbar overrides". OSS channel only.
+
 ## Versioning
 
 A Warpium version is the upstream Warp release it is based on plus a fork counter as one
