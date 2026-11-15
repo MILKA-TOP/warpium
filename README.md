@@ -87,6 +87,10 @@ Run **Open Logcat** from the command palette to open a live log of your Android 
 - Warpium finds the Android SDK the way Gradle does (`local.properties`, `ANDROID_HOME`, then `~/Library/Android/sdk`) and talks to the adb server directly. adb is only contacted in Android projects, or once you open Logcat.
 - Turn the Android tools off from the command palette, or with `warpium.android = false` in `settings.toml`.
 
+### Let your AI agent read the logs
+
+Coding agents can read your app's Logcat and crashes too, so they can check their own fixes: run **Install MCP servers for AI agents** from the command palette (or click **Install** in Settings → Features → Warpium). Warpium adds its Logcat and Kotlin/Java code index servers to Claude Code, Codex and Kimi Code on your Mac, in your personal (not committed) settings, or to `.arc/private/` if the project uses arc. Agents can then list devices, read recent logs of your app, get crashes with their stack traces pointing at your files, and wait for a log line after restarting the app. Logs stay in memory and are limited to your app unless the agent explicitly asks for everything. For Warp's own agent, turn on **Logcat MCP server for Warp's agent** in the same place. **Uninstall MCP servers for AI agents** removes them again.
+
 ## Planned features
 
 - **Git log.** A JetBrains-style git log and graph with branches, commits and sorting.

@@ -67,12 +67,16 @@ fn replaces_a_stale_entry() {
     let (changes, text) = set(Some(existing));
 
     assert_eq!(changes, vec![Change::Updated]);
-    assert_eq!(parsed(&text.unwrap())["mcpServers"]["warpium-logcat"], entry());
+    assert_eq!(
+        parsed(&text.unwrap())["mcpServers"]["warpium-logcat"],
+        entry()
+    );
 }
 
 #[test]
 fn removes_only_the_named_servers() {
-    let existing = r#"{"mcpServers": {"github": {"command": "gh-mcp"}, "warpium-logcat": {"command": "x"}}}"#;
+    let existing =
+        r#"{"mcpServers": {"github": {"command": "gh-mcp"}, "warpium-logcat": {"command": "x"}}}"#;
 
     let (changes, text) = update_servers(
         Some(existing),
@@ -144,7 +148,10 @@ fn claude_local_scope_goes_under_the_project_and_keeps_everything_else() {
         config["projects"]["/work/app"]["mcpServers"]["warpium-logcat"],
         entry()
     );
-    assert_eq!(config["projects"]["/work/other"], json!({ "mcpServers": {} }));
+    assert_eq!(
+        config["projects"]["/work/other"],
+        json!({ "mcpServers": {} })
+    );
     assert!(config.get("mcpServers").is_none());
 }
 

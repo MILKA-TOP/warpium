@@ -101,7 +101,10 @@ pub fn update_servers(
 /// The value after `flag` (`--root`) in server `name`'s `args`, if it has one.
 pub fn server_arg(existing: &str, name: &str, flag: &str) -> Option<PathBuf> {
     let mut config = parse_config(Some(existing)).ok()?;
-    let args = servers_map(&mut config).get(name)?.get("args")?.as_array()?;
+    let args = servers_map(&mut config)
+        .get(name)?
+        .get("args")?
+        .as_array()?;
     let position = args.iter().position(|arg| arg == flag)?;
     args.get(position + 1)?.as_str().map(PathBuf::from)
 }

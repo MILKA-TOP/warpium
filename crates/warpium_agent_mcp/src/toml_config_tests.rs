@@ -32,7 +32,8 @@ fn adds_a_server_table_to_an_empty_config() {
 
 #[test]
 fn keeps_comments_settings_and_other_servers() {
-    let existing = "# my settings\nmodel = \"o3\"\n\n[mcp_servers.github]\ncommand = \"gh-mcp\" # keep\n";
+    let existing =
+        "# my settings\nmodel = \"o3\"\n\n[mcp_servers.github]\ncommand = \"gh-mcp\" # keep\n";
 
     let (_, text) = set(Some(existing), "/bin/warpium-logcat");
 
@@ -75,7 +76,10 @@ fn removes_only_the_named_server() {
     .unwrap();
 
     assert_eq!(changes, vec![Change::Removed, Change::Absent]);
-    assert_eq!(text.unwrap(), "[mcp_servers.github]\ncommand = \"gh-mcp\"\n");
+    assert_eq!(
+        text.unwrap(),
+        "[mcp_servers.github]\ncommand = \"gh-mcp\"\n"
+    );
 }
 
 #[test]
@@ -96,5 +100,7 @@ fn leaves_an_unreadable_config_alone() {
     };
 
     assert!(update_codex_servers(Some("model = "), &[("warpium-logcat", server())]).is_err());
-    assert!(update_codex_servers(Some("mcp_servers = 1\n"), &[("warpium-logcat", server())]).is_err());
+    assert!(
+        update_codex_servers(Some("mcp_servers = 1\n"), &[("warpium-logcat", server())]).is_err()
+    );
 }

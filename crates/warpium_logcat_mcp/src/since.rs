@@ -86,7 +86,10 @@ fn parse_timestamp(text: &str, now: DateTime<Local>) -> Option<LogTime> {
             Some(date.and_time(time))
         })?;
     let local = Local.from_local_datetime(&naive).earliest()?;
-    Some(to_log_time(local.timestamp(), local.timestamp_subsec_nanos()))
+    Some(to_log_time(
+        local.timestamp(),
+        local.timestamp_subsec_nanos(),
+    ))
 }
 
 fn to_log_time(sec: i64, nsec: u32) -> LogTime {

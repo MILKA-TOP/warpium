@@ -194,7 +194,11 @@ impl Capture {
     }
 
     /// Waits up to `timeout` for new entries or the stream's end.
-    pub fn wait<'a>(&self, guard: MutexGuard<'a, State>, timeout: Duration) -> MutexGuard<'a, State> {
+    pub fn wait<'a>(
+        &self,
+        guard: MutexGuard<'a, State>,
+        timeout: Duration,
+    ) -> MutexGuard<'a, State> {
         match self.shared.changed.wait_timeout(guard, timeout) {
             Ok((guard, _)) => guard,
             Err(err) => err.into_inner().0,

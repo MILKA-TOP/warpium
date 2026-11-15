@@ -321,7 +321,8 @@ claude mcp add code-index -- "$PWD/target/release/warpium-code-index" mcp --root
 target/release/warpium-code-index search --root /path/to/project --types UVM
 ```
 
-Not done yet: shipping the binary in `Warpium.app` and registering it in Warpium's MCP settings.
+The binary ships in `Warpium.app/Contents/MacOS/` and "Install MCP servers for AI agents" registers
+it with Claude Code, Codex, Kimi Code or arc (see [MCP servers for coding agents](#mcp-servers-for-coding-agents)).
 
 ### Benchmark (phase 0)
 
@@ -443,6 +444,80 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
 - **Command palette:** "Open Logcat", "Select Android device", "Launch Android Virtual Device (AVD)"
   (both open the pane's device menu) and "Enable/Disable Android tools (devices, logcat, run)",
   which toggles `warpium.android` (default on, OSS channel only).
+
+## MCP servers for coding agents
+
+Warpium ships two stdio MCP servers next to its executable (`Warpium.app/Contents/MacOS/`, built by
+`script/macos/bundle` for the `oss` channel and checked by the macOS CI job): `warpium-code-index`
+(above) and `warpium-logcat`, which lets an agent read the device logs of the app it is fixing.
+
+### `warpium-logcat`
+
+Crate `crates/warpium_logcat_mcp` (protoc-free; `cargo test -p warpium_logcat_mcp`), reusing
+`warpium_android`'s adb client, `LogBuffer` and stack-frame parsing and `code_index` for frames.
+
+```text
+warpium-logcat mcp [--root DIR] [--adb PATH]
+```
+
+`--root` is the Android project (stack-frame resolution, SDK lookup through `local.properties`);
+without it the current directory is used when it is a Gradle build. `ANDROID_SERIAL` picks the
+default device, `ANDROID_ADB_SERVER_PORT` the adb server.
+
+- **Capture.** Started lazily per device on the first call that needs it: a background logcat
+  stream into a 100k-entry in-memory ring (`LogBuffer`), seeded with the device's recent backlog,
+  so `since` queries work. Reconnects don't repeat the replayed backlog. Package→pid tracking
+  follows restarts (`ps` once, then process-start lines).
+- **Tools.** `list_devices` (serial, kind, state, model, API); `get_logs` (device, package,
+  `min_level`, `tag` with `-Tag` excludes, `text` or `regex`, `since` as `2m`/`90s`/a timestamp/
+  `mark`, `limit` default 200, at most 2000; newest last, with a `truncated` flag); `get_crashes`
+  (FATAL EXCEPTION, ANR and native crash blocks with their stack traces, project frames resolved to
+  `path:line` through the code index); `wait_for_log` (blocks up to `timeout_s`, at most 120 s,
+  for a matching line that arrives after the call, or since `since`; returns it with context);
+  `clear_logs`, which only sets a mark (`since: "mark"` and the default of later calls), never
+  `logcat -c`.
+- **Privacy.** Log queries need `package` unless `all_packages: true` is passed; messages and
+  output are capped (8 KiB per line, 200 KiB per result); nothing is written to disk.
+
+### Warp's agent: `warpium.logcat_mcp`
+
+Setting `warpium.logcat_mcp` (default off, OSS channel only; Settings → Features → Warpium, or
+"Enable/Disable Logcat MCP server for Warp's agent" in the palette). While on, `app/src/warpium/agent_mcp.rs`
+keeps a `warpium-logcat` entry in Warp's global MCP config (`~/.warp-oss/.mcp.json`) pointing at
+the bundled binary with `--root` of the project toolbar's project at the time it was toggled
+(kept when no project is open); turning it off removes the entry. Other servers in the file are
+never touched.
+
+### Installing into other agents
+
+"Install MCP servers for AI agents (Logcat, code index)" (palette, or **Install** next to the
+setting) writes both servers, user-triggered only; "Uninstall …" removes them. The logic is
+generic over a list of `{name, command, args}` servers in `crates/warpium_agent_mcp`
+(`cargo test -p warpium_agent_mcp`):
+
+- **arc project** (the project root has `.arc/`): only `<root>/.arc/private/mcp.json`
+  (`{"mcpServers": …}`), arc's git-ignored private layer, where machine-specific absolute paths
+  belong (arc warns about literal values in committed layers). arc reads it when it starts an
+  agent, so agents launched through `arc` pick the servers up on their next run; harness folders
+  (`.claude/`, `.kimi-code/`, Codex config) are left to arc.
+- **Otherwise**, each agent found (CLI on `PATH` or the usual install dirs, or its config dir):
+  Claude Code in the project's local scope (`projects.<root>.mcpServers` in `~/.claude.json`, via
+  `claude mcp add/remove --scope local` when the CLI is found), user scope without a project;
+  Codex `[mcp_servers.<name>]` in `$CODEX_HOME/config.toml` (default `~/.codex`, edited with
+  `toml_edit` so comments stay); Kimi Code `mcpServers` in `$KIMI_CODE_HOME/mcp.json` (default
+  `~/.kimi-code`, legacy `~/.kimi` when only that exists). Codex and Kimi configs are shared by all
+  projects, so their entries have no `--root`; the servers then work on the directory the agent
+  runs in.
+- Writes are idempotent (unchanged entries aren't rewritten), keep foreign entries and the file's
+  permissions, go through a temp file and rename, and leave unreadable configs alone with an
+  error. A toast lists where the servers were installed or removed.
+
+Manual route (e.g. a dev build without bundled binaries):
+
+```bash
+cargo build --release -p warpium_logcat_mcp -p code_index
+claude mcp add --scope local warpium-logcat -- "$PWD/target/release/warpium-logcat" mcp --root /path/to/project
+```
 
 ## Versioning
 

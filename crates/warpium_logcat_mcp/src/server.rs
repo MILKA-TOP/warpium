@@ -10,11 +10,11 @@ use chrono::Local;
 use code_index::{CodeIndex, default_snapshot_path, default_threads};
 use instant::Instant;
 use serde_json::{Value, json};
+use warpium_android::AdbClient;
 use warpium_android::device::{DeviceEntry, DeviceKind, read_props};
 use warpium_android::logcat::process::process_belongs_to;
 use warpium_android::logcat::{LogEntry, LogFilter, LogLevel, TagFilter, TextFilter};
 use warpium_android::stack::{StackFrame, choose_source_file, find_source_file, parse_frame};
-use warpium_android::AdbClient;
 
 use crate::capture::{Capture, CaptureConfig, State};
 use crate::crash::{Crash, extract_crashes};
@@ -119,10 +119,12 @@ impl Scope {
             None if arguments.get("all_packages").and_then(Value::as_bool) == Some(true) => {
                 Ok(Scope::AllPackages)
             }
-            None => Err("Pass package (the app's application id, such as com.example.app). \
+            None => Err(
+                "Pass package (the app's application id, such as com.example.app). \
                  Logs of other apps and the system may hold personal data, so reading every \
                  package needs all_packages: true explicitly."
-                .to_owned()),
+                    .to_owned(),
+            ),
         }
     }
 
@@ -264,8 +266,10 @@ impl Server {
     fn list_devices(&mut self) -> Result<String, String> {
         let devices = self.devices()?;
         if devices.is_empty() {
-            return Ok("No devices. Start an emulator or connect a device with USB debugging on."
-                .to_owned());
+            return Ok(
+                "No devices. Start an emulator or connect a device with USB debugging on."
+                    .to_owned(),
+            );
         }
         let default = default_serial(&devices, self.options.default_serial.as_deref()).ok();
         let lines: Vec<String> = devices
@@ -371,8 +375,7 @@ impl Server {
             {
                 break;
             }
-            if !in_since(since, seq, entry) || !in_scope(&pids, entry) || !filters.matches(entry)
-            {
+            if !in_since(since, seq, entry) || !in_scope(&pids, entry) || !filters.matches(entry) {
                 continue;
             }
             let text = format_entry(entry);
@@ -399,7 +402,9 @@ impl Server {
             );
         }
         if let Some(reason) = &state.ended {
-            lines.push(format!("Note: logcat stopped ({reason}); showing what was captured."));
+            lines.push(format!(
+                "Note: logcat stopped ({reason}); showing what was captured."
+            ));
         }
         lines.extend(picked);
         Ok(lines.join("\n"))
@@ -613,7 +618,11 @@ impl Server {
                 });
             }
         }
-        &self.index.as_ref().expect("the index was loaded above").index
+        &self
+            .index
+            .as_ref()
+            .expect("the index was loaded above")
+            .index
     }
 }
 
@@ -818,22 +827,27 @@ fn truncate(text: &str, max: usize) -> Cow<'_, str> {
     while !text.is_char_boundary(end) {
         end -= 1;
     }
-    Cow::Owned(format!("{}… [{} bytes cut]", &text[..end], text.len() - end))
+    Cow::Owned(format!(
+        "{}… [{} bytes cut]",
+        &text[..end],
+        text.len() - end
+    ))
 }
 
 fn parse_level(text: &str) -> Result<LogLevel, String> {
     let lowered = text.trim().to_ascii_lowercase();
+    let alias = match lowered.as_str() {
+        "warning" => Some(LogLevel::Warn),
+        "assert" | "a" => Some(LogLevel::Fatal),
+        _ => None,
+    };
     LogLevel::ALL
         .into_iter()
         .find(|level| {
             lowered == level.name().to_ascii_lowercase()
                 || lowered == level.letter().to_ascii_lowercase().to_string()
         })
-        .or_else(|| match lowered.as_str() {
-            "warning" => Some(LogLevel::Warn),
-            "assert" | "a" => Some(LogLevel::Fatal),
-            _ => None,
-        })
+        .or(alias)
         .ok_or_else(|| format!("Unknown min_level \"{text}\": use V, D, I, W, E or F."))
 }
 

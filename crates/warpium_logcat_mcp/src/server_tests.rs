@@ -6,9 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use warpium_android::logcat::LogTime;
 use warpium_android::logcat::binary::encode_entry;
-use warpium_android::test_support::{
-    FakeAdbServer, Next, answer_transport, length_prefixed, okay,
-};
+use warpium_android::test_support::{FakeAdbServer, Next, answer_transport, length_prefixed, okay};
 
 use super::*;
 
@@ -40,7 +38,9 @@ impl FakeDevice {
                 okay(stream);
                 length_prefixed(
                     stream,
-                    &format!("{SERIAL}  device product:sdk_gphone64 model:sdk_gphone64 transport_id:1\n"),
+                    &format!(
+                        "{SERIAL}  device product:sdk_gphone64 model:sdk_gphone64 transport_id:1\n"
+                    ),
                 );
                 return Next::Close;
             }
@@ -215,7 +215,10 @@ fn get_logs_shows_only_the_package_and_applies_filters() {
         json!({ "package": "com.example", "min_level": "W", "tag": "-Db", "text": "SLOW" }),
     );
 
-    assert!(all_of_app.starts_with("3 entries from emulator-5554 for com.example"), "{all_of_app}");
+    assert!(
+        all_of_app.starts_with("3 entries from emulator-5554 for com.example"),
+        "{all_of_app}"
+    );
     assert!(!all_of_app.contains("secret"), "{all_of_app}");
     assert!(filtered.starts_with("1 entry"), "{filtered}");
     assert!(filtered.contains("W Net: slow response"), "{filtered}");
@@ -339,7 +342,10 @@ fn get_logs_returns_the_newest_entries_up_to_the_limit() {
 
     assert!(limited.starts_with("10 entries"), "{limited}");
     assert!(limited.contains("truncated: true"), "{limited}");
-    assert!(limited.contains("line 20") && limited.contains("line 29"), "{limited}");
+    assert!(
+        limited.contains("line 20") && limited.contains("line 29"),
+        "{limited}"
+    );
     assert!(!limited.contains("line 19"), "{limited}");
     assert!(everything.starts_with("30 entries"), "{everything}");
     assert!(everything.contains("truncated: false"), "{everything}");
@@ -356,7 +362,13 @@ fn get_logs_reconnects_without_repeating_the_replayed_backlog() {
 
     device.live.send(Live::EndStream).unwrap();
     std::thread::sleep(Duration::from_millis(300));
-    device.send(vec![entry(0, 100, LogLevel::Info, "App", "after reconnect")]);
+    device.send(vec![entry(
+        0,
+        100,
+        LogLevel::Info,
+        "App",
+        "after reconnect",
+    )]);
     let (text, _) = call(&mut server, "get_logs", json!({ "package": "com.example" }));
 
     assert_eq!(text.matches("App: once").count(), 1, "{text}");
@@ -512,7 +524,11 @@ fn wait_for_log_needs_something_to_wait_for() {
     let device = FakeDevice::start(Vec::new());
     let mut server = device.server(None);
 
-    let (text, is_error) = call(&mut server, "wait_for_log", json!({ "package": "com.example" }));
+    let (text, is_error) = call(
+        &mut server,
+        "wait_for_log",
+        json!({ "package": "com.example" }),
+    );
 
     assert!(is_error);
     assert_eq!(text, "Pass text or regex: the line to wait for.");
@@ -560,6 +576,12 @@ fn tools_list_names_every_tool() {
         .collect();
     assert_eq!(
         names,
-        vec!["list_devices", "get_logs", "get_crashes", "wait_for_log", "clear_logs"]
+        vec![
+            "list_devices",
+            "get_logs",
+            "get_crashes",
+            "wait_for_log",
+            "clear_logs"
+        ]
     );
 }

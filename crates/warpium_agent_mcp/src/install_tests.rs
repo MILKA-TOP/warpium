@@ -118,8 +118,16 @@ fn installs_into_every_agent_found_and_reinstalling_changes_nothing() {
 
     let agents: Vec<&str> = first.iter().map(|report| report.agent).collect();
     assert_eq!(agents, vec!["Claude Code", "Codex", "Kimi Code"]);
-    assert!(first.iter().all(|report| report.result == all(Change::Added)));
-    assert!(second.iter().all(|report| report.result == all(Change::Unchanged)));
+    assert!(
+        first
+            .iter()
+            .all(|report| report.result == all(Change::Added))
+    );
+    assert!(
+        second
+            .iter()
+            .all(|report| report.result == all(Change::Unchanged))
+    );
 
     let claude: Value =
         serde_json::from_str(&fixture.read(fixture.home.join(".claude.json"))).unwrap();
@@ -130,8 +138,14 @@ fn installs_into_every_agent_found_and_reinstalling_changes_nothing() {
         json!(["mcp", "--root", "/work/app"])
     );
     let codex = fixture.read(fixture.home.join(".codex/config.toml"));
-    assert!(codex.contains("[mcp_servers.warpium-code-index]"), "{codex}");
-    assert!(codex.contains("args = [\"mcp\"]"), "shared configs leave out --root: {codex}");
+    assert!(
+        codex.contains("[mcp_servers.warpium-code-index]"),
+        "{codex}"
+    );
+    assert!(
+        codex.contains("args = [\"mcp\"]"),
+        "shared configs leave out --root: {codex}"
+    );
     let kimi: Value =
         serde_json::from_str(&fixture.read(fixture.home.join(".kimi-code/mcp.json"))).unwrap();
     assert_eq!(kimi["mcpServers"]["warpium-logcat"]["args"], json!(["mcp"]));
@@ -193,11 +207,18 @@ fn uninstall_removes_only_warpium_servers_from_existing_configs() {
 
     let agents: Vec<&str> = removed.iter().map(|report| report.agent).collect();
     assert_eq!(agents, vec!["Codex", "Kimi Code"]);
-    assert!(removed.iter().all(|report| report.result == all(Change::Removed)));
+    assert!(
+        removed
+            .iter()
+            .all(|report| report.result == all(Change::Removed))
+    );
     assert_eq!(again, Vec::new());
     let kimi: Value =
         serde_json::from_str(&fixture.read(fixture.home.join(".kimi-code/mcp.json"))).unwrap();
-    assert_eq!(kimi, json!({ "mcpServers": { "github": { "command": "gh" } } }));
+    assert_eq!(
+        kimi,
+        json!({ "mcpServers": { "github": { "command": "gh" } } })
+    );
     assert!(!fixture.home.join(".claude.json").exists());
 }
 
@@ -210,7 +231,10 @@ fn a_broken_config_is_reported_and_left_alone() {
     let reports = install(&fixture.env(true), &servers());
 
     assert!(reports[0].result.is_err());
-    assert_eq!(fixture.read(fixture.home.join(".codex/config.toml")), "model = ");
+    assert_eq!(
+        fixture.read(fixture.home.join(".codex/config.toml")),
+        "model = "
+    );
     assert!(summary(&reports, true).starts_with("Codex: failed"));
 }
 

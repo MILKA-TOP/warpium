@@ -54,10 +54,10 @@ pub fn update_codex_servers(
                     .ok_or_else(|| format!("`mcp_servers.{name}` in the config isn't a table"))?;
                 let same_command =
                     table.get("command").and_then(Item::as_str) == Some(server.command);
-                let current_args: Option<Vec<&str>> =
-                    table.get("args").and_then(Item::as_array).map(|args| {
-                        args.iter().filter_map(|arg| arg.as_str()).collect()
-                    });
+                let current_args: Option<Vec<&str>> = table
+                    .get("args")
+                    .and_then(Item::as_array)
+                    .map(|args| args.iter().filter_map(|arg| arg.as_str()).collect());
                 let same_args = current_args.is_some_and(|args| {
                     args.len() == server.args.len()
                         && args.iter().zip(server.args).all(|(a, b)| *a == b)

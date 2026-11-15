@@ -297,7 +297,11 @@ fn claude_target(env: &Environment, servers: &[McpServer], mode: Mode) -> Report
     let project = env.project_root.as_deref();
     let scope = if project.is_some() { "local" } else { "user" };
     let location = match project {
-        Some(project) => format!("{} (local scope of {})", env.display(&config), env.display(project)),
+        Some(project) => format!(
+            "{} (local scope of {})",
+            env.display(&config),
+            env.display(project)
+        ),
         None => format!("{} (user scope)", env.display(&config)),
     };
     let report = |result| Report {
@@ -339,7 +343,11 @@ fn claude_target(env: &Environment, servers: &[McpServer], mode: Mode) -> Report
         };
         if change.is_change() {
             if current.is_some()
-                && let Err(err) = run_claude(&cli, project, &["mcp", "remove", "--scope", scope, &server.name])
+                && let Err(err) = run_claude(
+                    &cli,
+                    project,
+                    &["mcp", "remove", "--scope", scope, &server.name],
+                )
             {
                 return report(Err(err));
             }
@@ -372,7 +380,11 @@ fn run_claude(cli: &Path, project: Option<&Path>, args: &[&str]) -> Result<(), S
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("`claude {}` failed: {}", args[..2].join(" "), stderr.trim()))
+        Err(format!(
+            "`claude {}` failed: {}",
+            args[..2].join(" "),
+            stderr.trim()
+        ))
     }
 }
 
@@ -426,11 +438,13 @@ pub fn summary(reports: &[Report], installing: bool) -> String {
         .iter()
         .map(|report| match &report.result {
             Ok(changes) => {
-                let all_unchanged = changes
-                    .iter()
-                    .all(|(_, change)| !change.is_change());
+                let all_unchanged = changes.iter().all(|(_, change)| !change.is_change());
                 let what = if all_unchanged {
-                    if installing { "already installed" } else { "nothing to remove" }
+                    if installing {
+                        "already installed"
+                    } else {
+                        "nothing to remove"
+                    }
                 } else if installing {
                     "installed"
                 } else {

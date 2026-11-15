@@ -253,9 +253,8 @@ fn write_warp_registration(
 ) -> Result<(), String> {
     install::edit_file(config_path, |existing| {
         let entry = registration.map(|(binary, root)| {
-            let root = root.or_else(|| {
-                existing.and_then(|text| server_arg(text, LOGCAT_SERVER, "--root"))
-            });
+            let root = root
+                .or_else(|| existing.and_then(|text| server_arg(text, LOGCAT_SERVER, "--root")));
             McpServer {
                 name: LOGCAT_SERVER.to_owned(),
                 command: binary,

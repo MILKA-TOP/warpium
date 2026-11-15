@@ -16,7 +16,13 @@ fn entry(sec: i64, pid: i32, level: LogLevel, tag: &str, message: &str) -> LogEn
 #[test]
 fn collects_a_java_crash_split_over_several_entries() {
     let entries = vec![
-        entry(10, 4242, LogLevel::Debug, "AndroidRuntime", "Shutting down VM"),
+        entry(
+            10,
+            4242,
+            LogLevel::Debug,
+            "AndroidRuntime",
+            "Shutting down VM",
+        ),
         entry(
             10,
             4242,
@@ -57,8 +63,20 @@ fn collects_a_java_crash_split_over_several_entries() {
 #[test]
 fn a_late_entry_from_the_same_process_starts_no_continuation() {
     let entries = vec![
-        entry(10, 4242, LogLevel::Error, "AndroidRuntime", "FATAL EXCEPTION: main"),
-        entry(30, 4242, LogLevel::Error, "AndroidRuntime", "unrelated later line"),
+        entry(
+            10,
+            4242,
+            LogLevel::Error,
+            "AndroidRuntime",
+            "FATAL EXCEPTION: main",
+        ),
+        entry(
+            30,
+            4242,
+            LogLevel::Error,
+            "AndroidRuntime",
+            "unrelated later line",
+        ),
     ];
 
     let crashes = extract_crashes(&entries, &HashMap::new());
@@ -124,7 +142,13 @@ fn a_tombstone_replaces_the_fatal_signal_line_of_the_same_pid() {
             "DEBUG",
             "pid: 4242, tid: 4250, name: RenderThread  >>> com.example.app <<<",
         ),
-        entry(11, 900, LogLevel::Fatal, "DEBUG", "      #00 pc 0001 /data/app/lib/libfoo.so"),
+        entry(
+            11,
+            900,
+            LogLevel::Fatal,
+            "DEBUG",
+            "      #00 pc 0001 /data/app/lib/libfoo.so",
+        ),
     ];
 
     let crashes = extract_crashes(&entries, &HashMap::new());

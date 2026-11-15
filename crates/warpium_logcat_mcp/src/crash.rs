@@ -70,9 +70,8 @@ impl Crash {
 static JAVA_PROCESS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^Process: ([\w.:]+), PID: (\d+)").expect("the process pattern is valid")
 });
-static ANR: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^ANR in ([\w.:]+)").expect("the ANR pattern is valid")
-});
+static ANR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^ANR in ([\w.:]+)").expect("the ANR pattern is valid"));
 static ANR_PID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^PID: (\d+)").expect("the ANR pid pattern is valid"));
 static TOMBSTONE_PROCESS: LazyLock<Regex> = LazyLock::new(|| {
@@ -159,8 +158,8 @@ pub fn extract_crashes<'a>(
         .collect();
     let mut index = 0;
     crashes.retain(|crash| {
-        let keep = !signals.contains(&index)
-            || crash.pid.is_none_or(|pid| !tombstone_pids.contains(&pid));
+        let keep =
+            !signals.contains(&index) || crash.pid.is_none_or(|pid| !tombstone_pids.contains(&pid));
         index += 1;
         keep
     });
@@ -185,7 +184,10 @@ fn continues(open: &mut Option<Open>, entry: &LogEntry) -> Option<usize> {
 fn identify(crash: &mut Crash) {
     match crash.kind {
         CrashKind::Java => {
-            if let Some(captures) = crash.lines.iter().find_map(|line| JAVA_PROCESS.captures(line))
+            if let Some(captures) = crash
+                .lines
+                .iter()
+                .find_map(|line| JAVA_PROCESS.captures(line))
             {
                 crash.process = Some(captures[1].to_owned());
                 crash.pid = captures[2].parse().ok();
