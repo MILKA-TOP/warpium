@@ -9,6 +9,8 @@
 //!   "Uninstall" removes them again. See `warpium_agent_mcp::install`.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use warpium_agent_mcp::McpServer;
 use warpium_agent_mcp::install::{self, Environment};
@@ -37,7 +39,12 @@ pub(crate) struct AgentMcpModel {
     project_root: Option<PathBuf>,
     /// An install or uninstall is running.
     busy: bool,
+    /// Bumped by every change to Warp's entry, so only the newest of overlapping writes runs.
+    warp_generation: Arc<AtomicU64>,
 }
+
+/// Serializes writes of Warp's MCP config.
+static WARP_CONFIG_WRITE: Mutex<()> = Mutex::new(());
 
 impl Entity for AgentMcpModel {
     type Event = ();
@@ -58,6 +65,7 @@ pub(crate) fn init(ctx: &mut AppContext) {
         let model = AgentMcpModel {
             project_root: None,
             busy: false,
+            warp_generation: Arc::new(AtomicU64::new(0)),
         };
         // Points an existing entry at this build's binary, or removes one left from when the
         // setting was on.
@@ -226,8 +234,19 @@ impl AgentMcpModel {
         } else {
             None
         };
+        let generation = self.warp_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let latest = self.warp_generation.clone();
         ctx.spawn(
-            blocking::unblock(move || write_warp_registration(&config_path, registration)),
+            blocking::unblock(move || {
+                let _guard = WARP_CONFIG_WRITE
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                // A newer change was requested meanwhile; its write has the current state.
+                if latest.load(Ordering::SeqCst) != generation {
+                    return Ok(());
+                }
+                write_warp_registration(&config_path, registration)
+            }),
             move |_, result, ctx| {
                 if let Err(message) = result {
                     log::warn!("[Agent MCP] Couldn't update Warp's MCP config: {message}");

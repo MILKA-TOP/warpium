@@ -264,6 +264,36 @@ fn get_logs_follows_the_package_across_a_restart() {
 }
 
 #[test]
+fn get_logs_leaves_out_a_reused_pid_after_the_app_died() {
+    let device = FakeDevice::start(vec![
+        entry(30, 100, LogLevel::Info, "Daemon", "before the app"),
+        started(20, 100, "com.example"),
+        entry(19, 100, LogLevel::Info, "App", "app line"),
+        entry(
+            10,
+            500,
+            LogLevel::Info,
+            "ActivityManager",
+            "Process com.example (pid 100) has died: fg TOP",
+        ),
+        entry(
+            5,
+            100,
+            LogLevel::Info,
+            "Daemon",
+            "secret of another process",
+        ),
+    ]);
+    let mut server = device.server(None);
+
+    let (text, _) = call(&mut server, "get_logs", json!({ "package": "com.example" }));
+
+    assert!(text.contains("App: app line"), "{text}");
+    assert!(!text.contains("before the app"), "{text}");
+    assert!(!text.contains("secret"), "{text}");
+}
+
+#[test]
 fn get_logs_since_a_duration_leaves_out_older_lines() {
     let device = FakeDevice::start(vec![
         started(700, 100, "com.example"),

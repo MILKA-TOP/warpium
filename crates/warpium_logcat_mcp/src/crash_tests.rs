@@ -192,3 +192,22 @@ fn caps_the_lines_of_one_crash() {
     assert_eq!(crashes[0].lines.len(), MAX_CRASH_LINES);
     assert_eq!(crashes[0].omitted_lines, 6);
 }
+
+#[test]
+fn prefers_the_known_name_over_a_truncated_thread_name() {
+    let entries = vec![entry(
+        10,
+        4242,
+        LogLevel::Fatal,
+        "libc",
+        "Fatal signal 11 (SIGSEGV), code 1 in tid 4242 (le.myapplication), pid 4242 (le.myapplication)",
+    )];
+    let processes = HashMap::from([(4242, "com.example.myapplication".to_owned())]);
+
+    let crashes = extract_crashes(&entries, &processes);
+
+    assert_eq!(
+        crashes[0].process.as_deref(),
+        Some("com.example.myapplication")
+    );
+}

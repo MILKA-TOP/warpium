@@ -111,3 +111,25 @@ fn explains_unreadable_input() {
 
     assert!(error.contains("\"30s\""), "{error}");
 }
+
+#[test]
+fn logcat_style_timestamp_after_new_year_takes_last_year() {
+    let new_year = Local
+        .from_local_datetime(
+            &NaiveDate::from_ymd_opt(2027, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 30)
+                .unwrap(),
+        )
+        .unwrap();
+
+    let since = parse_since("12-31 23:59:58.000", new_year, 0).unwrap();
+
+    assert_eq!(
+        since,
+        Since::Time(LogTime {
+            sec: local_secs(2026, 12, 31, 23, 59, 58),
+            nsec: 0
+        })
+    );
+}

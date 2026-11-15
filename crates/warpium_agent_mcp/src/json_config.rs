@@ -164,6 +164,33 @@ pub fn claude_server(existing: &str, project: Option<&Path>, name: &str) -> Opti
     scope.get("mcpServers")?.get(name).cloned()
 }
 
+/// The scopes of Claude Code's config that have any of the servers `names`: `None` for the user
+/// scope, else the project's path.
+pub fn claude_scopes_with(existing: &str, names: &[&str]) -> Vec<Option<PathBuf>> {
+    let Ok(config) = parse_config(Some(existing)) else {
+        return Vec::new();
+    };
+    let has_any = |scope: &Value| {
+        scope
+            .get("mcpServers")
+            .and_then(Value::as_object)
+            .is_some_and(|servers| names.iter().any(|name| servers.contains_key(*name)))
+    };
+    let mut scopes = Vec::new();
+    if has_any(&Value::Object(config.clone())) {
+        scopes.push(None);
+    }
+    if let Some(projects) = config.get("projects").and_then(Value::as_object) {
+        scopes.extend(
+            projects
+                .iter()
+                .filter(|(_, scope)| has_any(scope))
+                .map(|(path, _)| Some(PathBuf::from(path))),
+        );
+    }
+    scopes
+}
+
 #[cfg(test)]
 #[path = "json_config_tests.rs"]
 mod tests;

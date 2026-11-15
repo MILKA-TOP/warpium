@@ -1,7 +1,7 @@
 //! The MCP server: newline-delimited JSON-RPC 2.0 over stdio, like `warpium-code-index mcp`.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -13,10 +13,10 @@ use serde_json::{Value, json};
 use warpium_android::AdbClient;
 use warpium_android::device::{DeviceEntry, DeviceKind, read_props};
 use warpium_android::logcat::process::process_belongs_to;
-use warpium_android::logcat::{LogEntry, LogFilter, LogLevel, TagFilter, TextFilter};
+use warpium_android::logcat::{LogEntry, LogFilter, LogLevel, LogTime, TagFilter, TextFilter};
 use warpium_android::stack::{StackFrame, choose_source_file, find_source_file, parse_frame};
 
-use crate::capture::{Capture, CaptureConfig, State};
+use crate::capture::{Capture, CaptureConfig, PidRanges, State};
 use crate::crash::{Crash, extract_crashes};
 use crate::since::{MARK_PREFIX, Since, parse_since};
 
@@ -30,6 +30,8 @@ const MAX_LIMIT: usize = 2000;
 const MAX_OUTPUT_BYTES: usize = 200 * 1024;
 /// Bytes of one message shown at most.
 const MAX_MESSAGE_BYTES: usize = 8 * 1024;
+/// The longest line of a crash report shown.
+const MAX_CRASH_LINE_BYTES: usize = 1024;
 const DEFAULT_CRASH_LIMIT: usize = 5;
 const MAX_CRASH_LIMIT: usize = 20;
 const DEFAULT_WAIT_SECS: f64 = 30.0;
@@ -129,7 +131,7 @@ impl Scope {
     }
 
     /// The pids whose entries are in scope; `None` for every package.
-    fn pids(&self, state: &State) -> Option<HashSet<i32>> {
+    fn pids(&self, state: &State) -> Option<PidRanges> {
         match self {
             Scope::Package(package) => Some(state.pids_of(package)),
             Scope::AllPackages => None,
@@ -180,8 +182,16 @@ impl Filters {
     }
 }
 
-fn in_scope(pids: &Option<HashSet<i32>>, entry: &LogEntry) -> bool {
-    pids.as_ref().is_none_or(|pids| pids.contains(&entry.pid))
+fn in_scope(pids: &Option<PidRanges>, seq: u64, entry: &LogEntry) -> bool {
+    pids.as_ref()
+        .is_none_or(|pids| pids.contains(seq, entry.pid))
+}
+
+fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 fn in_since(since: Option<Since>, seq: u64, entry: &LogEntry) -> bool {
@@ -362,7 +372,7 @@ impl Server {
         let since = since_argument(arguments, capture)?;
         let state = capture.lock();
         let pids = scope.pids(&state);
-        if pids.as_ref().is_some_and(HashSet::is_empty) {
+        if pids.as_ref().is_some_and(PidRanges::is_empty) {
             return Ok(package_not_seen(&scope, &serial));
         }
 
@@ -375,7 +385,10 @@ impl Server {
             {
                 break;
             }
-            if !in_since(since, seq, entry) || !in_scope(&pids, entry) || !filters.matches(entry) {
+            if !in_since(since, seq, entry)
+                || !in_scope(&pids, seq, entry)
+                || !filters.matches(entry)
+            {
                 continue;
             }
             let text = format_entry(entry);
@@ -450,8 +463,15 @@ impl Server {
             Some(Since::Time(_)) => 0,
             None => capture.lock().buffer.next_seq(),
         };
+        // Without since, only lines logged after the call count: on a slow device the replayed
+        // backlog may still be arriving behind `start`. Two seconds absorb the clock offset's
+        // rounding.
+        let time_floor = explicit_since.is_none().then(|| LogTime {
+            sec: unix_now_secs() + capture.clock_offset_secs - 2,
+            nsec: 0,
+        });
         let mut cursor = start;
-        let mut known_pids: Option<Option<HashSet<i32>>> = None;
+        let mut known_pids: Option<Option<PidRanges>> = None;
         let mut last_poll: Option<Instant> = None;
         loop {
             if let Scope::Package(package) = &scope
@@ -473,7 +493,8 @@ impl Server {
                 .entries_from(cursor)
                 .find(|(seq, entry)| {
                     in_since(explicit_since, *seq, entry)
-                        && in_scope(&pids, entry)
+                        && time_floor.is_none_or(|floor| entry.time >= floor)
+                        && in_scope(&pids, *seq, entry)
                         && filters.matches(entry)
                 })
                 .map(|(seq, _)| seq);
@@ -559,8 +580,11 @@ impl Server {
                 String::new()
             },
         )];
+        // Built newest first, so capping the output leaves out the oldest crashes; one crash is
+        // always shown.
+        let mut blocks = Vec::new();
         let mut bytes = 0;
-        for (number, crash) in shown.iter().enumerate() {
+        for (number, crash) in shown.iter().enumerate().rev() {
             let mut block = vec![format!(
                 "\n[{}] {} at {} in {}{}",
                 number + 1,
@@ -576,22 +600,29 @@ impl Server {
                 let location = resolver.as_mut().and_then(|resolver| {
                     parse_frame(line).and_then(|frame| resolver.resolve(&frame))
                 });
+                let line = truncate(line, MAX_CRASH_LINE_BYTES);
                 block.push(match location {
                     Some(location) => format!("{line}  -> {location}"),
-                    None => line.clone(),
+                    None => line.into_owned(),
                 });
             }
             if crash.omitted_lines > 0 {
                 block.push(format!("... {} more lines", crash.omitted_lines));
             }
             let text = block.join("\n");
-            if bytes + text.len() > MAX_OUTPUT_BYTES {
-                lines.push("\n(The remaining crashes were left out to cap the output.)".to_owned());
+            if !blocks.is_empty() && bytes + text.len() > MAX_OUTPUT_BYTES {
+                lines.push(format!(
+                    "(Left out {number_left} older crash{plural} to cap the output.)",
+                    number_left = number + 1,
+                    plural = if number == 0 { "" } else { "es" },
+                ));
                 break;
             }
             bytes += text.len();
-            lines.push(text);
+            blocks.push(text);
         }
+        blocks.reverse();
+        lines.extend(blocks);
         if root.is_none() {
             lines.push(
                 "\nPass root (the project directory) to resolve stack frames to files.".to_owned(),
@@ -654,7 +685,7 @@ fn wait_result(
         .entries()
         .rev()
         .skip_while(|(seq, _)| *seq >= hit)
-        .filter(|(_, entry)| in_scope(&pids, entry))
+        .filter(|(seq, entry)| in_scope(&pids, *seq, entry))
         .take(context)
         .map(|(_, entry)| format_entry(entry))
         .collect();
@@ -671,7 +702,7 @@ fn wait_result(
         if seq == hit {
             hit_time = Some(entry.time);
             lines.push(format!(">> {}", format_entry(entry)));
-        } else if in_scope(&pids, entry) {
+        } else if in_scope(&pids, seq, entry) {
             lines.push(format_entry(entry));
             after += 1;
             if after == AFTER_CONTEXT {

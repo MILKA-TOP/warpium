@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 use command::blocking::Command;
 use serde_json::{Value, json};
 
-use crate::json_config::{claude_server, update_claude_servers, update_servers};
+use crate::json_config::{
+    claude_scopes_with, claude_server, update_claude_servers, update_servers,
+};
 use crate::toml_config::{TomlServer, update_codex_servers};
 use crate::{Change, McpServer};
 
@@ -156,7 +158,12 @@ pub fn install(env: &Environment, servers: &[McpServer]) -> Vec<Report> {
     }
     let mut reports = Vec::new();
     if env.claude_installed() {
-        reports.push(claude_target(env, servers, Mode::Install));
+        reports.push(claude_target(
+            env,
+            env.project_root.as_deref(),
+            servers,
+            Mode::Install,
+        ));
     }
     if env.codex_installed() {
         reports.push(codex_target(env, servers, Mode::Install));
@@ -193,8 +200,17 @@ pub fn uninstall(env: &Environment, servers: &[McpServer]) -> Vec<Report> {
             ));
         }
     }
-    if env.claude_config().is_file() {
-        reports.push(claude_target(env, servers, Mode::Uninstall));
+    // Every scope Install may have written: the projects open at the time, or the user scope.
+    if let Ok(Some(existing)) = read_optional(&env.claude_config()) {
+        let names: Vec<&str> = servers.iter().map(|server| server.name.as_str()).collect();
+        for scope in claude_scopes_with(&existing, &names) {
+            reports.push(claude_target(
+                env,
+                scope.as_deref(),
+                servers,
+                Mode::Uninstall,
+            ));
+        }
     }
     if env.codex_dir().join("config.toml").is_file() {
         reports.push(codex_target(env, servers, Mode::Uninstall));
@@ -294,9 +310,13 @@ fn claude_entry(server: &McpServer, per_project: bool) -> Value {
 /// Claude Code: the project's local scope, else the user scope. Changes go through the `claude`
 /// CLI when it is found, as Claude Code may rewrite its config while it runs; otherwise the
 /// config is edited directly.
-fn claude_target(env: &Environment, servers: &[McpServer], mode: Mode) -> Report {
+fn claude_target(
+    env: &Environment,
+    project: Option<&Path>,
+    servers: &[McpServer],
+    mode: Mode,
+) -> Report {
     let config = env.claude_config();
-    let project = env.project_root.as_deref();
     let scope = if project.is_some() { "local" } else { "user" };
     let location = match project {
         Some(project) => format!(
@@ -319,7 +339,11 @@ fn claude_target(env: &Environment, servers: &[McpServer], mode: Mode) -> Report
             (server.name.as_str(), entry)
         })
         .collect();
-    let Some(cli) = env.find_cli("claude") else {
+    // The CLI runs in the project, which may be gone by now.
+    let cli = env
+        .find_cli("claude")
+        .filter(|_| project.is_none_or(Path::is_dir));
+    let Some(cli) = cli else {
         let result = edit_file(&config, |existing| {
             update_claude_servers(existing, project, &edits)
         })
@@ -405,6 +429,9 @@ pub fn edit_file(
     path: &Path,
     update: impl FnOnce(Option<&str>) -> Result<(Vec<Change>, Option<String>), String>,
 ) -> Result<Vec<Change>, String> {
+    // Through a symlink (a dotfiles repo), so the link stays a link.
+    let resolved = std::fs::canonicalize(path).ok();
+    let path = resolved.as_deref().unwrap_or(path);
     let existing = read_optional(path)?;
     let (changes, text) = update(existing.as_deref())?;
     let Some(text) = text else {

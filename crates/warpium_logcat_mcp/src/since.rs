@@ -77,8 +77,18 @@ fn parse_timestamp(text: &str, now: DateTime<Local>) -> Option<LogTime> {
     let naive = NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%d %H:%M:%S%.f")
         .ok()
         .or_else(|| {
-            let with_year = format!("{}-{normalized}", now.year());
-            NaiveDateTime::parse_from_str(&with_year, "%Y-%m-%d %H:%M:%S%.f").ok()
+            // Logcat's `MM-DD` form: this year, or last year when that would be in the future
+            // (just after New Year).
+            let in_year = |year: i32| {
+                let with_year = format!("{year}-{normalized}");
+                NaiveDateTime::parse_from_str(&with_year, "%Y-%m-%d %H:%M:%S%.f").ok()
+            };
+            let this_year = in_year(now.year())?;
+            if this_year > now.naive_local() + chrono::Duration::days(1) {
+                in_year(now.year() - 1)
+            } else {
+                Some(this_year)
+            }
         })
         .or_else(|| {
             let time = NaiveTime::parse_from_str(&normalized, "%H:%M:%S%.f").ok()?;

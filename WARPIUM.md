@@ -466,8 +466,11 @@ default device, `ANDROID_ADB_SERVER_PORT` the adb server.
 
 - **Capture.** Started lazily per device on the first call that needs it: a background logcat
   stream into a 100k-entry in-memory ring (`LogBuffer`), seeded with the device's recent backlog,
-  so `since` queries work. Reconnects don't repeat the replayed backlog. Package→pid tracking
-  follows restarts (`ps` once, then process-start lines).
+  so `since` queries work. Reconnects don't repeat the replayed backlog. Package scoping tracks
+  which process owned each pid over which stretch of the stream (ActivityManager start/death
+  lines, `ps` for an app already running), so it follows restarts and leaves out a reused pid.
+  A call runs to completion before the next request is read, so `wait_for_log` holds the server
+  for up to its timeout.
 - **Tools.** `list_devices` (serial, kind, state, model, API); `get_logs` (device, package,
   `min_level`, `tag` with `-Tag` excludes, `text` or `regex`, `since` as `2m`/`90s`/a timestamp/
   `mark`, `limit` default 200, at most 2000; newest last, with a `truncated` flag); `get_crashes`

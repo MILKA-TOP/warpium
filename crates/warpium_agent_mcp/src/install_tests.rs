@@ -253,3 +253,51 @@ fn rewriting_keeps_the_file_permissions() {
     let mode = fs::metadata(&config).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
 }
+
+#[test]
+fn uninstall_cleans_claude_scopes_of_other_projects_too() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.home.join(".claude")).unwrap();
+    install(&fixture.env(true), &servers());
+    install(&fixture.env(false), &servers());
+
+    let mut elsewhere = fixture.env(true);
+    elsewhere.project_root = Some(fixture.home.join("other-project"));
+    let removed = uninstall(&elsewhere, &servers());
+
+    assert_eq!(removed.len(), 2, "{removed:?}");
+    assert!(
+        removed
+            .iter()
+            .all(|report| report.result == all(Change::Removed))
+    );
+    let claude: Value =
+        serde_json::from_str(&fixture.read(fixture.home.join(".claude.json"))).unwrap();
+    assert_eq!(claude["mcpServers"], json!({}));
+    let project_key = fixture.project.to_string_lossy();
+    assert_eq!(
+        claude["projects"][project_key.as_ref()]["mcpServers"],
+        json!({})
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn writes_through_a_symlinked_config() {
+    let fixture = Fixture::new();
+    let dotfiles = fixture.home.join("dotfiles/config.toml");
+    fs::create_dir_all(dotfiles.parent().unwrap()).unwrap();
+    fs::write(&dotfiles, "model = \"o3\"\n").unwrap();
+    fs::create_dir_all(fixture.home.join(".codex")).unwrap();
+    std::os::unix::fs::symlink(&dotfiles, fixture.home.join(".codex/config.toml")).unwrap();
+
+    install(&fixture.env(true), &servers());
+
+    let link = fs::symlink_metadata(fixture.home.join(".codex/config.toml")).unwrap();
+    assert!(link.file_type().is_symlink());
+    assert!(
+        fixture
+            .read(&dotfiles)
+            .contains("[mcp_servers.warpium-logcat]")
+    );
+}

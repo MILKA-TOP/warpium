@@ -144,10 +144,17 @@ pub fn extract_crashes<'a>(
 
     for crash in &mut crashes {
         identify(crash);
-        if crash.process.is_none()
-            && let Some(pid) = crash.pid
-        {
-            crash.process = processes.get(&pid).cloned();
+        let Some(known) = crash.pid.and_then(|pid| processes.get(&pid)) else {
+            continue;
+        };
+        // `Fatal signal` names the thread, cut to its last 15 characters; the known process name
+        // is the whole one.
+        let truncated = crash
+            .process
+            .as_deref()
+            .is_some_and(|name| name != known && known.ends_with(name));
+        if crash.process.is_none() || truncated {
+            crash.process = Some(known.clone());
         }
     }
     let tombstone_pids: HashSet<i32> = crashes
