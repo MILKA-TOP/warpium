@@ -10,12 +10,14 @@ import os
 import plistlib
 import re
 import shutil
+import stat
 import subprocess
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from .config import REPO_SLUG, REPO_URL, Config, gh_env, scrubbed_env
-from .jobs import Job, JobManager
+from .jobs import Job, JobManager, run_tracked
 from .pathjail import PathJail
 from .validation import (
     DEFAULT_BUILD_FEATURES,
@@ -66,13 +68,7 @@ def git_argv(clone: Path, *args: str) -> list[str]:
 
 
 def _git(clone: Path, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        git_argv(clone, *args),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=git_env(scrubbed_env()),
-    )
+    return run_tracked(git_argv(clone, *args), timeout=timeout, env=git_env(scrubbed_env()))
 
 
 def reset_git_config(clone: Path) -> None:
@@ -219,7 +215,74 @@ def remove_self_update_backups(apps_dir: Path, log: Callable[[str], None]) -> No
             log(f"could not remove {p}: {e}")
 
 
+def _tree_bytes(root: Path) -> int:
+    """Total size of the regular files under ``root`` (best effort)."""
+    total = 0
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            try:
+                st = os.lstat(os.path.join(dirpath, name))
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode):
+                total += st.st_size
+    return total
+
+
+class DownloadProgress:
+    """``on_tick`` callback for ``gh run download``: logs how much of the
+    artifact is on disk (gh's temp zip in ``tmp_dir`` plus what it extracted
+    into ``dest_dir``) and the speed, and raises once nothing grew for
+    ``stall_s`` seconds."""
+
+    def __init__(
+        self,
+        tmp_dir: Path,
+        dest_dir: Path,
+        log: Callable[[str], None],
+        stall_s: float,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self.tmp_dir, self.dest_dir = tmp_dir, dest_dir
+        self.log, self.stall_s, self.clock = log, stall_s, clock
+        self.start = self.last_t = self.last_progress = clock()
+        self.last_total = 0
+
+    def sizes(self) -> tuple[int, int]:
+        return _tree_bytes(self.tmp_dir), _tree_bytes(self.dest_dir)
+
+    def __call__(self) -> None:
+        now = self.clock()
+        zipped, extracted = self.sizes()
+        total = zipped + extracted
+        speed = (total - self.last_total) / max(now - self.last_t, 1e-6)
+        avg = total / max(now - self.start, 1e-6)
+        if total != self.last_total:
+            self.last_progress = now
+        self.last_total, self.last_t = total, now
+        self.log(
+            f"download: zip {zipped / 1e6:.1f} MB, extracted {extracted / 1e6:.1f} MB, "
+            f"{max(speed, 0) / 1e3:.1f} KB/s now, {avg / 1e3:.1f} KB/s avg, "
+            f"{now - self.start:.0f}s elapsed"
+        )
+        idle = now - self.last_progress
+        if idle >= self.stall_s:
+            raise WorkspaceError(
+                f"gh run download stalled: no progress for {idle:.0f}s "
+                f"({total / 1e6:.1f} MB on disk)"
+            )
+
+    def log_total(self) -> None:
+        elapsed = self.clock() - self.start
+        size = _tree_bytes(self.dest_dir)
+        self.log(f"download: done, {size / 1e6:.1f} MB extracted in {elapsed:.0f}s")
+
+
 class Workspace:
+    # gh run download: progress log interval and stall timeout (seconds).
+    download_tick_s = 15.0
+    download_stall_s = 300.0
+
     def __init__(
         self,
         cfg: Config,
@@ -270,13 +333,7 @@ class Workspace:
                         git_argv(clone, "reset", "--hard", "--quiet"),
                         git_argv(clone, "clean", "-fd", "--quiet"),
                     ):
-                        r = subprocess.run(
-                            argv,
-                            capture_output=True,
-                            text=True,
-                            timeout=600,
-                            env=git_env(scrubbed_env()),
-                        )
+                        r = run_tracked(argv, timeout=600, env=git_env(scrubbed_env()))
                         log(r.stdout + r.stderr)
                         if r.returncode != 0:
                             raise WorkspaceError(f"{argv[-3]} failed")
@@ -343,15 +400,17 @@ class Workspace:
             raise ValidationError("artifact_name may only contain letters, digits, . _ -")
         dl_dir = self.jail.resolve(self.cfg.downloads_dir / run_id)
         mnt = self.jail.resolve(self.cfg.downloads_dir / f"{run_id}-mnt")
+        # Private TMPDIR for gh: it streams the artifact zip into
+        # $TMPDIR/gh-artifact.*.zip before extracting, and we watch its size.
+        gh_tmp = self.jail.resolve(self.cfg.downloads_dir / f"{run_id}-tmp")
+        tick_s, stall_s = self.download_tick_s, self.download_stall_s
         apps_dir = self.jail.resolve(self.cfg.apps_dir)
         jail = self.jail
         chosen: dict[str, str] = {}
 
         def gh_api(path: str) -> dict:
-            r = subprocess.run(
+            r = run_tracked(
                 ["gh", "api", f"repos/{REPO_SLUG}/actions/runs/{run_id}{path}"],
-                capture_output=True,
-                text=True,
                 timeout=60,
                 env=gh_env(),
             )
@@ -379,8 +438,20 @@ class Workspace:
             argv = ["gh", "run", "download", run_id, "--repo", REPO_SLUG]
             argv += ["--name", chosen["name"], "--dir", str(dl_dir)]
             log("$ " + " ".join(argv))
-            r = subprocess.run(argv, capture_output=True, text=True, timeout=3000, env=gh_env())
+            if gh_tmp.exists():
+                shutil.rmtree(gh_tmp)
+            gh_tmp.mkdir(parents=True)
+            env = gh_env()
+            env["TMPDIR"] = str(gh_tmp)
+            progress = DownloadProgress(gh_tmp, dl_dir, log, stall_s)
+            try:
+                # No total timeout: the VM link can be very slow. The stall
+                # guard fails the step only when nothing grows for stall_s.
+                r = run_tracked(argv, env=env, on_tick=progress, tick_s=tick_s)
+            finally:
+                shutil.rmtree(gh_tmp, ignore_errors=True)
             log(r.stdout + r.stderr)
+            progress.log_total()
             if r.returncode != 0:
                 raise WorkspaceError(f"gh run download failed ({r.returncode})")
 
@@ -390,49 +461,47 @@ class Workspace:
                 raise WorkspaceError(f"expected exactly one .dmg in the artifact, found {dmgs}")
             dmg = jail.resolve(dmgs[0])
             mnt.mkdir(parents=True, exist_ok=True)
-            r = subprocess.run(
-                [
-                    "hdiutil",
-                    "attach",
-                    "-nobrowse",
-                    "-readonly",
-                    "-noautoopen",
-                    "-mountpoint",
-                    str(mnt),
-                    str(dmg),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-            log(r.stdout + r.stderr)
-            if r.returncode != 0:
-                raise WorkspaceError("hdiutil attach failed")
+            attach = ["hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen"]
+            attach += ["-mountpoint", str(mnt), str(dmg)]
             try:
+                # Inside the try: a cancelled or timed-out attach may still
+                # have mounted the image, so the finally detaches either way.
+                r = run_tracked(attach, timeout=300)
+                log(r.stdout + r.stderr)
+                if r.returncode != 0:
+                    raise WorkspaceError("hdiutil attach failed")
                 apps = [p for p in mnt.iterdir() if p.suffix == ".app" and not p.is_symlink()]
                 if len(apps) != 1:
                     raise WorkspaceError(f"expected one .app in the dmg, found {apps}")
                 dest = jail.resolve(apps_dir / apps[0].name)
                 if dest.exists():
                     shutil.rmtree(dest)
-                r = subprocess.run(
-                    ["ditto", str(apps[0]), str(dest)], capture_output=True, text=True, timeout=600
-                )
-                log(r.stdout + r.stderr)
-                if r.returncode != 0:
-                    raise WorkspaceError("ditto failed")
+                try:
+                    r = run_tracked(["ditto", str(apps[0]), str(dest)], timeout=600)
+                    log(r.stdout + r.stderr)
+                    if r.returncode != 0:
+                        raise WorkspaceError("ditto failed")
+                except BaseException:
+                    # Failed, cancelled or timed out mid-copy: don't leave half an app.
+                    shutil.rmtree(dest, ignore_errors=True)
+                    raise
                 remove_self_update_backups(apps_dir, log)
             finally:
-                r = subprocess.run(
-                    ["hdiutil", "detach", str(mnt)], capture_output=True, text=True, timeout=120
-                )
-                log(r.stdout + r.stderr)
+                # Cleanup runs even after a cancel (cancellable=False), and a
+                # failing detach must not mask the step's own error.
+                try:
+                    r = run_tracked(["hdiutil", "detach", str(mnt)], timeout=120, cancellable=False)
+                    log(r.stdout + r.stderr)
+                except (subprocess.TimeoutExpired, OSError) as e:
+                    log(f"hdiutil detach failed: {e}")
             # The fork's build is ad-hoc signed and not notarized; clear the
             # quarantine bit on our private copy only (never /Applications).
-            subprocess.run(
+            # Not cancellable: the app is already in place, and a quarantined
+            # copy would be blocked by Gatekeeper at app_launch.
+            run_tracked(
                 ["xattr", "-dr", "com.apple.quarantine", str(dest)],
-                capture_output=True,
                 timeout=120,
+                cancellable=False,
             )
             log(f"installed {dest}")
             return {"app": str(dest)}
@@ -444,7 +513,9 @@ class Workspace:
             [verify_run, download, mount_and_copy],
             cwd=self.cfg.workspace_dir,
             env=self._base_env(),
-            timeout_s=3600,
+            # Downloads over a slow link can take hours; the stall guard in
+            # download() is what catches a hung transfer.
+            timeout_s=12 * 3600,
         )
 
     def installed_app(self) -> Path | None:

@@ -256,7 +256,8 @@ def create_server(s: Services) -> FastMCP:
     @mcp.tool()
     @A()
     async def job_cancel(job_id: str) -> dict:
-        """Cancel a running job (kills its whole process group)."""
+        """Cancel a running job: kills the current step's process group (SIGTERM, then
+        SIGKILL after 5 s); no later steps run. ``cancel_requested`` is true until it stops."""
         return (await _thread(s.jobs.cancel, job_id)).summary()
 
     @mcp.tool()
