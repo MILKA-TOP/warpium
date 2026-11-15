@@ -6,7 +6,7 @@
 //! palette command), so projects without Android never start an adb server.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -69,6 +69,13 @@ pub(crate) struct AndroidModel {
     status: AdbStatus,
     devices: Vec<Device>,
     selected_serial: Option<String>,
+    /// Whether the selected device has been connected since launch. A selection remembered from
+    /// an earlier launch is replaced by the first online device; one unplugged meanwhile is kept.
+    selected_seen: bool,
+    /// Set once something needed devices, so turning the feature back on resumes tracking.
+    wanted: bool,
+    /// The project whose `local.properties` named the SDK, if any.
+    project_root: Option<PathBuf>,
     avds: Vec<Avd>,
     /// AVDs being launched and waited for.
     launching: HashSet<String>,
@@ -91,6 +98,9 @@ pub(crate) fn init(ctx: &mut AppContext) {
                 WarpiumSettingsChangedEvent::AndroidTools { .. } => {
                     if !is_enabled(ctx) {
                         model.stop(ctx);
+                    } else if model.wanted {
+                        let project_root = model.project_root.clone();
+                        model.ensure_started(project_root.as_deref(), ctx);
                     }
                 }
                 WarpiumSettingsChangedEvent::SyncFromWarp { .. }
@@ -116,6 +126,9 @@ pub(crate) fn init(ctx: &mut AppContext) {
             status: AdbStatus::NotStarted,
             devices: Vec::new(),
             selected_serial,
+            selected_seen: false,
+            wanted: false,
+            project_root: None,
             avds: Vec::new(),
             launching: HashSet::new(),
             cancel_launches: Arc::new(AtomicBool::new(false)),
@@ -224,6 +237,8 @@ impl AndroidModel {
         if self.tracker.is_some() || !is_enabled(ctx) {
             return;
         }
+        self.wanted = true;
+        self.project_root = project_root.map(Path::to_path_buf);
         self.sdk = find_sdk(project_root, &SdkEnv::from_process());
         if self.sdk.is_none() {
             log::info!(
@@ -283,7 +298,9 @@ impl AndroidModel {
                     .selected_serial
                     .as_deref()
                     .is_some_and(|serial| self.devices.iter().any(|d| d.serial() == serial));
+                self.selected_seen |= selected_present;
                 if !selected_present
+                    && !self.selected_seen
                     && let Some(online) = self
                         .devices
                         .iter()
@@ -316,6 +333,7 @@ impl AndroidModel {
         {
             log::warn!("[Android] Failed to save the selected device: {err:#}");
         }
+        self.selected_seen = self.devices.iter().any(|device| device.serial() == serial);
         self.selected_serial = Some(serial);
         ctx.emit(AndroidEvent::SelectionChanged);
         ctx.notify();

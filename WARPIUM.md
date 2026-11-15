@@ -339,29 +339,36 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
   `ro.kernel.qemu.avd_name`) in a single `shell:` call. Emulators (`emulator-*`), USB and Wi-Fi
   (`host:port` and mDNS `adb-…._adb-tls-connect._tcp`) are told apart by serial; states include
   offline, unauthorized and no permissions. Reconnects back off from 1 to 30 s. The selected device
-  is remembered in private preferences (`WarpiumAndroidSelectedDevice`); when it is gone, the first
-  online device is selected. Nothing starts until the Logcat pane, its device menu or an Android
+  is remembered in private preferences (`WarpiumAndroidSelectedDevice`). A remembered device that
+  hasn't been connected since launch is replaced by the first online one; one unplugged meanwhile
+  stays selected. One-shot requests time out after 10 s of silence. Nothing starts until the Logcat pane, its device menu or an Android
   palette command needs devices.
 - **AVDs.** Listed from `<name>.ini` and `<name>.avd/config.ini` in `ANDROID_AVD_HOME`,
   `ANDROID_USER_HOME/avd`, `ANDROID_SDK_HOME/.android/avd` and `~/.android/avd` (display name and API
   level), falling back to `emulator -list-avds`. Launching runs `emulator -avd <name>` (its own
   window; it outlives Warpium) and polls the adb server every second until an emulator reports that
   AVD name and `sys.boot_completed=1` (5 minute limit; an early emulator exit is reported).
-- **Logcat stream.** `exec:logcat -B -b main,system,crash -T 5000`: binary `logger_entry` records
+- **Logcat stream.** `exec:logcat -B -b main -b system -b crash -T 5000` (repeated `-b`, which
+  Android 6 and older need): binary `logger_entry` records
   (v1–v4 headers), parsed incrementally on the stream's thread with interned tags, so multi-line
   messages and stack traces stay intact. Batches go to the UI at most every 50 ms (4096 entries at
-  most). A stream that ends while its device is online reconnects after 2 s; a restarted stream
-  clears the pane, since `-T` replays the backlog.
+  most). A stream that ends while its device is online reconnects after 2 s. Reconnecting to the
+  same device (a cable blip, a reboot after a crash) keeps what is shown and skips the replayed
+  backlog up to the newest shown entry's time; switching devices clears the pane and the package's
+  known pids.
 - **Buffer and filters.** `LogBuffer` keeps 200,000 entries and the list of rows (one per message
   line) that pass the filters, appended incrementally and rebuilt only when a filter or the
   package's pids change. Filters: minimum level, tags (comma-separated substrings, `-tag` hides),
   text (case-insensitive) or regex over tag and message, and a package. Package pids come from
-  ActivityManager's `Start proc` lines in the stream (applied before the lines after them, so an
-  app's first lines after a restart are kept) and from polling `ps` every 3 s; every pid the package
+  ActivityManager's `Start proc` lines in the stream (a new pid rebuilds the rows, since a forked
+  process logs a few lines before system_server announces it) and from polling
+  `ps -A -o PID,NAME; ps` every 3 s (toybox and the old toolbox format); every pid the package
   ever had stays included, so a crash stays visible after the restart. The package filter starts
-  with the project's first app module's id (see `warpium_android::project`).
+  with the project's first app module's id (see `warpium_android::project`; plugins declared with
+  `apply false`, as in root build scripts, don't make a module an app). An invalid regex keeps the
+  previous text filter while the other filters apply.
 - **Rendering.** A `UniformList` lays out only the visible rows; the list follows new rows until
-  the user scrolls up, and keeps its place when old rows are evicted. Pause collects new entries
+  the user scrolls up or presses the mouse in it (a click or a scrollbar drag), and keeps its place when old rows are evicted. Pause collects new entries
   aside and applies them on resume.
 - **Stack frames.** `at [module/]com.foo.Bar$Inner$1.baz(Bar.kt:42)` lines get a link. Clicking it
   looks up `com.foo.Bar.Inner`, then `com.foo.Bar`, in the code index (Kotlin file facades such as

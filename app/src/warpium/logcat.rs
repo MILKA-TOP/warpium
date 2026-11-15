@@ -18,7 +18,7 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_util::path::LineAndColumnArg;
 use warpium_android::logcat::{
-    LogBuffer, LogEntry, LogFilter, LogLevel, LogcatEvent, LogcatOptions, Row, TagFilter,
+    LogBuffer, LogEntry, LogFilter, LogLevel, LogTime, LogcatEvent, LogcatOptions, Row, TagFilter,
     TextFilter, spawn_logcat, spawn_process_poller,
 };
 use warpium_android::stack::{StackFrame, choose_source_file, find_source_file, parse_frame};
@@ -135,6 +135,8 @@ pub(crate) enum LogcatAction {
     ScrollToEnd,
     /// The user scrolled the list (positive is towards older rows).
     ScrolledBy(f32),
+    /// The user pressed the mouse in the list (a click or a scrollbar drag).
+    StopFollowing,
     SelectRow(u64),
     CopySelection,
     /// Open the source of the stack frame on this log line.
@@ -189,6 +191,9 @@ pub(crate) struct LogcatView {
     paused_backlog: Vec<LogEntry>,
     /// Keep the newest row in view.
     follow: bool,
+    /// After reconnecting to the same device, entries up to this time are already shown (the new
+    /// stream starts with the device's backlog), so they are skipped.
+    resume_after: Option<LogTime>,
     /// The rows the list showed at its last layout.
     visible: Range<usize>,
     visible_tx: async_channel::Sender<Range<usize>>,
@@ -298,6 +303,7 @@ impl LogcatView {
             paused: false,
             paused_backlog: Vec::new(),
             follow: true,
+            resume_after: None,
             visible: 0..0,
             visible_tx,
             selected: None,
@@ -384,7 +390,7 @@ impl LogcatView {
             }
             (None, _) | (_, None) => {
                 if device_changed {
-                    self.buffer.clear();
+                    self.buffer.reset();
                     self.selected = None;
                 }
                 self.stop_stream();
@@ -407,12 +413,17 @@ impl LogcatView {
 
     fn start_stream(&mut self, client: AdbClient, serial: String, ctx: &mut ViewContext<Self>) {
         self.stop_stream();
-        // A restarted stream begins with the device's recent backlog, which would duplicate
-        // what is shown.
-        self.buffer.clear();
-        self.paused_backlog.clear();
-        self.selected = None;
-        self.follow = true;
+        if self.serial.as_deref() == Some(serial.as_str()) {
+            // The same device again (it reconnected or rebooted): keep what is shown, and skip
+            // the part of the new stream's backlog that is already there.
+            self.resume_after = self.buffer.last_time();
+        } else {
+            self.buffer.reset();
+            self.paused_backlog.clear();
+            self.selected = None;
+            self.follow = true;
+            self.resume_after = None;
+        }
         self.serial = Some(serial.clone());
         let generation = self.stream_generation;
         let (sender, receiver) = async_channel::unbounded();
@@ -494,7 +505,20 @@ impl LogcatView {
 
     fn on_logcat_event(&mut self, event: LogcatEvent, ctx: &mut ViewContext<Self>) {
         match event {
-            LogcatEvent::Entries(entries) => {
+            LogcatEvent::Entries(mut entries) => {
+                if let Some(after) = self.resume_after {
+                    let skip = entries
+                        .iter()
+                        .take_while(|entry| entry.time <= after)
+                        .count();
+                    if skip < entries.len() {
+                        self.resume_after = None;
+                    }
+                    entries.drain(..skip);
+                    if entries.is_empty() {
+                        return;
+                    }
+                }
                 if self.paused {
                     self.paused_backlog.extend(entries);
                     let overflow = self.paused_backlog.len().saturating_sub(BUFFER_CAPACITY);
@@ -527,7 +551,9 @@ impl LogcatView {
 
     fn push_entries(&mut self, entries: Vec<LogEntry>) {
         let outcome = self.buffer.push_batch(entries);
-        if !self.follow && outcome.evicted_rows > 0 {
+        if outcome.rebuilt {
+            self.after_rows_rebuilt();
+        } else if !self.follow && outcome.evicted_rows > 0 {
             self.list_state
                 .add_scroll_top(-(outcome.evicted_rows as f32));
         }
@@ -559,6 +585,7 @@ impl LogcatView {
             .to_owned();
         let tags = self.tag_editor.as_ref(ctx).buffer_text(ctx);
         let text = self.text_editor.as_ref(ctx).buffer_text(ctx);
+        // An invalid regex keeps the previous text filter, and the other filters still apply.
         let text_filter = match TextFilter::parse(&text, self.regex) {
             Ok(filter) => {
                 self.filter_error = None;
@@ -566,8 +593,7 @@ impl LogcatView {
             }
             Err(err) => {
                 self.filter_error = Some(format!("Invalid regex: {err}"));
-                ctx.notify();
-                return;
+                self.buffer.filter().text.clone()
             }
         };
         let package = (!package.is_empty()).then_some(package);
@@ -595,9 +621,9 @@ impl LogcatView {
         });
     }
 
-    fn device_label(&self, app: &AppContext) -> Option<String> {
+    fn device_label(&self, ctx: &AppContext) -> Option<String> {
         let serial = self.serial.as_deref()?;
-        let android = AndroidModel::as_ref(app);
+        let android = AndroidModel::as_ref(ctx);
         Some(
             android
                 .devices()
@@ -740,11 +766,11 @@ impl LogcatView {
         );
     }
 
-    fn status_message(&self, app: &AppContext) -> Option<(String, bool)> {
+    fn status_message(&self, ctx: &AppContext) -> Option<(String, bool)> {
         if let Some(error) = &self.filter_error {
             return Some((error.clone(), true));
         }
-        let android = AndroidModel::as_ref(app);
+        let android = AndroidModel::as_ref(ctx);
         if let AdbStatus::Unavailable(message) = android.status() {
             return Some((format!("Can't reach the adb server: {message}"), true));
         }
@@ -765,19 +791,19 @@ impl LogcatView {
                 return Some((message.to_owned(), false));
             }
             StreamState::Ended(reason) => {
-                let device = self.device_label(app).unwrap_or_default();
+                let device = self.device_label(ctx).unwrap_or_default();
                 let state = android
                     .selected_device()
                     .map(|device| device.entry.state.label().to_owned())
                     .unwrap_or_else(|| "disconnected".to_owned());
+                let online = android
+                    .selected_device()
+                    .is_some_and(|device| device.entry.state.is_online());
                 let message = match reason {
-                    Some(reason)
-                        if android
-                            .selected_device()
-                            .is_some_and(|d| d.entry.state.is_online()) =>
-                    {
+                    Some(reason) if online => {
                         format!("{device}: logcat stopped ({reason}); reconnecting…")
                     }
+                    None if online => format!("{device}: logcat stopped; reconnecting…"),
                     Some(_) | None => {
                         format!("{device} is {state}; logcat resumes when it is back")
                     }
@@ -797,10 +823,10 @@ impl LogcatView {
         None
     }
 
-    fn render_toolbar(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    fn render_toolbar(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let device_label = self
-            .device_label(app)
+            .device_label(ctx)
             .unwrap_or_else(|| "No device".to_owned());
         let device_chip = chip_button(
             self.mouse_states.device_chip.clone(),
@@ -1006,11 +1032,15 @@ impl LogcatView {
                 ctx.dispatch_typed_action(LogcatAction::ScrolledBy(delta.y()));
                 DispatchEventResult::PropagateToParent
             })
+            .on_left_mouse_down(|ctx, _, _| {
+                ctx.dispatch_typed_action(LogcatAction::StopFollowing);
+                DispatchEventResult::PropagateToParent
+            })
             .finish()
     }
 
-    fn render_rows(&self, range: Range<usize>, app: &AppContext) -> Vec<Box<dyn Element>> {
-        let appearance = Appearance::as_ref(app);
+    fn render_rows(&self, range: Range<usize>, ctx: &AppContext) -> Vec<Box<dyn Element>> {
+        let appearance = Appearance::as_ref(ctx);
         let style = RowStyle::new(appearance);
         self.buffer
             .rows(range)
@@ -1418,6 +1448,12 @@ impl TypedActionView for LogcatView {
                 self.selected = None;
                 self.follow = true;
                 ctx.notify();
+            }
+            LogcatAction::StopFollowing => {
+                if self.follow {
+                    self.follow = false;
+                    ctx.notify();
+                }
             }
             LogcatAction::ScrollToEnd => {
                 self.follow = true;

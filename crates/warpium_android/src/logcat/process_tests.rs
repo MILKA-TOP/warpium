@@ -107,6 +107,34 @@ fn parse_ps_reads_legacy_format() {
 }
 
 #[test]
+fn parse_ps_merges_sections_without_duplicates() {
+    let output = "PID NAME\n4321 com.example.app\n\
+                  USER     PID   PPID  VSIZE  RSS     WCHAN    PC         NAME\n\
+                  u0_a61    4321  1     912564 52424 ffffffff 00000000 S com.example.app\n\
+                  u0_a61    4400  1     912564 52424 ffffffff 00000000 S com.example.app:sync\n";
+
+    assert_eq!(
+        parse_ps(output, "com.example.app"),
+        vec![
+            (4321, "com.example.app".to_owned()),
+            (4400, "com.example.app:sync".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn parse_ps_reads_legacy_output_after_an_empty_toybox_section() {
+    let output = "USER PID PPID VSIZE RSS WCHAN PC NAME\n\
+                  USER PID PPID VSIZE RSS WCHAN PC NAME\n\
+                  u0_a61 4321 1 912564 52424 ffffffff 00000000 S com.example.app\n";
+
+    assert_eq!(
+        parse_ps(output, "com.example.app"),
+        vec![(4321, "com.example.app".to_owned())]
+    );
+}
+
+#[test]
 fn parse_ps_without_header_is_empty() {
     assert!(parse_ps("", "com.example").is_empty());
     assert!(parse_ps("garbage\n1 com.example\n", "com.example").is_empty());

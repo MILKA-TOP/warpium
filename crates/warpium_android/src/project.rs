@@ -39,7 +39,11 @@ impl AndroidAppModule {
     /// The Gradle task that builds and installs `variant` (`debug` gives `:app:installDebug`, or
     /// `:installDebug` for the root project).
     pub fn install_task(&self, variant: &str) -> String {
-        format!("{}:install{}", self.gradle_path, capitalize(variant))
+        format!(
+            "{}:install{}",
+            self.gradle_path,
+            crate::device::capitalize(variant)
+        )
     }
 
     /// The package `variant` installs as: from the last build's `output-metadata.json` when there
@@ -62,14 +66,6 @@ impl AndroidAppModule {
             (Some(suffix), "debug") => Some(format!("{id}{suffix}")),
             _ => Some(id),
         }
-    }
-}
-
-fn capitalize(text: &str) -> String {
-    let mut chars = text.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => String::new(),
     }
 }
 
@@ -121,11 +117,14 @@ pub fn parse_settings_modules(settings: &str) -> Vec<String> {
 
 /// Whether a build script applies the Android application plugin, directly
 /// (`com.android.application`), through a version catalog (`libs.plugins.android.application`,
-/// `androidApplication`) or a convention plugin (`myapp.android.application`).
+/// `androidApplication`) or a convention plugin (`myapp.android.application`). Declarations with
+/// `apply false` (how root build scripts put plugins on the classpath) don't count.
 pub fn is_app_build_script(script: &str) -> bool {
-    script.contains("com.android.application")
-        || script.contains("android.application")
-        || script.contains("androidApplication")
+    script.lines().any(|line| {
+        let code = line.split("//").next().unwrap_or("");
+        (code.contains("android.application") || code.contains("androidApplication"))
+            && !code.contains("apply false")
+    })
 }
 
 fn read_build_script(dir: &Path) -> Option<String> {
@@ -154,6 +153,14 @@ fn app_module(gradle_path: String, dir: PathBuf) -> Option<AndroidAppModule> {
     })
 }
 
+/// A module's directory by Gradle's default layout (`:feature:home` is `feature/home`).
+fn module_dir(root: &Path, gradle_path: &str) -> PathBuf {
+    gradle_path
+        .split(':')
+        .filter(|part| !part.is_empty())
+        .fold(root.to_path_buf(), |dir, part| dir.join(part))
+}
+
 /// The project's Android application modules, in `settings.gradle` order (the root project
 /// first, for single-module projects).
 pub fn find_app_modules(root: &Path) -> Vec<AndroidAppModule> {
@@ -165,10 +172,7 @@ pub fn find_app_modules(root: &Path) -> Vec<AndroidAppModule> {
         .find_map(|name| std::fs::read_to_string(root.join(name)).ok())
         .unwrap_or_default();
     for gradle_path in parse_settings_modules(&settings) {
-        let dir: PathBuf = gradle_path
-            .split(':')
-            .filter(|part| !part.is_empty())
-            .fold(root.to_path_buf(), |dir, part| dir.join(part));
+        let dir = module_dir(root, &gradle_path);
         if let Some(module) = app_module(gradle_path, dir) {
             modules.push(module);
         }
@@ -187,11 +191,9 @@ pub fn is_android_project(root: &Path) -> bool {
         .find_map(|name| std::fs::read_to_string(root.join(name)).ok())
         .unwrap_or_default();
     let module_dirs = std::iter::once(root.to_path_buf()).chain(
-        parse_settings_modules(&settings).into_iter().map(|path| {
-            path.split(':')
-                .filter(|part| !part.is_empty())
-                .fold(root.to_path_buf(), |dir, part| dir.join(part))
-        }),
+        parse_settings_modules(&settings)
+            .into_iter()
+            .map(|path| module_dir(root, &path)),
     );
     for dir in module_dirs {
         for source_set in ["main", "androidMain"] {

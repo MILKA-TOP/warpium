@@ -4,7 +4,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
 
-use super::entry::LogEntry;
+use super::entry::{LogEntry, LogTime};
 use super::filter::LogFilter;
 use super::process::{ProcessEvent, parse_activity_manager, process_belongs_to};
 
@@ -34,6 +34,9 @@ pub struct PushOutcome {
     pub added_rows: usize,
     /// Filtered rows dropped from the front because the oldest entries were evicted.
     pub evicted_rows: usize,
+    /// The rows were rebuilt (a new process of the tracked package revealed earlier entries), so
+    /// row indices from before the push are stale.
+    pub rebuilt: bool,
 }
 
 /// Follows one app package's processes.
@@ -107,8 +110,9 @@ impl LogBuffer {
     /// are shown.
     pub fn push_batch(&mut self, batch: Vec<LogEntry>) -> PushOutcome {
         let mut outcome = PushOutcome::default();
+        let mut new_pid = false;
         for entry in batch {
-            self.track_process(&entry);
+            new_pid |= self.track_process(&entry);
             let seq = self.first_seq + self.entries.len() as u64;
             if self.matches(&entry) {
                 outcome.added_rows += push_rows(&mut self.rows, seq, &entry);
@@ -129,13 +133,33 @@ impl LogBuffer {
             }
             outcome.evicted_rows = before - self.rows.len();
         }
+        // A forked app process logs a few lines before system_server announces it.
+        if new_pid {
+            self.refilter();
+            outcome.rebuilt = true;
+        }
         outcome
     }
 
+    /// Drops the entries; the tracked package's known pids stay.
     pub fn clear(&mut self) {
         self.first_seq += self.entries.len() as u64;
         self.entries.clear();
         self.rows.clear();
+    }
+
+    /// Drops the entries and the tracked package's known pids, for a different device.
+    pub fn reset(&mut self) {
+        self.clear();
+        if let Some(tracker) = &mut self.package {
+            tracker.pids.clear();
+            tracker.running_pid = None;
+        }
+    }
+
+    /// The time of the newest entry.
+    pub fn last_time(&self) -> Option<LogTime> {
+        self.entries.back().map(|entry| entry.time)
     }
 
     pub fn set_filter(&mut self, filter: LogFilter) {
@@ -227,26 +251,31 @@ impl LogBuffer {
         self.rows = rows;
     }
 
-    fn track_process(&mut self, entry: &LogEntry) {
+    /// Applies an ActivityManager process start or death; returns whether a new pid of the
+    /// tracked package appeared.
+    fn track_process(&mut self, entry: &LogEntry) -> bool {
         let Some(tracker) = &mut self.package else {
-            return;
+            return false;
         };
         if &*entry.tag != "ActivityManager" {
-            return;
+            return false;
         }
         match parse_activity_manager(&entry.message) {
             Some(ProcessEvent::Started { pid, process })
                 if process_belongs_to(&process, &tracker.package) =>
             {
-                tracker.pids.insert(pid);
                 if process == tracker.package {
                     tracker.running_pid = Some(pid);
                 }
+                tracker.pids.insert(pid)
             }
-            Some(ProcessEvent::Died { pid, .. }) if tracker.running_pid == Some(pid) => {
-                tracker.running_pid = None;
+            Some(ProcessEvent::Died { pid, .. }) => {
+                if tracker.running_pid == Some(pid) {
+                    tracker.running_pid = None;
+                }
+                false
             }
-            Some(ProcessEvent::Started { .. } | ProcessEvent::Died { .. }) | None => {}
+            Some(ProcessEvent::Started { .. }) | None => false,
         }
     }
 }

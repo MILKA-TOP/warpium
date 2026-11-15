@@ -29,10 +29,11 @@ impl Default for LogcatOptions {
     }
 }
 
-/// The device-side command: binary output of the main, system and crash buffers.
+/// The device-side command: binary output of the main, system and crash buffers (repeated `-b`,
+/// since Android 6 and older take no comma-separated list).
 pub fn logcat_command(options: &LogcatOptions) -> String {
     format!(
-        "logcat -B -b main,system,crash -T {}",
+        "logcat -B -b main -b system -b crash -T {}",
         options.backlog.max(1)
     )
 }

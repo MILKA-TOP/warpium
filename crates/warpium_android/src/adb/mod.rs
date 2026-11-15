@@ -19,6 +19,9 @@ use protocol::{read_length_prefixed, read_status, send_request};
 /// The adb server's default port.
 pub const DEFAULT_PORT: u16 = 5037;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a one-shot request (a query or shell command) may go without data, so a wedged device
+/// or server can't block its caller forever.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub enum AdbError {
@@ -132,6 +135,7 @@ impl AdbClient {
     /// Sends a `host:` request and reads its length-prefixed answer.
     pub fn host_query(&self, request: &str) -> Result<String, AdbError> {
         let mut stream = self.connect_or_start()?;
+        stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
         send_request(&mut stream, request)?;
         read_status(&mut stream)?;
         read_length_prefixed(&mut stream)
@@ -167,13 +171,15 @@ impl AdbClient {
     }
 
     /// Opens `service` (such as `shell:ls` or `exec:logcat -B`) on the device with `serial` and
-    /// returns the raw stream of its output.
+    /// returns the raw stream of its output, without a read timeout.
     pub fn open_service(&self, serial: &str, service: &str) -> Result<TcpStream, AdbError> {
         let mut stream = self.connect_or_start()?;
+        stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
         send_request(&mut stream, &format!("host:transport:{serial}"))?;
         read_status(&mut stream)?;
         send_request(&mut stream, service)?;
         read_status(&mut stream)?;
+        stream.set_read_timeout(None)?;
         Ok(stream)
     }
 
@@ -181,6 +187,7 @@ impl AdbClient {
     /// give `shell:` a terminal) normalized to `\n`.
     pub fn shell(&self, serial: &str, command: &str) -> Result<String, AdbError> {
         let mut stream = self.open_service(serial, &format!("shell:{command}"))?;
+        stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
         let mut output = Vec::new();
         stream.read_to_end(&mut output)?;
         Ok(String::from_utf8_lossy(&output).replace("\r\n", "\n"))

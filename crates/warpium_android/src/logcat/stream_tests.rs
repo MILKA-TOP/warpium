@@ -44,7 +44,7 @@ fn collect(receiver: &mpsc::Receiver<LogcatEvent>) -> (Vec<LogEntry>, Option<Str
 fn logcat_command_requests_binary_buffers() {
     assert_eq!(
         logcat_command(&LogcatOptions { backlog: 100 }),
-        "logcat -B -b main,system,crash -T 100"
+        "logcat -B -b main -b system -b crash -T 100"
     );
 }
 
@@ -55,7 +55,7 @@ fn streams_entries_from_exec_service_in_bounded_batches() {
         if let Some(next) = answer_transport(request, stream, "emulator-5554") {
             return next;
         }
-        assert_eq!(request, "exec:logcat -B -b main,system,crash -T 5000");
+        assert_eq!(request, "exec:logcat -B -b main -b system -b crash -T 5000");
         okay(stream);
         let mut bytes = Vec::new();
         for index in 0..count {

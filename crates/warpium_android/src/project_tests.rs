@@ -49,6 +49,10 @@ fn recognizes_application_plugin_spellings() {
     assert!(!is_app_build_script(
         r#"plugins { id("com.android.library") }"#
     ));
+    assert!(!is_app_build_script(
+        "plugins {\n    alias(libs.plugins.android.application) apply false\n    \
+         id(\"com.android.application\") version \"8.7.0\" apply false\n}"
+    ));
 }
 
 fn write(path: &Path, text: &str) {
@@ -62,6 +66,10 @@ fn finds_app_modules_with_ids_and_debug_suffix() {
     write(
         &root.path().join("settings.gradle.kts"),
         "include(\":app\", \":core\", \":wear:app\")\n",
+    );
+    write(
+        &root.path().join("build.gradle.kts"),
+        "plugins { alias(libs.plugins.android.application) apply false }\n",
     );
     write(
         &root.path().join("app/build.gradle.kts"),

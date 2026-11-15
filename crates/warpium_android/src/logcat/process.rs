@@ -59,28 +59,37 @@ pub fn parse_activity_manager(message: &str) -> Option<ProcessEvent> {
     })
 }
 
-/// The shell command listing processes as `PID NAME` (toybox `ps`, Android 8+), falling back to
-/// the old `ps` that lists everything without `-A`.
-pub const PS_COMMAND: &str = "ps -A -o PID,NAME 2>/dev/null || ps";
+/// The shell command listing processes: toybox `ps -A -o PID,NAME` (Android 8+), then the old
+/// toolbox `ps`, which lists everything without arguments. Both run, since toolbox `ps` treats
+/// unknown flags as a name filter and still succeeds; on newer devices the plain `ps` lists only
+/// the shell's own processes.
+pub const PS_COMMAND: &str = "ps -A -o PID,NAME 2>/dev/null; ps 2>/dev/null";
 
-/// Parses `ps` output (either format) into the pids of `package`'s processes. The PID column is
-/// found from the header; the name is the last column.
+/// Parses `ps` output (any number of sections in either format) into `package`'s processes,
+/// without duplicates. Each header line gives the PID column; the name is the last column.
 pub fn parse_ps(output: &str, package: &str) -> Vec<(i32, String)> {
-    let mut lines = output.lines();
-    let Some(header) = lines.next() else {
-        return Vec::new();
-    };
-    let Some(pid_column) = header.split_whitespace().position(|column| column == "PID") else {
-        return Vec::new();
-    };
-    lines
-        .filter_map(|line| {
-            let columns: Vec<&str> = line.split_whitespace().collect();
-            let pid = columns.get(pid_column)?.parse().ok()?;
-            let name = *columns.last()?;
-            process_belongs_to(name, package).then(|| (pid, name.to_owned()))
-        })
-        .collect()
+    let mut processes: Vec<(i32, String)> = Vec::new();
+    let mut pid_column = None;
+    for line in output.lines() {
+        let columns: Vec<&str> = line.split_whitespace().collect();
+        if let Some(column) = columns.iter().position(|column| *column == "PID") {
+            pid_column = Some(column);
+            continue;
+        }
+        let Some(pid) = pid_column
+            .and_then(|column| columns.get(column))
+            .and_then(|pid| pid.parse().ok())
+        else {
+            continue;
+        };
+        let Some(name) = columns.last() else {
+            continue;
+        };
+        if process_belongs_to(name, package) && !processes.iter().any(|(known, _)| *known == pid) {
+            processes.push((pid, (*name).to_owned()));
+        }
+    }
+    processes
 }
 
 #[cfg(test)]

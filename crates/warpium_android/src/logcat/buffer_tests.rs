@@ -98,7 +98,7 @@ fn clear_drops_everything_but_keeps_sequence_numbers_increasing() {
 }
 
 #[test]
-fn package_filter_follows_activity_manager_process_starts() {
+fn package_filter_follows_activity_manager_process_starts_including_earlier_lines() {
     let mut buffer = LogBuffer::new(100);
     buffer.set_package(Some("com.example".to_owned()));
 
@@ -114,7 +114,7 @@ fn package_filter_follows_activity_manager_process_starts() {
         info(60, "other app"),
     ]);
 
-    assert_eq!(lines(&buffer), vec!["app line"]);
+    assert_eq!(lines(&buffer), vec!["before start", "app line"]);
     assert_eq!(buffer.running_pid(), Some(50));
 }
 
@@ -193,6 +193,21 @@ fn changing_the_package_forgets_its_pids() {
 
     assert_eq!(buffer.row_count(), 0);
     assert!(!buffer.package_seen());
+}
+
+#[test]
+fn reset_forgets_the_package_pids_but_clear_keeps_them() {
+    let mut buffer = LogBuffer::new(100);
+    buffer.set_package(Some("com.example".to_owned()));
+    buffer.update_package_processes(&[(42, "com.example".to_owned())]);
+
+    buffer.clear();
+    let seen_after_clear = buffer.package_seen();
+    buffer.reset();
+
+    assert!(seen_after_clear);
+    assert!(!buffer.package_seen());
+    assert_eq!(buffer.running_pid(), None);
 }
 
 #[test]
