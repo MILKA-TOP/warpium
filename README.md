@@ -75,6 +75,7 @@ Buttons for your project's everyday commands sit in the top-right corner of the 
 In an Android project, the project toolbar shows a **device picker** next to the run configurations, with one run configuration per app module. Pick a connected phone (USB or Wi-Fi) or an emulator, then click **Run**: Warpium runs `./gradlew :app:installDebug` in your terminal, where you can watch the build, then starts the app on the device as soon as it is installed and opens Logcat for it.
 
 - Picking an emulator that isn't running starts it in its own window and selects it once it has booted. Clicking **Run** while it is still booting runs the app as soon as it is ready.
+- The first run in a project asks you to trust its Gradle build, since it runs the project's `gradlew` and build scripts.
 - Runs use the `debug` build variant. For other variants or flavors, add a toolbar button with your own Gradle command for now.
 
 Run **Open Logcat** from the command palette to open a live log of your Android device or emulator in a pane, like Logcat in Android Studio. It works with emulators and with phones connected over USB or Wi-Fi.

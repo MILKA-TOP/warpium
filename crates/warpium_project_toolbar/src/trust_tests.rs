@@ -151,3 +151,22 @@ url = "https://example.com"
         ]
     );
 }
+
+#[test]
+fn android_build_trust_is_per_project_and_survives_a_round_trip() {
+    let mut state = ToolbarUserState::default();
+    state.trust_android_builds(Path::new("/work/app"));
+
+    let restored = ToolbarUserState::from_json(&state.to_json());
+
+    assert!(restored.trusts_android_builds(Path::new("/work/app")));
+    assert!(!restored.trusts_android_builds(Path::new("/work/other")));
+}
+
+#[test]
+fn state_saved_before_android_trust_existed_still_loads() {
+    let state = ToolbarUserState::from_json(r#"{"trusted":{"/work/app":"sha256:ab"}}"#);
+
+    assert!(state.is_trusted(Path::new("/work/app"), "sha256:ab"));
+    assert!(!state.trusts_android_builds(Path::new("/work/app")));
+}

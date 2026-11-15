@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use warpium_android::project::find_app_modules;
+use warpium_android::project::AndroidAppModule;
 use warpium_project_toolbar::{CommandAction, CommandTarget};
 use warpui::{SingletonEntity as _, ViewContext};
 
@@ -81,26 +81,15 @@ impl Workspace {
         view
     }
 
-    /// Runs the Android app module with `gradle_path` on the selected device: `./gradlew
-    /// :<module>:installDebug` visibly in the active session (with `ANDROID_SERIAL` set), then,
-    /// once the device reports the new install, starts its launcher activity. Logcat follows the
-    /// app.
+    /// Runs `module` on the selected device: `./gradlew :<module>:installDebug` visibly in the
+    /// active session (with `ANDROID_SERIAL` set), then, once the device reports the new
+    /// install, starts its launcher activity. Logcat follows the app.
     pub(super) fn run_android_app(
         &mut self,
         root: &Path,
-        gradle_path: &str,
+        module: &AndroidAppModule,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some(module) = find_app_modules(root)
-            .into_iter()
-            .find(|module| module.gradle_path == gradle_path)
-        else {
-            self.show_project_toolbar_error(
-                format!("The Android module {gradle_path} wasn't found in settings.gradle"),
-                ctx,
-            );
-            return;
-        };
         let serial = AndroidModel::as_ref(ctx)
             .selected_device()
             .filter(|device| device.entry.state.is_online())
@@ -114,6 +103,16 @@ impl Workspace {
                 .update(ctx, |toolbar, ctx| toolbar.open_device_menu(ctx));
             return;
         };
+        let package = module.package_for_variant(RUN_VARIANT);
+        // Waiting for the install starts first, so it reads the install time before the build
+        // can replace it.
+        if let Some(package) = &package {
+            let (serial, package) = (serial.clone(), package.clone());
+            let metadata = Some(module.output_metadata_path(RUN_VARIANT));
+            AndroidModel::handle(ctx).update(ctx, |android, ctx| {
+                android.launch_after_install(serial, package, metadata, ctx)
+            });
+        }
         let gradle = if root.join("gradlew").is_file() {
             "./gradlew"
         } else {
@@ -123,12 +122,12 @@ impl Workspace {
             command: format!("{gradle} {}", module.install_task(RUN_VARIANT)),
             target: CommandTarget::Current,
             cwd: None,
-            env: BTreeMap::from([("ANDROID_SERIAL".to_owned(), serial.clone())]),
+            env: BTreeMap::from([("ANDROID_SERIAL".to_owned(), serial)]),
         };
         let title = format!("Run {}", module.display_name());
         self.run_project_toolbar_command(root, &command, &title, ctx);
 
-        let Some(package) = module.package_for_variant(RUN_VARIANT) else {
+        let Some(package) = package else {
             self.show_project_toolbar_error(
                 format!(
                     "Couldn't find the application id of {}; it is installed but not started.",
@@ -138,10 +137,6 @@ impl Workspace {
             );
             return;
         };
-        let launch_package = package.clone();
-        AndroidModel::handle(ctx).update(ctx, |android, ctx| {
-            android.launch_after_install(serial, launch_package, ctx)
-        });
         if let Some(logcat) = self.open_android_logcat(None, false, ctx) {
             logcat.update(ctx, |logcat, ctx| logcat.set_package(package, ctx));
         }

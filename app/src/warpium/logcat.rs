@@ -273,9 +273,14 @@ impl LogcatView {
                     }
                     ctx.notify();
                 }
+                AndroidEvent::AppLaunched(package) => {
+                    if me.buffer.package() != Some(package.as_str()) {
+                        me.set_package(package.clone(), ctx);
+                    }
+                }
                 AndroidEvent::AvdsChanged
-                | AndroidEvent::AvdBooted { .. }
-                | AndroidEvent::AvdLaunchFailed { .. } => {
+                | AndroidEvent::AvdBooted
+                | AndroidEvent::AvdLaunchFailed => {
                     if me.open_menu == Some(LogcatMenu::Devices) {
                         me.refresh_menu(ctx);
                     }

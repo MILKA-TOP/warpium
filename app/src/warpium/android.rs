@@ -17,7 +17,7 @@ use warpium_android::adb::server_port_from_env;
 use warpium_android::avd::{
     Avd, avd_dirs_from_env, launch_avd, list_avds, list_avds_with_emulator, wait_for_avd_boot,
 };
-use warpium_android::run::{LaunchOutcome, spawn_launch_after_install};
+use warpium_android::run::{LaunchOutcome, LaunchRequest, spawn_launch_after_install};
 use warpium_android::sdk::{AndroidSdk, SdkEnv, find_sdk};
 use warpium_android::tracker::{TrackerEvent, spawn_device_tracker};
 use warpium_android::{AdbClient, Device, WorkerHandle};
@@ -37,7 +37,7 @@ const SELECTED_DEVICE_KEY: &str = "WarpiumAndroidSelectedDevice";
 const BOOT_TIMEOUT: Duration = Duration::from_secs(300);
 const BOOT_POLL: Duration = Duration::from_secs(1);
 /// How long a run waits for Gradle to install the app before giving up on starting it.
-const INSTALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const INSTALL_POLL: Duration = Duration::from_secs(1);
 
 /// Whether the adb server could be reached.
@@ -58,6 +58,8 @@ pub(crate) enum AndroidEvent {
     AvdBooted,
     /// An AVD launched from Warpium didn't boot.
     AvdLaunchFailed,
+    /// A run started the app with this package.
+    AppLaunched(String),
 }
 
 pub(crate) struct AndroidModel {
@@ -181,7 +183,9 @@ pub(crate) fn init_bindings(ctx: &mut AppContext) {
 
 /// Whether the Android tools are available: Warpium builds with `warpium.android` on.
 pub(crate) fn is_enabled(ctx: &AppContext) -> bool {
-    is_warpium_channel() && *WarpiumSettings::as_ref(ctx).android_tools
+    is_warpium_channel()
+        && ctx.has_singleton_model::<AndroidModel>()
+        && *WarpiumSettings::as_ref(ctx).android_tools
 }
 
 impl AndroidModel {
@@ -299,6 +303,7 @@ impl AndroidModel {
         match event {
             TrackerEvent::Devices(devices) => {
                 self.status = AdbStatus::Connected;
+                let changed = self.devices != devices;
                 self.devices = devices;
                 let selected_present = self
                     .selected_serial
@@ -315,7 +320,9 @@ impl AndroidModel {
                 {
                     self.select(online, ctx);
                 }
-                ctx.emit(AndroidEvent::DevicesChanged);
+                if changed {
+                    ctx.emit(AndroidEvent::DevicesChanged);
+                }
             }
             TrackerEvent::Unavailable(message) => {
                 self.status = AdbStatus::Unavailable(message);
@@ -446,7 +453,13 @@ impl AndroidModel {
                 }
                 match result {
                     Some(Ok(serial)) => {
-                        model.select(serial, ctx);
+                        // Unless the user picked another device that is online meanwhile.
+                        let other_online = model
+                            .selected_device()
+                            .is_some_and(|device| device.entry.state.is_online());
+                        if !other_online {
+                            model.select(serial, ctx);
+                        }
                         ctx.emit(AndroidEvent::AvdBooted);
                     }
                     Some(Err(message)) => {
@@ -471,22 +484,23 @@ impl AndroidModel {
         &mut self,
         serial: String,
         package: String,
+        metadata: Option<PathBuf>,
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(client) = self.client.clone() else {
             return;
         };
         let (sender, receiver) = oneshot::channel();
-        match spawn_launch_after_install(
-            client,
+        let request = LaunchRequest {
             serial,
-            package.clone(),
-            INSTALL_TIMEOUT,
-            INSTALL_POLL,
-            move |outcome| {
-                let _ = sender.send(outcome);
-            },
-        ) {
+            package: package.clone(),
+            metadata,
+            timeout: INSTALL_TIMEOUT,
+            poll: INSTALL_POLL,
+        };
+        match spawn_launch_after_install(client, request, move |outcome| {
+            let _ = sender.send(outcome);
+        }) {
             Ok(launcher) => self.launcher = Some(launcher),
             Err(err) => {
                 log::error!("[Android] Couldn't start waiting for the install: {err}");
@@ -496,7 +510,10 @@ impl AndroidModel {
         ctx.spawn(
             async move { receiver.await.ok() },
             move |_, outcome, ctx| match outcome {
-                Some(LaunchOutcome::Launched) | None => {}
+                Some(LaunchOutcome::Launched(package)) => {
+                    ctx.emit(AndroidEvent::AppLaunched(package));
+                }
+                None => {}
                 Some(LaunchOutcome::TimedOut) => {
                     log::info!("[Android] The app wasn't installed in time; not starting it");
                 }
@@ -510,7 +527,7 @@ impl AndroidModel {
 }
 
 /// Menu items listing the devices (selectable when online) and the AVDs that aren't running
-/// (launchable), for the device menus of the toolbar and the Logcat pane.
+/// (launchable).
 pub(crate) fn device_menu_items<A: Action + Clone>(
     android: &AndroidModel,
     select: impl Fn(String) -> A,

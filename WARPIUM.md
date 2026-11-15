@@ -384,19 +384,27 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
   a run configuration per module (`RunConfigKind::AndroidApp`, key `android:<gradle path>`) and a
   device chip before the run-configurations chip. Its menu lists devices and AVDs (picking an AVD
   launches it) and **Open Logcat**.
-- **Run.** The Run button with an Android run configuration: with no online device but an AVD
-  booting, the run waits for `AndroidEvent::AvdBooted`; with no device at all, a toast and the
-  device menu. Otherwise the workspace types `./gradlew :<module>:installDebug` (`gradle` without a
-  wrapper) into the active session like a toolbar command with `target = "current"` (a busy session
-  falls back to a new tab), with `ANDROID_SERIAL` set, so the build stays visible and works in any
-  shell. Meanwhile a background thread reads the package's `lastUpdateTime` (`dumpsys package`)
-  and polls it every second for up to 20 minutes; when it changes, the app is started with
-  `cmd package resolve-activity --brief` + `am start -n` (Android 7+), falling back to `monkey -p
-  <pkg> -c android.intent.category.LAUNCHER 1`. A failed start shows a toast; a build that never
-  installs is given up silently. The next run replaces the wait. The package is the last build's
-  `build/outputs/apk/debug/output-metadata.json` `applicationId`, else the build script's
-  `applicationId` (or `namespace`) plus the debug `applicationIdSuffix`. Logcat opens (without
-  taking focus) with that package as its filter.
+- **Run.** The Run button with an Android run configuration first asks, once per project, to
+  trust the project's Gradle build (the same prompt as team toolbar commands; recorded in
+  `WarpiumProjectToolbarState` as `trusted_android_builds`), since it runs the repository's
+  `gradlew` and build scripts. With no online device but an AVD booting, the run waits and goes to
+  whichever device is selected and online first (the booted emulator, or one the user picked
+  meanwhile; a booted emulator doesn't take over such a choice). With no device at all, a toast and
+  the device menu. Otherwise a background thread reads the package's `lastUpdateTime`
+  (`dumpsys package`, retried until the device answers), and then the workspace types
+  `./gradlew :<module>:installDebug` (`gradle` without a wrapper) into the active session like a
+  toolbar command with `target = "current"` (a busy session falls back to a new tab), with
+  `ANDROID_SERIAL` set, so the build stays visible and works in any shell. The thread polls every
+  second for up to 10 minutes; when the build rewrites `build/outputs/apk/debug/output-metadata.json`
+  its `applicationId` replaces the guessed package (the previous build's metadata, else the build
+  script's `applicationId` or `namespace` plus the debug `applicationIdSuffix`). When the install
+  time changes, the app is started with `cmd package resolve-activity --brief` + `am start -n`
+  (Android 7+), falling back to `monkey -p <pkg> -c android.intent.category.LAUNCHER 1`, and
+  `AndroidEvent::AppLaunched` points Logcat at the started package. A failed start shows a toast;
+  a build that never installs is given up silently, and the next run replaces the wait. Because
+  the install is detected on the device, another install of the same package during the wait
+  (after a failed build) also starts the app. Logcat opens without taking focus, filtered to the
+  package.
 - **Command palette:** "Open Logcat", "Select Android device", "Launch Android Virtual Device (AVD)"
   (both open the pane's device menu) and "Enable/Disable Android tools (devices, logcat, run)",
   which toggles `warpium.android` (default on, OSS channel only).

@@ -269,7 +269,7 @@ pub(crate) enum ProjectToolbarEvent {
     /// device.
     RunAndroidApp {
         root: PathBuf,
-        gradle_path: String,
+        module: AndroidAppModule,
     },
     OpenLogcat,
 }
@@ -294,10 +294,19 @@ enum OpenMenu {
 }
 
 struct TrustPrompt {
-    /// The button to run once the user trusts the toolbar.
-    pending_button_id: String,
-    team_hash: String,
+    target: TrustTarget,
     listings: Vec<TrustListing>,
+}
+
+/// What a trust prompt asks to trust, and what runs once it is confirmed.
+enum TrustTarget {
+    /// One version of the team config; the button runs afterwards.
+    TeamConfig {
+        pending_button_id: String,
+        team_hash: String,
+    },
+    /// The project's Gradle build, for Android runs; the app module runs afterwards.
+    AndroidBuild { module: AndroidAppModule },
 }
 
 #[derive(Default)]
@@ -384,23 +393,35 @@ impl ProjectToolbarView {
                 | WarpiumSettingsChangedEvent::CodeIndex { .. } => {}
             },
         );
-        ctx.subscribe_to_model(&AndroidModel::handle(ctx), |me, _, event, ctx| {
-            match event {
-                AndroidEvent::AvdBooted => {
-                    if let Some(gradle_path) = me.pending_android_run.take() {
-                        me.run_android_app(gradle_path, ctx);
+        if ctx.has_singleton_model::<AndroidModel>() {
+            ctx.subscribe_to_model(&AndroidModel::handle(ctx), |me, _, event, ctx| {
+                match event {
+                    // A pending run goes to whichever device is selected and online first: the
+                    // booted emulator, or another device the user picked meanwhile.
+                    AndroidEvent::AvdBooted
+                    | AndroidEvent::SelectionChanged
+                    | AndroidEvent::DevicesChanged => {
+                        let android = AndroidModel::as_ref(ctx);
+                        let ready = android
+                            .selected_device()
+                            .is_some_and(|device| device.entry.state.is_online());
+                        if ready && let Some(gradle_path) = me.pending_android_run.take() {
+                            me.run_android_app(gradle_path, ctx);
+                        }
                     }
+                    AndroidEvent::AvdLaunchFailed => {
+                        if !AndroidModel::as_ref(ctx).is_any_launching() {
+                            me.pending_android_run = None;
+                        }
+                    }
+                    AndroidEvent::AvdsChanged | AndroidEvent::AppLaunched(_) => {}
                 }
-                AndroidEvent::AvdLaunchFailed => me.pending_android_run = None,
-                AndroidEvent::DevicesChanged
-                | AndroidEvent::SelectionChanged
-                | AndroidEvent::AvdsChanged => {}
-            }
-            if me.open_menu == Some(OpenMenu::Devices) {
-                me.set_menu_items(OpenMenu::Devices, ctx);
-            }
-            ctx.notify();
-        });
+                if me.open_menu == Some(OpenMenu::Devices) {
+                    me.set_menu_items(OpenMenu::Devices, ctx);
+                }
+                ctx.notify();
+            });
+        }
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), |me, _, event, ctx| {
             if let WarpConfigUpdateEvent::LaunchConfigs = event {
                 me.refresh_run_configs(ctx);
@@ -530,9 +551,38 @@ impl ProjectToolbarView {
     /// Asks the workspace to run an Android app module, or waits for an emulator that is
     /// booting.
     fn run_android_app(&mut self, gradle_path: String, ctx: &mut ViewContext<Self>) {
-        let Some(root) = self.project_root().map(Path::to_path_buf) else {
+        let (Some(root), Some(module)) = (
+            self.project_root().map(Path::to_path_buf),
+            self.android_apps
+                .iter()
+                .find(|module| module.gradle_path == gradle_path)
+                .cloned(),
+        ) else {
             return;
         };
+        if !super::android::is_enabled(ctx) {
+            return;
+        }
+        if !ProjectToolbarStore::as_ref(ctx)
+            .state()
+            .trusts_android_builds(&root)
+        {
+            let gradle = if root.join("gradlew").is_file() {
+                "./gradlew"
+            } else {
+                "gradle"
+            };
+            self.trust_prompt = Some(TrustPrompt {
+                listings: vec![TrustListing {
+                    label: module.display_name(),
+                    command: format!("{gradle} {}", module.install_task("debug")),
+                    details: "current session · env ANDROID_SERIAL".to_owned(),
+                }],
+                target: TrustTarget::AndroidBuild { module },
+            });
+            ctx.notify();
+            return;
+        }
         let android = AndroidModel::as_ref(ctx);
         let device_online = android
             .selected_device()
@@ -543,7 +593,7 @@ impl ProjectToolbarView {
             return;
         }
         self.pending_android_run = None;
-        ctx.emit(ProjectToolbarEvent::RunAndroidApp { root, gradle_path });
+        ctx.emit(ProjectToolbarEvent::RunAndroidApp { root, module });
         ctx.notify();
     }
 
@@ -570,8 +620,13 @@ impl ProjectToolbarView {
                     .or_default();
             }
         }
-        if let Some(prompt) = &self.trust_prompt
-            && self.button(&prompt.pending_button_id).is_none()
+        if let Some(TrustPrompt {
+            target: TrustTarget::TeamConfig {
+                pending_button_id, ..
+            },
+            ..
+        }) = &self.trust_prompt
+            && self.button(pending_button_id).is_none()
         {
             self.trust_prompt = None;
         }
@@ -691,8 +746,10 @@ impl ProjectToolbarView {
             // Without a hash there is no version of the team file the user could trust.
             if let Some(team_hash) = team_hash {
                 self.trust_prompt = Some(TrustPrompt {
-                    pending_button_id: id.to_owned(),
-                    team_hash,
+                    target: TrustTarget::TeamConfig {
+                        pending_button_id: id.to_owned(),
+                        team_hash,
+                    },
                     listings: trust_listings(self.buttons()),
                 });
             }
@@ -710,16 +767,29 @@ impl ProjectToolbarView {
         let Some(root) = self.project_root().map(Path::to_path_buf) else {
             return;
         };
-        // The file may have changed while the prompt was open; the listed commands are only
-        // trusted for the version they came from.
-        if self.team_hash() != Some(prompt.team_hash.as_str()) {
-            ctx.notify();
-            return;
+        match prompt.target {
+            TrustTarget::TeamConfig {
+                pending_button_id,
+                team_hash,
+            } => {
+                // The file may have changed while the prompt was open; the listed commands are
+                // only trusted for the version they came from.
+                if self.team_hash() != Some(team_hash.as_str()) {
+                    ctx.notify();
+                    return;
+                }
+                ProjectToolbarStore::handle(ctx).update(ctx, |store, ctx| {
+                    store.update_state(|state| state.trust(&root, &team_hash), ctx);
+                });
+                self.click_button(&pending_button_id, ctx);
+            }
+            TrustTarget::AndroidBuild { module } => {
+                ProjectToolbarStore::handle(ctx).update(ctx, |store, ctx| {
+                    store.update_state(|state| state.trust_android_builds(&root), ctx);
+                });
+                self.run_android_app(module.gradle_path, ctx);
+            }
         }
-        ProjectToolbarStore::handle(ctx).update(ctx, |store, ctx| {
-            store.update_state(|state| state.trust(&root, &prompt.team_hash), ctx);
-        });
-        self.click_button(&prompt.pending_button_id, ctx);
     }
 
     fn run_selected_run_config(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1157,29 +1227,34 @@ impl ProjectToolbarView {
             .map(|root| root.display().to_string())
             .unwrap_or_default();
 
+        let (title, description) = match &prompt.target {
+            TrustTarget::TeamConfig { .. } => (
+                "Trust this project's toolbar?",
+                format!(
+                    "These commands from {root}/.warpium/toolbar.toml run in your shell. \
+                     Warpium asks again whenever the file changes."
+                ),
+            ),
+            TrustTarget::AndroidBuild { .. } => (
+                "Trust this project's Gradle build?",
+                format!(
+                    "Running the app runs the Gradle wrapper and build scripts of {root} in your \
+                     shell. Warpium asks once per project."
+                ),
+            ),
+        };
         let mut column = Flex::column()
             .with_child(
-                Text::new(
-                    "Trust this project's toolbar?",
-                    appearance.ui_font_family(),
-                    14.,
-                )
-                .with_color(main_text)
-                .with_style(Properties::default().weight(Weight::Semibold))
-                .finish(),
+                Text::new(title, appearance.ui_font_family(), 14.)
+                    .with_color(main_text)
+                    .with_style(Properties::default().weight(Weight::Semibold))
+                    .finish(),
             )
             .with_child(
                 Container::new(
-                    Text::new(
-                        format!(
-                            "These commands from {root}/.warpium/toolbar.toml run in your shell. \
-                             Warpium asks again whenever the file changes."
-                        ),
-                        appearance.ui_font_family(),
-                        FONT_SIZE,
-                    )
-                    .with_color(sub_text)
-                    .finish(),
+                    Text::new(description, appearance.ui_font_family(), FONT_SIZE)
+                        .with_color(sub_text)
+                        .finish(),
                 )
                 .with_margin_top(6.)
                 .with_margin_bottom(8.)

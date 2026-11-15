@@ -98,8 +98,8 @@ impl Workspace {
             }
             ProjectToolbarEvent::MenuClosed => self.focus_active_tab(ctx),
             ProjectToolbarEvent::ContentChanged => ctx.notify(),
-            ProjectToolbarEvent::RunAndroidApp { root, gradle_path } => {
-                self.run_android_app(root, gradle_path, ctx)
+            ProjectToolbarEvent::RunAndroidApp { root, module } => {
+                self.run_android_app(root, module, ctx)
             }
             ProjectToolbarEvent::OpenLogcat => {
                 self.open_android_logcat(None, true, ctx);
