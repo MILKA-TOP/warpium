@@ -88,6 +88,7 @@ warp_config_import = { path = "crates/warp_config_import" }
 warpium_project_toolbar = { path = "crates/warpium_project_toolbar" }
 warpium_self_update = { path = "crates/warpium_self_update" }
 warpium_upstream_check = { path = "crates/warpium_upstream_check" }
+code_index = { path = "crates/code_index" }
 warp_core = { path = "crates/warp_core" }
 warp_editor = { path = "crates/editor" }
 warp_errors = { path = "crates/warp_errors" }

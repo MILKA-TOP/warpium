@@ -8,4 +8,8 @@ pub enum PaletteMode {
     WarpDrive,
     Files,
     Conversations,
+    /// Warpium: Go to Class, over the project's code index.
+    CodeClasses,
+    /// Warpium: Go to Symbol, over the project's code index.
+    CodeSymbols,
 }

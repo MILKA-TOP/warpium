@@ -1558,6 +1558,9 @@ pub(crate) fn initialize_app(
     // Warpium: offer and install new Warpium releases from GitHub (never official Warp builds).
     #[cfg(not(target_family = "wasm"))]
     warpium::self_update::init(matches!(launch_mode, LaunchMode::App { .. }), ctx);
+    // Warpium: Kotlin/Java declaration index for Go to Class/Symbol (built on demand).
+    #[cfg(not(target_family = "wasm"))]
+    warpium::code_index::init(ctx);
 
     if FeatureFlag::UIZoom.is_enabled() {
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());

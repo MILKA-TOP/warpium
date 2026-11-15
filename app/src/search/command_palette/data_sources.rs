@@ -143,6 +143,31 @@ impl DataSourceStore {
                 );
             }
 
+            // Warpium: Go to Class / Go to Symbol, only while their filter is active.
+            #[cfg(not(target_family = "wasm"))]
+            if crate::warpium::code_index::is_enabled(ctx) && !is_shared_session_viewer {
+                use code_index::SearchScope;
+
+                use crate::warpium::code_index_palette::CodeSymbolDataSource;
+
+                for (scope, filter) in [
+                    (SearchScope::Types, QueryFilter::CodeClasses),
+                    (SearchScope::All, QueryFilter::CodeSymbols),
+                ] {
+                    let source = ctx.add_model(|_| CodeSymbolDataSource::new(scope));
+                    mixer.add_async_source(
+                        source,
+                        HashSet::from([filter]),
+                        AddAsyncSourceOptions {
+                            debounce_interval: None,
+                            run_in_zero_state: false,
+                            run_when_unfiltered: false,
+                        },
+                        ctx,
+                    );
+                }
+            }
+
             // Add conversation search if AI is enabled
             if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                 mixer.add_sync_source(

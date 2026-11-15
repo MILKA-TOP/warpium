@@ -103,6 +103,8 @@ pub enum Event {
     },
     /// Open a directory at the given path.
     OpenDirectory { path: String },
+    /// Warpium: index the active project and switch to Go to Class or Go to Symbol (`filter`).
+    OpenCodeIndexPalette { filter: QueryFilter },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -396,6 +398,8 @@ impl View {
                 | (PaletteMode::Files, QueryFilter::Files)
                 | (PaletteMode::Conversations, QueryFilter::Conversations)
                 | (PaletteMode::WarpDrive, QueryFilter::Drive)
+                | (PaletteMode::CodeClasses, QueryFilter::CodeClasses)
+                | (PaletteMode::CodeSymbols, QueryFilter::CodeSymbols)
         )
     }
 
@@ -778,6 +782,19 @@ impl View {
                 }) => {
                     self.reset(ctx);
                     self.set_active_query_filter(QueryFilter::Conversations, ctx);
+                    return;
+                }
+                Some(WorkspaceAction::TogglePalette {
+                    mode: mode @ (PaletteMode::CodeClasses | PaletteMode::CodeSymbols),
+                    source: _,
+                }) => {
+                    let filter = if *mode == PaletteMode::CodeClasses {
+                        QueryFilter::CodeClasses
+                    } else {
+                        QueryFilter::CodeSymbols
+                    };
+                    self.reset(ctx);
+                    ctx.emit(Event::OpenCodeIndexPalette { filter });
                     return;
                 }
                 Some(WorkspaceAction::TogglePalette {

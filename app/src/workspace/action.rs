@@ -904,6 +904,8 @@ pub enum WorkspaceAction {
     EditPersonalToolbarOverrides,
     /// Warpium: toggles the project toolbar.
     ToggleProjectToolbar,
+    /// Warpium: toggles the Kotlin/Java code index behind Go to Class and Go to Symbol.
+    ToggleCodeIndex,
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1253,6 +1255,7 @@ impl WorkspaceAction {
             | EditProjectToolbar
             | EditPersonalToolbarOverrides
             | ToggleProjectToolbar
+            | ToggleCodeIndex
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }
