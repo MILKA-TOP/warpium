@@ -10,6 +10,8 @@ pub(crate) mod code_navigation;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod logcat;
 #[cfg(not(target_family = "wasm"))]
+mod logcat_list;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod project_toolbar;
 #[cfg(not(target_family = "wasm"))]
 mod project_toolbar_row;

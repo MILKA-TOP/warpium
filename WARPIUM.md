@@ -420,6 +420,15 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
 - **Rendering.** A `UniformList` lays out only the visible rows; the list follows new rows until
   the user scrolls up or presses the mouse in it (a click or a scrollbar drag), and keeps its place when old rows are evicted. Pause collects new entries
   aside and applies them on resume.
+- **Long lines.** Rows scroll horizontally (trackpad swipe, shift-scroll, or the horizontal
+  scrollbar), whole rows including the time/pid/level/tag columns. The list is the child of a
+  dual-axis `NewScrollable` (vertical: the list's own scroll state through
+  `logcat_list::VerticalListAdapter`; horizontal: clipped, like the terminal's wide alt-screen),
+  laid out as wide as the widest row. `LogBuffer::max_row_columns` keeps that width up to date as
+  rows arrive (evictions don't lower it until the next filter rebuild), so no frame measures the
+  buffer. The **Soft wrap** toggle in the pane's toolbar (off by default) instead splits message
+  lines wider than the pane into several rows (`LogBuffer::set_wrap_columns`), keeping rows
+  uniform for the list; the rows are rebuilt only when the pane's width changes by a column.
 - **Stack frames.** `at [module/]com.foo.Bar$Inner$1.baz(Bar.kt:42)` lines get a link. Clicking it
   looks up `com.foo.Bar.Inner`, then `com.foo.Bar`, in the code index (Kotlin file facades such as
   `BarKt` are skipped), prefers a matching file with the frame's file name or that name next to it,

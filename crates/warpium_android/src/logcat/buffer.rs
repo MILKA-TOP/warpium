@@ -8,11 +8,14 @@ use super::entry::{LogEntry, LogTime};
 use super::filter::LogFilter;
 use super::process::{ProcessEvent, parse_activity_manager, process_belongs_to};
 
-/// One display line: a line of an entry's message.
+/// How many columns a tab advances; the view expands tabs to this many spaces.
+pub const TAB_WIDTH: usize = 4;
+
+/// One display line: a line of an entry's message, or a part of one when soft wrap is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RowRef {
     seq: u64,
-    /// Byte range of the line in the message.
+    /// Byte range of the line (or its wrapped part) in the message.
     start: u32,
     end: u32,
 }
@@ -58,6 +61,11 @@ pub struct LogBuffer {
     filter: LogFilter,
     rows: VecDeque<RowRef>,
     package: Option<PackageTracker>,
+    /// Message lines wider than this many columns are split into several rows.
+    wrap_columns: Option<usize>,
+    /// The widest row added since the rows were last rebuilt, in columns. Evictions don't lower
+    /// it, so it can overestimate until the next rebuild.
+    max_row_columns: usize,
 }
 
 impl LogBuffer {
@@ -70,6 +78,8 @@ impl LogBuffer {
             filter: LogFilter::default(),
             rows: VecDeque::new(),
             package: None,
+            wrap_columns: None,
+            max_row_columns: 0,
         }
     }
 
@@ -83,6 +93,24 @@ impl LogBuffer {
 
     pub fn filter(&self) -> &LogFilter {
         &self.filter
+    }
+
+    /// The width of the widest row, in columns (a tab counts as [`TAB_WIDTH`]), kept up to date
+    /// as rows are added rather than measured over the buffer.
+    pub fn max_row_columns(&self) -> usize {
+        self.max_row_columns
+    }
+
+    /// Splits message lines wider than `columns` into several rows (soft wrap), or stops
+    /// splitting with `None`. Returns whether the rows were rebuilt.
+    pub fn set_wrap_columns(&mut self, columns: Option<usize>) -> bool {
+        let columns = columns.map(|columns| columns.max(1));
+        if columns == self.wrap_columns {
+            return false;
+        }
+        self.wrap_columns = columns;
+        self.refilter();
+        true
     }
 
     pub fn package(&self) -> Option<&str> {
@@ -115,7 +143,13 @@ impl LogBuffer {
             new_pid |= self.track_process(&entry);
             let seq = self.first_seq + self.entries.len() as u64;
             if self.matches(&entry) {
-                outcome.added_rows += push_rows(&mut self.rows, seq, &entry);
+                outcome.added_rows += push_rows(
+                    &mut self.rows,
+                    seq,
+                    &entry,
+                    self.wrap_columns,
+                    &mut self.max_row_columns,
+                );
             }
             self.entries.push_back(entry);
         }
@@ -146,6 +180,7 @@ impl LogBuffer {
         self.first_seq += self.entries.len() as u64;
         self.entries.clear();
         self.rows.clear();
+        self.max_row_columns = 0;
     }
 
     /// Drops the entries and the tracked package's known pids, for a different device.
@@ -243,12 +278,20 @@ impl LogBuffer {
 
     fn refilter(&mut self) {
         let mut rows = VecDeque::with_capacity(self.rows.len());
+        let mut max_row_columns = 0;
         for (index, entry) in self.entries.iter().enumerate() {
             if self.matches(entry) {
-                push_rows(&mut rows, self.first_seq + index as u64, entry);
+                push_rows(
+                    &mut rows,
+                    self.first_seq + index as u64,
+                    entry,
+                    self.wrap_columns,
+                    &mut max_row_columns,
+                );
             }
         }
         self.rows = rows;
+        self.max_row_columns = max_row_columns;
     }
 
     /// Applies an ActivityManager process start or death; returns whether a new pid of the
@@ -280,22 +323,47 @@ impl LogBuffer {
     }
 }
 
-/// Appends one row per message line; returns how many.
-fn push_rows(rows: &mut VecDeque<RowRef>, seq: u64, entry: &LogEntry) -> usize {
+/// Appends one row per message line, or per `wrap_columns`-wide part of a line, and raises
+/// `max_row_columns` to the widest; returns how many rows.
+fn push_rows(
+    rows: &mut VecDeque<RowRef>,
+    seq: u64,
+    entry: &LogEntry,
+    wrap_columns: Option<usize>,
+    max_row_columns: &mut usize,
+) -> usize {
     let mut start = 0;
     let mut count = 0;
     for line in entry.message.split('\n') {
         let end = start + line.len();
-        let trimmed_end = if line.ends_with('\r') { end - 1 } else { end };
-        rows.push_back(RowRef {
-            seq,
-            start: start as u32,
-            end: trimmed_end as u32,
-        });
+        let trimmed = line.strip_suffix('\r').unwrap_or(line);
+        let mut part_start = 0;
+        let mut columns = 0;
+        for (offset, ch) in trimmed.char_indices() {
+            let width = if ch == '\t' { TAB_WIDTH } else { 1 };
+            if wrap_columns.is_some_and(|wrap| columns > 0 && columns + width > wrap) {
+                rows.push_back(row_ref(seq, start + part_start, start + offset));
+                *max_row_columns = (*max_row_columns).max(columns);
+                count += 1;
+                part_start = offset;
+                columns = 0;
+            }
+            columns += width;
+        }
+        rows.push_back(row_ref(seq, start + part_start, start + trimmed.len()));
+        *max_row_columns = (*max_row_columns).max(columns);
         count += 1;
         start = end + 1;
     }
     count
+}
+
+fn row_ref(seq: u64, start: usize, end: usize) -> RowRef {
+    RowRef {
+        seq,
+        start: start as u32,
+        end: end as u32,
+    }
 }
 
 #[cfg(test)]

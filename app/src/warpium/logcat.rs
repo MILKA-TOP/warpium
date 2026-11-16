@@ -18,25 +18,30 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_util::path::LineAndColumnArg;
 use warpium_android::logcat::{
-    LogBuffer, LogEntry, LogFilter, LogLevel, LogTime, LogcatEvent, LogcatOptions, Row, TagFilter,
-    TextFilter, spawn_logcat, spawn_process_poller,
+    LogBuffer, LogEntry, LogFilter, LogLevel, LogTime, LogcatEvent, LogcatOptions, Row, TAB_WIDTH,
+    TagFilter, TextFilter, spawn_logcat, spawn_process_poller,
 };
 use warpium_android::stack::{StackFrame, choose_source_file, find_source_file, parse_frame};
 use warpium_android::{AdbClient, WorkerHandle};
 use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::{
+    AxisConfiguration, ClippedAxisConfiguration, DualAxisConfig, ScrollableAppearance,
+    SingleAxisConfig,
+};
 use warpui::elements::{
-    Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Expanded, Fill, Flex,
-    MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
-    Radius, ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack,
-    Text, UniformList, UniformListState,
+    Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Expanded, Fill,
+    Flex, MouseStateHandle, NewScrollable, OffsetPositioning, Padding, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, ScrollStateHandle, ScrollableElement, ScrollbarWidth, Shrinkable,
+    Stack, Text, UniformList, UniformListState,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::Button;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::Pixels;
 use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle, WindowId,
@@ -44,6 +49,7 @@ use warpui::{
 
 use super::android::{AdbStatus, AndroidEvent, AndroidModel, device_menu_items};
 use super::code_index::CodeIndexModel;
+use super::logcat_list::{VerticalListAdapter, WidthProbe};
 use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, PropagateHorizontalNavigationKeys, TextOptions,
 };
@@ -71,8 +77,13 @@ const MENU_WIDTH: f32 = 280.;
 const TIME_CHARS: f32 = 19.;
 const PID_CHARS: f32 = 12.;
 const TAG_CHARS: f32 = 23.;
-/// Approximate advance of a monospace character relative to the font size.
-const MONO_CHAR_WIDTH: f32 = 0.62;
+/// Columns of the metadata shown before the message: time, pid-tid, level and tag.
+const META_CHARS: f32 = TIME_CHARS + PID_CHARS + 2. + TAG_CHARS;
+const ROW_PADDING_LEFT: f32 = 8.;
+/// Room kept after the widest message so its last characters aren't clipped, in columns.
+const ROW_END_CHARS: f32 = 2.;
+/// Soft wrap never makes rows narrower than this many columns.
+const MIN_WRAP_COLUMNS: usize = 20;
 
 pub(crate) fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -131,6 +142,7 @@ pub(crate) enum LogcatAction {
     SetLevel(LogLevel),
     ToggleRegex,
     TogglePause,
+    ToggleSoftWrap,
     Clear,
     ScrollToEnd,
     /// The user scrolled the list (positive is towards older rows).
@@ -173,6 +185,7 @@ struct MouseStates {
     level_chip: MouseStateHandle,
     regex: MouseStateHandle,
     pause: MouseStateHandle,
+    soft_wrap: MouseStateHandle,
     clear: MouseStateHandle,
     scroll_to_end: MouseStateHandle,
 }
@@ -210,6 +223,12 @@ pub(crate) struct LogcatView {
     open_menu: Option<LogcatMenu>,
     list_state: UniformListState,
     scroll_state: ScrollStateHandle,
+    horizontal_scroll_state: ClippedScrollStateHandle,
+    /// Wrap message lines to the pane's width instead of scrolling horizontally.
+    soft_wrap: bool,
+    /// The width of the row list at its last layout.
+    list_width: f32,
+    list_width_tx: async_channel::Sender<f32>,
     handle: WeakViewHandle<Self>,
     /// The project the pane was opened for, searched for stack-frame sources.
     project_root: Option<PathBuf>,
@@ -296,6 +315,16 @@ impl LogcatView {
             |_, _| {},
         );
 
+        let (list_width_tx, list_width_rx) = async_channel::unbounded();
+        ctx.spawn_stream_local(
+            list_width_rx,
+            |me, width: f32, ctx| {
+                me.list_width = width;
+                me.sync_wrap(ctx);
+            },
+            |_, _| {},
+        );
+
         let mut buffer = LogBuffer::new(BUFFER_CAPACITY);
         buffer.set_package(package);
         let mut view = Self {
@@ -323,6 +352,10 @@ impl LogcatView {
             open_menu: None,
             list_state: UniformListState::new(),
             scroll_state: ScrollStateHandle::default(),
+            horizontal_scroll_state: ClippedScrollStateHandle::default(),
+            soft_wrap: false,
+            list_width: 0.,
+            list_width_tx,
             handle: ctx.handle(),
             project_root,
             pane_configuration,
@@ -578,6 +611,23 @@ impl LogcatView {
         match self.selected.and_then(|seq| self.buffer.row_index_of(seq)) {
             Some(index) => self.list_state.scroll_to(index),
             None => self.follow = true,
+        }
+    }
+
+    /// Re-wraps the rows to the list's width when soft wrap is on, or unwraps them.
+    fn sync_wrap(&mut self, ctx: &mut ViewContext<Self>) {
+        let app: &AppContext = ctx;
+        let columns = self.soft_wrap.then(|| {
+            let char_width = RowStyle::new(Appearance::as_ref(app), app).char_width;
+            let message_width = self.list_width
+                - ROW_PADDING_LEFT
+                - (META_CHARS + ROW_END_CHARS) * char_width
+                - ScrollbarWidth::Auto.as_f32();
+            ((message_width / char_width).floor().max(0.) as usize).max(MIN_WRAP_COLUMNS)
+        });
+        if self.buffer.set_wrap_columns(columns) {
+            self.after_rows_rebuilt();
+            ctx.notify();
         }
     }
 
@@ -883,6 +933,14 @@ impl LogcatView {
             LogcatAction::TogglePause,
             appearance,
         );
+        let soft_wrap_button = self.tool_button(
+            Icon::CornerDownLeft,
+            "Soft wrap",
+            self.soft_wrap,
+            self.mouse_states.soft_wrap.clone(),
+            LogcatAction::ToggleSoftWrap,
+            appearance,
+        );
         let clear_button = self.tool_button(
             Icon::Trash,
             "Clear",
@@ -929,7 +987,13 @@ impl LogcatView {
                 )
                 .finish(),
             );
-        for button in [regex_button, pause_button, clear_button, end_button] {
+        for button in [
+            regex_button,
+            pause_button,
+            soft_wrap_button,
+            clear_button,
+            end_button,
+        ] {
             row.add_child(Container::new(button).with_margin_left(2.).finish());
         }
         Container::new(row.finish())
@@ -1007,7 +1071,7 @@ impl LogcatView {
         .finish()
     }
 
-    fn render_list(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_list(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let row_count = self.buffer.row_count();
         if self.follow && row_count > 0 {
@@ -1025,17 +1089,54 @@ impl LogcatView {
         };
         let list = UniformList::new(self.list_state.clone(), row_count, build_items)
             .notify_visible_items(self.visible_tx.clone());
-        let scrollable = Scrollable::vertical(
-            self.scroll_state.clone(),
-            list.finish_scrollable(),
-            ScrollbarWidth::Auto,
-            theme.nonactive_ui_detail().into(),
-            theme.active_ui_detail().into(),
-            Fill::None,
-        )
-        .with_overlayed_scrollbar()
-        .finish();
-        EventHandler::new(scrollable)
+        let child = Box::new(VerticalListAdapter::new(list.finish_scrollable()));
+        let nonactive_thumb: Fill = theme.nonactive_ui_detail().into();
+        let active_thumb: Fill = theme.active_ui_detail().into();
+        let scrollbar = ScrollableAppearance::new(ScrollbarWidth::Auto, true);
+        let scrollable = if self.soft_wrap {
+            NewScrollable::vertical(
+                SingleAxisConfig::Manual {
+                    handle: self.scroll_state.clone(),
+                    child,
+                },
+                nonactive_thumb,
+                active_thumb,
+                Fill::None,
+            )
+            .with_vertical_scrollbar(scrollbar)
+            .finish()
+        } else {
+            let char_width = RowStyle::new(appearance, app).char_width;
+            // Rows are as wide as the widest message (measured as rows arrive) and at least as
+            // wide as the pane, so every row scrolls by the same amount.
+            let content_width = (ROW_PADDING_LEFT
+                + (META_CHARS + self.buffer.max_row_columns() as f32 + ROW_END_CHARS) * char_width)
+                .max(self.list_width);
+            let max_scroll = (content_width - self.list_width).max(0.);
+            if self.horizontal_scroll_state.scroll_start().as_f32() > max_scroll {
+                self.horizontal_scroll_state
+                    .scroll_to(Pixels::new(max_scroll));
+            }
+            NewScrollable::horizontal_and_vertical(
+                DualAxisConfig::Manual {
+                    horizontal: AxisConfiguration::Clipped(ClippedAxisConfiguration {
+                        handle: self.horizontal_scroll_state.clone(),
+                        max_size: Some(content_width),
+                        stretch_child: false,
+                    }),
+                    vertical: AxisConfiguration::Manual(self.scroll_state.clone()),
+                    child,
+                },
+                nonactive_thumb,
+                active_thumb,
+                Fill::None,
+            )
+            .with_horizontal_scrollbar(scrollbar)
+            .with_vertical_scrollbar(scrollbar)
+            .finish()
+        };
+        let probe = WidthProbe::new(scrollable, self.list_width, self.list_width_tx.clone());
+        EventHandler::new(Box::new(probe))
             .with_always_handle()
             .on_scroll_wheel(|ctx, _, delta, _| {
                 ctx.dispatch_typed_action(LogcatAction::ScrolledBy(delta.y()));
@@ -1050,7 +1151,7 @@ impl LogcatView {
 
     fn render_rows(&self, range: Range<usize>, ctx: &AppContext) -> Vec<Box<dyn Element>> {
         let appearance = Appearance::as_ref(ctx);
-        let style = RowStyle::new(appearance);
+        let style = RowStyle::new(appearance, ctx);
         self.buffer
             .rows(range)
             .map(|row| self.render_row(row, &style, appearance))
@@ -1109,7 +1210,7 @@ impl LogcatView {
                 TAG_CHARS,
             ));
         } else {
-            flex.add_child(column(None, TIME_CHARS + PID_CHARS + 2. + TAG_CHARS));
+            flex.add_child(column(None, META_CHARS));
         }
         let message_color = match entry.level {
             LogLevel::Error | LogLevel::Fatal | LogLevel::Warn => level_color,
@@ -1126,7 +1227,7 @@ impl LogcatView {
                 .with_height(style.row_height)
                 .finish(),
         )
-        .with_padding_left(8.);
+        .with_padding_left(ROW_PADDING_LEFT);
         if self.selected == Some(row.seq) {
             container = container.with_background(theme.surface_2());
         }
@@ -1180,13 +1281,14 @@ struct RowStyle {
 }
 
 impl RowStyle {
-    fn new(appearance: &Appearance) -> Self {
+    fn new(appearance: &Appearance, app: &AppContext) -> Self {
         let theme = appearance.theme();
+        let font_family = appearance.monospace_font_family();
         let font_size = appearance.monospace_font_size();
         Self {
-            font_family: appearance.monospace_font_family(),
+            font_family,
             font_size,
-            char_width: font_size * MONO_CHAR_WIDTH,
+            char_width: app.font_cache().em_width(font_family, font_size),
             row_height: (font_size * appearance.line_height_ratio()).ceil(),
             meta_color: theme.hint_text_color(theme.background()).into_solid(),
             tag_color: theme.sub_text_color(theme.background()).into_solid(),
@@ -1210,7 +1312,7 @@ fn level_color(level: LogLevel, appearance: &Appearance) -> warpui::color::Color
 
 /// Tabs (stack-trace indentation) as spaces, since text elements don't expand them.
 fn expand_tabs(line: &str) -> String {
-    line.replace('\t', "    ")
+    line.replace('\t', &" ".repeat(TAB_WIDTH))
 }
 
 /// An entry as `logcat -v threadtime` prints it, one line per message line.
@@ -1341,7 +1443,7 @@ impl View for LogcatView {
         if let Some((message, is_error)) = self.status_message(app) {
             column.add_child(self.render_status(&message, is_error, appearance));
         }
-        column.add_child(Expanded::new(1., self.render_list(appearance)).finish());
+        column.add_child(Expanded::new(1., self.render_list(appearance, app)).finish());
         let content = Container::new(column.finish())
             .with_background(theme.background())
             .finish();
@@ -1396,6 +1498,12 @@ impl TypedActionView for LogcatView {
                     let backlog = std::mem::take(&mut self.paused_backlog);
                     self.push_entries(backlog);
                 }
+                ctx.notify();
+            }
+            LogcatAction::ToggleSoftWrap => {
+                self.soft_wrap = !self.soft_wrap;
+                self.horizontal_scroll_state.scroll_to(Pixels::zero());
+                self.sync_wrap(ctx);
                 ctx.notify();
             }
             LogcatAction::Clear => {

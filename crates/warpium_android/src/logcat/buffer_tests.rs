@@ -219,3 +219,52 @@ fn row_index_of_finds_the_first_row_of_an_entry() {
     assert_eq!(buffer.row_index_of(seq_of_c), Some(2));
     assert_eq!(buffer.row_index_of(seq_of_c + 1), None);
 }
+
+#[test]
+fn tracks_the_widest_row_incrementally() {
+    let mut buffer = LogBuffer::new(100);
+    buffer.push_batch(vec![info(1, "abc\n\tx")]);
+    assert_eq!(buffer.max_row_columns(), 5);
+
+    buffer.push_batch(vec![info(1, "0123456789")]);
+    assert_eq!(buffer.max_row_columns(), 10);
+
+    buffer.set_filter(LogFilter {
+        text: TextFilter::parse("abc", false).unwrap(),
+        ..LogFilter::default()
+    });
+    assert_eq!(buffer.max_row_columns(), 5);
+
+    buffer.clear();
+    assert_eq!(buffer.max_row_columns(), 0);
+}
+
+#[test]
+fn soft_wrap_splits_long_lines_into_rows() {
+    let mut buffer = LogBuffer::new(100);
+    buffer.push_batch(vec![info(1, "abcdefgh\nij"), info(1, "k")]);
+
+    assert!(buffer.set_wrap_columns(Some(3)));
+    assert_eq!(lines(&buffer), vec!["abc", "def", "gh", "ij", "k"]);
+    let first_lines: Vec<bool> = buffer.rows(0..5).map(|row| row.is_first_line).collect();
+    assert_eq!(first_lines, vec![true, false, false, false, true]);
+    assert_eq!(buffer.row_index_of(buffer.row(4).unwrap().seq), Some(4));
+    assert_eq!(buffer.max_row_columns(), 3);
+
+    buffer.push_batch(vec![info(1, "lmnop")]);
+    assert_eq!(lines(&buffer)[5..], ["lmn", "op"]);
+
+    assert!(!buffer.set_wrap_columns(Some(3)));
+    assert!(buffer.set_wrap_columns(None));
+    assert_eq!(lines(&buffer), vec!["abcdefgh", "ij", "k", "lmnop"]);
+}
+
+#[test]
+fn soft_wrap_counts_tabs_and_keeps_characters_whole() {
+    let mut buffer = LogBuffer::new(100);
+    buffer.push_batch(vec![info(1, "\tat é1é2é3\r")]);
+
+    buffer.set_wrap_columns(Some(6));
+
+    assert_eq!(lines(&buffer), vec!["\tat", " é1é2é", "3"]);
+}
