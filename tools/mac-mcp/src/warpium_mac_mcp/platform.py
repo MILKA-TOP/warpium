@@ -59,7 +59,17 @@ class Platform(Protocol):
 
     def activate(self, pid: int) -> None: ...
 
-    def post_mouse(self, kind: str, x: float, y: float, button: str, click_state: int) -> None: ...
+    def post_mouse(
+        self,
+        kind: str,
+        x: float,
+        y: float,
+        button: str,
+        click_state: int,
+        modifiers: frozenset[str] = frozenset(),
+    ) -> None:
+        """kind is "down", "up" or "move"; modifiers become the event's flags."""
+        ...
 
     def post_scroll(self, x: float, y: float, dx: int, dy: int) -> None: ...
 
@@ -198,7 +208,15 @@ class MacPlatform:
         return executable_path(pid)
 
     # --- input -----------------------------------------------------------
-    def post_mouse(self, kind: str, x: float, y: float, button: str, click_state: int) -> None:
+    def post_mouse(
+        self,
+        kind: str,
+        x: float,
+        y: float,
+        button: str,
+        click_state: int,
+        modifiers: frozenset[str] = frozenset(),
+    ) -> None:
         import Quartz
 
         table = {
@@ -226,6 +244,8 @@ class MacPlatform:
                 None, down_t if kind == "down" else up_t, (x, y), btn
             )
             Quartz.CGEventSetIntegerValueField(ev, Quartz.kCGMouseEventClickState, click_state)
+        if modifiers:
+            Quartz.CGEventSetFlags(ev, self._flags(modifiers))
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
     def post_scroll(self, x: float, y: float, dx: int, dy: int) -> None:

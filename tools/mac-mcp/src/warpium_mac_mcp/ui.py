@@ -28,7 +28,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .platform import Platform, WindowInfo, png_size
-from .validation import KEY_CODES, ValidationError, parse_key_combo, validate_click, validate_text
+from .validation import (
+    KEY_CODES,
+    ValidationError,
+    parse_key_combo,
+    validate_click,
+    validate_click_modifiers,
+    validate_text,
+)
 
 # Owner names of macOS system UI processes that keep full-display windows
 # above normal app windows without intercepting clicks in normal operation
@@ -126,6 +133,23 @@ def _vm_only(what: str) -> VmModeRequiredError:
         f"{what} is only available in VM mode (server started with --vm-mode inside a "
         "macOS VM guest); in host mode only Warpium windows can be captured or receive input"
     )
+
+
+def _click_events(count: int, modifiers: frozenset[str]) -> list[tuple[str, int]]:
+    """(kind, click state) of each mouse event of a click. With modifiers, a move to the point
+    comes first, so the app's hover handling sees them held before the button goes down."""
+    events = [("move", 0)] if modifiers else []
+    return events + [(kind, i) for i in range(1, count + 1) for kind in ("down", "up")]
+
+
+def _clicked(sx: float, sy: float, button: str, count: int, modifiers: frozenset[str]) -> dict:
+    return {
+        "screen_x": sx,
+        "screen_y": sy,
+        "button": button,
+        "count": count,
+        "modifiers": sorted(modifiers),
+    }
 
 
 @dataclass
@@ -391,15 +415,21 @@ class UiController:
         return {"window_id": hit.window_id, "owner": hit.owner, "pid": hit.pid}
 
     def _vm_click(
-        self, win: WindowInfo, x: float, y: float, button: str, count: int, from_screenshot: bool
+        self,
+        win: WindowInfo,
+        x: float,
+        y: float,
+        button: str,
+        count: int,
+        from_screenshot: bool,
+        modifiers: frozenset[str],
     ) -> dict:
         sx, sy, hit, frontmost = self._vm_pointer_target(win, x, y, from_screenshot)
-        for i in range(1, count + 1):
-            for kind in ("down", "up"):
-                self._p.post_mouse(kind, sx, sy, button, i)
-                self._sleep(self._delay)
+        for kind, click_state in _click_events(count, modifiers):
+            self._p.post_mouse(kind, sx, sy, button, click_state, modifiers)
+            self._sleep(self._delay)
         return {
-            "clicked": {"screen_x": sx, "screen_y": sy, "button": button, "count": count},
+            "clicked": _clicked(sx, sy, button, count, modifiers),
             "window_id": win.window_id,
             "vm_mode": True,
             "hit_window": self._hit_info(hit),
@@ -510,25 +540,28 @@ class UiController:
         window: str | int = "frontmost-warpium",
         from_screenshot: bool = False,
         target: str = "window",
+        modifiers: list[str] | None = None,
     ) -> dict:
+        """``modifiers`` (any of cmd, shift, alt, ctrl) are held for the click: they are set on
+        a mouse move to the point first, so hover handling sees them, and on every down/up."""
         self._require_input_enabled()
         validate_click(button, count)
+        mods = validate_click_modifiers(modifiers)
         with self._lock:
             other = self._vm_input_target(window, target)
             if other is not None:
-                return self._vm_click(other, x, y, button, count, from_screenshot)
+                return self._vm_click(other, x, y, button, count, from_screenshot, mods)
             win = self.resolve_window(window)
             sx, sy = self._to_screen(win, x, y, from_screenshot)
-            for i in range(1, count + 1):
-                for kind in ("down", "up"):
-                    # Both checks before every mouse event: an overlay that
-                    # appears mid-click must not receive the rest of it.
-                    self._check_frontmost()
-                    self._check_point(sx, sy)
-                    self._p.post_mouse(kind, sx, sy, button, i)
-                    self._sleep(self._delay)
+            for kind, click_state in _click_events(count, mods):
+                # Both checks before every mouse event: an overlay that
+                # appears mid-click must not receive the rest of it.
+                self._check_frontmost()
+                self._check_point(sx, sy)
+                self._p.post_mouse(kind, sx, sy, button, click_state, mods)
+                self._sleep(self._delay)
         return {
-            "clicked": {"screen_x": sx, "screen_y": sy, "button": button, "count": count},
+            "clicked": _clicked(sx, sy, button, count, mods),
             "window_id": win.window_id,
         }
 

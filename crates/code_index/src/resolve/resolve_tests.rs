@@ -474,3 +474,58 @@ fn plain_constructor_parameters_are_not_visible_in_member_functions() {
     );
     assert!(in_initializer.definitions[0].local);
 }
+
+const MULTIBYTE_SOURCE: &str = "package p\n\n// Привет 😀\nclass Имя {\n    fun go() = \"ц\"\n}\n";
+
+fn definition_in_multibyte_file(position: Position) -> Option<DefinitionResult> {
+    let index = CodeIndex::new("/nonexistent");
+    let file = SourceFile {
+        rel_path: "src/main/kotlin/p/Name.kt",
+        text: MULTIBYTE_SOURCE,
+        language: Language::Kotlin,
+    };
+    index.find_definition(&file, position)
+}
+
+#[test]
+fn a_position_past_the_last_line_has_no_definition() {
+    let result = definition_in_multibyte_file(Position {
+        line: 99,
+        column: 0,
+    });
+
+    assert!(result.is_none());
+}
+
+#[test]
+fn a_column_past_the_end_of_a_multibyte_comment_has_no_definition() {
+    let result = definition_in_multibyte_file(Position {
+        line: 2,
+        column: 500,
+    });
+
+    assert!(result.is_none());
+}
+
+#[test]
+fn a_multibyte_declaration_name_resolves_to_itself() {
+    let result = definition_in_multibyte_file(Position { line: 3, column: 7 })
+        .expect("an identifier is at the position");
+
+    assert_eq!(result.name, "Имя");
+    assert!(result.at_declaration);
+}
+
+#[test]
+fn usages_past_the_end_of_the_file_are_none() {
+    let index = CodeIndex::new("/nonexistent");
+    let file = SourceFile {
+        rel_path: "src/main/kotlin/p/Name.kt",
+        text: MULTIBYTE_SOURCE,
+        language: Language::Kotlin,
+    };
+
+    let result = index.find_usages(&file, Position { line: 6, column: 3 }, 10, 1);
+
+    assert!(result.is_none());
+}

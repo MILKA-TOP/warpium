@@ -207,8 +207,15 @@ pub enum LocalCodeEditorAction {
     },
     /// Warpium: Go to Definition or Find Usages at the cursor, over the Kotlin/Java code index.
     CodeIndexNavigate(CodeNavigationKind),
-    /// Warpium: Go to Definition of the name at `offset` (a cmd-click), over the code index.
+    /// Warpium: a cmd-click on the name at `offset`. It is dispatched from the hovered link's
+    /// click handler, while the editor view and its model are mid-update, so it only defers
+    /// [`Self::CodeIndexDefinitionAtDeferred`].
     CodeIndexDefinitionAt {
+        offset: CharOffset,
+    },
+    /// Warpium: Go to Definition of the name at `offset` over the code index, run once the
+    /// cmd-click that requested it has finished updating the editor.
+    CodeIndexDefinitionAtDeferred {
         offset: CharOffset,
     },
 }
@@ -2159,63 +2166,58 @@ impl LocalCodeEditorView {
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(path) = self.file_path().map(Path::to_path_buf) else {
+            log::warn!("[Code index] Navigation requested in an editor without a file");
             return;
         };
-        let editor = self.editor.as_ref(ctx);
+        // `try_as_ref`: navigation must never panic, even if a future caller runs this while the
+        // editor view is being updated.
+        let Some(editor) = self.editor.try_as_ref(ctx) else {
+            log::warn!("[Code index] Navigation skipped: the editor is mid-update");
+            return;
+        };
+        // An `offset` past the end (the text changed since the hover) saturates to a column past
+        // the end of the last line, which the code index clamps to the line's end.
         let position = match offset {
             Some(offset) => editor.offset_to_lsp_position(offset, ctx),
             None => editor.cursor_lsp_position(ctx),
+        };
+        let (Ok(line), Ok(column)) = (u32::try_from(position.line), u32::try_from(position.column))
+        else {
+            log::warn!("[Code index] Navigation skipped: position out of range");
+            return;
         };
         let request = CodeNavigationRequest {
             kind,
             path,
             text: editor.text(ctx).into_string().into(),
-            line: position.line as u32,
-            column: position.column as u32,
+            line,
+            column,
         };
         ctx.dispatch_typed_action(&WorkspaceAction::CodeIndexNavigate(request));
     }
 
     /// Warpium: underlines the cmd-hovered name as a link to its definition in the code index.
     fn code_index_link_for_hover(&mut self, offset: CharOffset, ctx: &mut ViewContext<Self>) {
-        let editor = self.editor.as_ref(ctx);
+        let Some(editor) = self.editor.try_as_ref(ctx) else {
+            log::warn!("[Code index] Cmd-hover skipped: the editor is mid-update");
+            return;
+        };
         if editor
             .hovered_symbol_range(ctx)
             .is_some_and(|range| range.contains(&offset))
         {
             return;
         }
-        let Some(word) = editor.word_range_at_offset(offset, ctx) else {
+        let word = editor.word_range_at_offset(offset, ctx);
+        // Keywords, words in comments or strings, and whitespace have no definition to go to.
+        let Some(word) = word.filter(|_| self.is_code_index_identifier_at(offset, ctx)) else {
+            self.editor.update(ctx, |editor, ctx| {
+                if editor.clear_hovered_symbol_range(ctx) {
+                    ctx.notify();
+                }
+            });
             return;
         };
-        // Keywords and words in comments or strings have no definition to go to.
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let language = self
-                .file_path()
-                .and_then(code_index::Language::of_editable_path);
-            let position = editor.offset_to_lsp_position(offset, ctx);
-            let is_identifier = language.is_some_and(|language| {
-                code_index::is_identifier_at(
-                    &editor.text(ctx).into_string(),
-                    language,
-                    code_index::Position {
-                        line: position.line as u32,
-                        column: position.column as u32,
-                    },
-                )
-            });
-            if !is_identifier {
-                if editor.hovered_symbol_range(ctx).is_some() {
-                    self.editor.update(ctx, |editor, ctx| {
-                        if editor.clear_hovered_symbol_range(ctx) {
-                            ctx.notify();
-                        }
-                    });
-                }
-                return;
-            }
-        }
         let highlight_range = word.start.saturating_sub(&CharOffset::from(1))
             ..word.end.saturating_sub(&CharOffset::from(1));
         let view_id = ctx.view_id();
@@ -2232,6 +2234,38 @@ impl LocalCodeEditorView {
                 ctx.notify();
             }
         });
+    }
+
+    /// Warpium: whether `offset` is on an identifier in code (not a keyword, comment or string).
+    #[cfg_attr(target_family = "wasm", allow(unused_variables))]
+    fn is_code_index_identifier_at(&self, offset: CharOffset, app: &AppContext) -> bool {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let Some(language) = self
+                .file_path()
+                .and_then(code_index::Language::of_editable_path)
+            else {
+                return false;
+            };
+            let Some(editor) = self.editor.try_as_ref(app) else {
+                return false;
+            };
+            let position = editor.offset_to_lsp_position(offset, app);
+            let (Ok(line), Ok(column)) =
+                (u32::try_from(position.line), u32::try_from(position.column))
+            else {
+                return false;
+            };
+            code_index::is_identifier_at(
+                &editor.text(app).into_string(),
+                language,
+                code_index::Position { line, column },
+            )
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            true
+        }
     }
 
     /// Warpium: context menu items for files the code index navigates without a language server.
@@ -2616,6 +2650,13 @@ impl TypedActionView for LocalCodeEditorView {
                 self.request_code_index_navigation(*kind, None, ctx);
             }
             LocalCodeEditorAction::CodeIndexDefinitionAt { offset } => {
+                // Reading the editor here would panic ("circular view reference"): the click
+                // runs inside `CodeEditorView`'s action handler and `CodeEditorModel::update`.
+                ctx.dispatch_typed_action_deferred(
+                    LocalCodeEditorAction::CodeIndexDefinitionAtDeferred { offset: *offset },
+                );
+            }
+            LocalCodeEditorAction::CodeIndexDefinitionAtDeferred { offset } => {
                 self.request_code_index_navigation(
                     CodeNavigationKind::Definition,
                     Some(*offset),

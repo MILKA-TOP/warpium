@@ -419,7 +419,7 @@ have, so use `install_artifact(run_id)` and `app_launch(source="artifact")` inst
 | `list_windows` | Warpium windows with ids and bounds. |
 | `screenshot(window, max_width)` | PNG of one Warpium window (max 1600 px wide by default) plus bounds and scale. |
 | `focus_app` | Brings Warpium to the front. |
-| `click(x, y, button, count, window, from_screenshot)` | Window-relative click. |
+| `click(x, y, button, count, window, from_screenshot, modifiers)` | Window-relative click. `modifiers` is a list of `cmd`, `shift`, `alt`, `ctrl` held for the click (`["cmd"]` for a cmd-click); they are set on a mouse move to the point first, so cmd-hover handling sees them, and on every button down/up. |
 | `scroll(x, y, dy, dx, ...)` | Scrolls by lines at a window point. |
 | `type_text(text, redact)` | Types text. `\n` is sent as Return. |
 | `press_keys(combo)` | Key combos such as `cmd+t`, `cmd+shift+]`, `ctrl+c`, `enter`. |

@@ -369,6 +369,23 @@ def validate_click(button: str, count: int) -> None:
         raise ValidationError("count must be 1, 2 or 3")
 
 
+CLICK_MODIFIERS = ("cmd", "shift", "alt", "ctrl")
+
+
+def validate_click_modifiers(modifiers: list[str] | None) -> frozenset[str]:
+    """Modifier keys held during a click: any of ``CLICK_MODIFIERS``, each at most once."""
+    if modifiers is None:
+        return frozenset()
+    if not isinstance(modifiers, (list, tuple)) or len(modifiers) > len(CLICK_MODIFIERS):
+        raise ValidationError(f"modifiers must be a list of {CLICK_MODIFIERS}")
+    for m in modifiers:
+        if not isinstance(m, str) or m not in CLICK_MODIFIERS:
+            raise ValidationError(f"unknown modifier {m!r}; use {CLICK_MODIFIERS}")
+    if len(set(modifiers)) != len(modifiers):
+        raise ValidationError("modifiers must not repeat")
+    return frozenset(modifiers)
+
+
 def validate_text(text: str, maximum: int = 4000) -> str:
     if not isinstance(text, str) or not text:
         raise ValidationError("text must be a non-empty string")
