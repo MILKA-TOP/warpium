@@ -786,10 +786,18 @@ impl ProjectToolbarEditor {
 
     fn test_run(&mut self, ctx: &mut ViewContext<Self>) {
         self.commit_form(ctx);
-        let (Some(root), Some(button)) = (self.root.clone(), self.selected_button()) else {
+        let (Some(root), Some(index), Some(button)) =
+            (self.root.clone(), self.selected, self.selected_button())
+        else {
             return;
         };
-        match button.spec.to_toolbar_button(ConfigSource::Personal) {
+        // The team's own command still needs trust in the team file to run.
+        let source = if self.model.runs_team_action(index) {
+            ConfigSource::Team
+        } else {
+            ConfigSource::Personal
+        };
+        match button.spec.to_toolbar_button(source) {
             Ok(button) => {
                 self.error = None;
                 ctx.emit(ProjectToolbarEditorEvent::TestRun { root, button });

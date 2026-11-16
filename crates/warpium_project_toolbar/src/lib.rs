@@ -23,8 +23,7 @@ pub use config::{
     TextPosition, ToolbarButton, merge, parse_config,
 };
 pub use edit::{
-    ButtonSpec, EditorButton, EditorModel, Placement, SaveError, SavePlan, Scope, SpecAction,
-    slug,
+    ButtonSpec, EditorButton, EditorModel, Placement, SaveError, SavePlan, Scope, SpecAction, slug,
 };
 pub use icons::{BUNDLED_ICONS, ButtonIcon, bundled_icon_path, parse_icon};
 pub use project::{
@@ -43,5 +42,5 @@ pub use trust::{
 };
 pub use vars::{
     COMMAND_VARIABLES, VariableError, VariableValues, expand_variables, has_variables,
-    prompt_labels, validate_variables,
+    prompt_labels,
 };

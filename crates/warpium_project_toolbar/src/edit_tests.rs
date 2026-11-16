@@ -235,13 +235,87 @@ fn moving_a_button_to_personal_scope_keeps_the_project_entry_and_overrides_it() 
     let plan = model.plan_save(Some(TEAM), None).unwrap();
 
     assert_eq!(plan.team, None);
-    let personal = plan.personal.clone().unwrap();
-    assert!(personal.contains("id = \"build\""));
-    assert!(personal.contains("label = \"Mine\""));
+    assert_eq!(
+        plan.personal.as_deref(),
+        Some("[[button]]\nid = \"build\"\nlabel = \"Mine\"\n")
+    );
     let buttons = merged(&plan, Some(TEAM), None);
     assert_eq!(buttons[0].label.as_deref(), Some("Mine"));
+    // The command is still the team's, so it still needs trust.
+    assert_eq!(buttons[0].action_source, ConfigSource::Team);
+    assert!(buttons[0].requires_trust());
+}
+
+#[test]
+fn an_override_that_changes_the_command_owns_it() {
+    let mut model = model(Some(TEAM), None);
+    model.buttons[0].scope = Scope::Personal;
+    assert!(model.runs_team_action(0));
+    model.buttons[0].spec.action = command("make");
+    assert!(!model.runs_team_action(0));
+
+    let plan = model.plan_save(Some(TEAM), None).unwrap();
+
+    assert_eq!(
+        plan.personal.as_deref(),
+        Some("[[button]]\nid = \"build\"\ncommand = \"make\"\n")
+    );
+    let buttons = merged(&plan, Some(TEAM), None);
     assert_eq!(buttons[0].action_source, ConfigSource::Personal);
-    assert!(!buttons[0].requires_trust());
+    assert!(matches!(&buttons[0].action, ButtonAction::Command(command) if command.env.is_empty()));
+}
+
+#[test]
+fn saving_keeps_an_existing_override_minimal() {
+    let personal = "[[button]]\nid = \"build\"\nlabel = \"Mine\"\n";
+    let mut model = model(Some(TEAM), Some(personal));
+    model.buttons[1].hidden = true;
+
+    let plan = model.plan_save(Some(TEAM), Some(personal)).unwrap();
+
+    assert_eq!(
+        plan.personal.as_deref(),
+        Some(
+            "[[button]]\nid = \"build\"\nlabel = \"Mine\"\n\n[[button]]\nid = \"ci\"\nhidden = true\n"
+        )
+    );
+}
+
+#[test]
+fn reverting_an_override_shows_the_project_button_again() {
+    let personal = "[[button]]\nid = \"build\"\nlabel = \"Mine\"\n";
+    let mut model = model(Some(TEAM), Some(personal));
+    assert!(model.is_override(0));
+
+    model.revert_override(0);
+    let plan = model.plan_save(Some(TEAM), Some(personal)).unwrap();
+
+    assert_eq!(plan.team, None);
+    assert_eq!(plan.personal.as_deref(), Some(""));
+}
+
+#[test]
+fn a_copy_of_an_override_goes_to_the_team_file() {
+    let personal = "[[button]]\nid = \"build\"\nlabel = \"Mine\"\n";
+    let mut model = model(Some(TEAM), Some(personal));
+
+    let index = model.duplicate(0).unwrap();
+
+    assert_eq!(model.buttons[index].scope, Scope::Project);
+}
+
+#[test]
+fn entries_the_team_file_hides_are_kept() {
+    let team = format!("{TEAM}\n[[button]]\nid = \"old\"\nhidden = true\n");
+    let mut model = model(Some(&team), None);
+    assert_eq!(ids(&model), vec!["build", "ci"]);
+
+    model.remove(1);
+    let plan = model.plan_save(Some(&team), None).unwrap();
+
+    let saved = plan.team.unwrap();
+    assert!(saved.contains("id = \"old\"\nhidden = true"), "{saved}");
+    assert!(!saved.contains("ci.example.com"));
 }
 
 #[test]
@@ -320,23 +394,16 @@ fn a_new_project_creates_the_team_file_only_with_a_button() {
 fn invalid_buttons_are_reported_with_their_index() {
     let mut model = model(Some(TEAM), None);
     model.buttons[1].spec.action = SpecAction::Url("ftp://x".to_owned());
-    assert_eq!(model.plan_save(Some(TEAM), None).unwrap_err().button, Some(1));
+    assert_eq!(
+        model.plan_save(Some(TEAM), None).unwrap_err().button,
+        Some(1)
+    );
 
     let mut model = self::model(Some(TEAM), None);
     model.buttons[1].spec.id = "build".to_owned();
     let error = model.plan_save(Some(TEAM), None).unwrap_err();
     assert_eq!(error.button, Some(1));
     assert!(error.message.contains("used by another button"));
-
-    let mut model = self::model(Some(TEAM), None);
-    model.buttons[0].spec.action = command("echo ${nope}");
-    assert!(
-        model
-            .plan_save(Some(TEAM), None)
-            .unwrap_err()
-            .message
-            .contains("unknown variable")
-    );
 }
 
 #[test]

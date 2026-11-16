@@ -13,6 +13,7 @@ pub const TEAM_TEMPLATE: &str = r#"# Warpium project toolbar. Commit this file t
 # `overflow = true` to keep it in the overflow menu.
 # Commands can use ${projectRoot}, ${file}, ${fileDir}, ${selection}, ${cwd} and
 # ${prompt:Label} (asks for a value); Warpium quotes each one, so don't put quotes around them.
+# Other ${...}, such as ${HOME}, are left for the shell.
 # You can also edit the toolbar with "Customize toolbar…" in its menu.
 # Icons: build, play, run, stop, bug, debug, test, check, deploy, rocket, terminal, logs, device,
 # phone, install, download, upload, refresh, sync, clean, trash, gear, settings, globe, web, link,

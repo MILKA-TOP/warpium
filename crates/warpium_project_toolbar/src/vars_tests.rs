@@ -92,15 +92,23 @@ fn reports_missing_values_and_unknown_variables() {
         expand_variables("echo ${prompt:Name}", &empty, ShellFamily::Posix),
         Err(VariableError::MissingPrompt("Name".to_owned()))
     );
+}
+
+#[test]
+fn shell_parameters_are_left_to_the_shell() {
+    let expanded = expand_variables(
+        "cd ${ANDROID_HOME:-$HOME/sdk} && ls ${file} ${unterminated",
+        &values(),
+        ShellFamily::Posix,
+    )
+    .unwrap();
+
     assert_eq!(
-        expand_variables("echo ${home}", &empty, ShellFamily::Posix),
-        Err(VariableError::Unknown("home".to_owned()))
+        expanded,
+        r"cd ${ANDROID_HOME:-$HOME/sdk} && ls '/work/my app/src/it'\''s.kt' ${unterminated"
     );
-    assert_eq!(
-        validate_variables("echo ${file"),
-        Err(VariableError::Unterminated)
-    );
-    assert_eq!(validate_variables("echo ${file} ${prompt:X}"), Ok(()));
+    assert!(!has_variables("echo ${HOME}"));
+    assert!(has_variables("echo ${HOME} ${cwd}"));
 }
 
 #[test]

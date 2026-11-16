@@ -59,7 +59,21 @@ impl Workspace {
                     .update(ctx, |toolbar, ctx| toolbar.reload(ctx));
             }
             ProjectToolbarEditorEvent::TestRun { root, button } => {
-                me.run_project_toolbar_button(root, button, ctx)
+                if me
+                    .project_toolbar
+                    .as_ref(ctx)
+                    .needs_trust_to_run(root, button, ctx)
+                {
+                    me.show_project_toolbar_error(
+                        "Project toolbar: this command comes from the project's toolbar file, \
+                         which you haven't trusted yet. Click its button on the toolbar to review \
+                         and trust it."
+                            .to_owned(),
+                        ctx,
+                    );
+                } else {
+                    me.run_project_toolbar_button(root, button, ctx)
+                }
             }
             ProjectToolbarEditorEvent::OpenFile { personal } => {
                 me.edit_project_toolbar_config(*personal, ctx)
@@ -390,11 +404,7 @@ impl Workspace {
                             view.active_session_path_if_local(ctx),
                         )
                     });
-                    let shell = match shell {
-                        Some(ShellType::Fish) => ShellFamily::Fish,
-                        Some(ShellType::PowerShell) => ShellFamily::PowerShell,
-                        Some(ShellType::Bash | ShellType::Zsh) | None => ShellFamily::Posix,
-                    };
+                    let shell = shell.map_or(ShellFamily::Posix, shell_family);
                     let already_there = session_cwd
                         .map(|session_cwd| dunce::canonicalize(&session_cwd).unwrap_or(session_cwd))
                         .is_some_and(|session_cwd| session_cwd == cwd);
@@ -455,9 +465,7 @@ impl Workspace {
         };
         // A new session's shell isn't known until it starts; the login shell is the best guess.
         let shell = match session.as_ref(ctx).active_session_shell_type(ctx) {
-            Some(ShellType::Fish) => ShellFamily::Fish,
-            Some(ShellType::PowerShell) => ShellFamily::PowerShell,
-            Some(ShellType::Bash | ShellType::Zsh) => ShellFamily::Posix,
+            Some(shell) => shell_family(shell),
             None => std::env::var("SHELL")
                 .map(|shell| ShellFamily::from_program(&shell))
                 .unwrap_or(ShellFamily::Posix),
@@ -646,6 +654,15 @@ impl Workspace {
         self.toast_stack.update(ctx, |toast_stack, ctx| {
             toast_stack.add_ephemeral_toast(DismissibleToast::error(message), ctx)
         });
+    }
+}
+
+/// The quoting rules of a session's shell.
+fn shell_family(shell: ShellType) -> ShellFamily {
+    match shell {
+        ShellType::Fish => ShellFamily::Fish,
+        ShellType::PowerShell => ShellFamily::PowerShell,
+        ShellType::Bash | ShellType::Zsh => ShellFamily::Posix,
     }
 }
 

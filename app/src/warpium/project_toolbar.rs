@@ -552,6 +552,27 @@ impl ProjectToolbarView {
         self.project.is_some() && self.loaded.is_some()
     }
 
+    /// Whether running `button` (such as an unsaved one from the editor) in the project at
+    /// `root` must wait until the user trusts the team config: a team command of a project other
+    /// than the toolbar's, or of an untrusted version.
+    pub(crate) fn needs_trust_to_run(
+        &self,
+        root: &Path,
+        button: &ToolbarButton,
+        ctx: &AppContext,
+    ) -> bool {
+        if !button.requires_trust() {
+            return false;
+        }
+        self.project_root() != Some(root)
+            || needs_trust(
+                button,
+                root,
+                self.team_hash(),
+                ProjectToolbarStore::as_ref(ctx).state(),
+            )
+    }
+
     /// The detected project, if the toolbar is on.
     pub(crate) fn project_root(&self) -> Option<&Path> {
         self.project.as_ref().map(|project| project.root.as_path())
@@ -1718,12 +1739,12 @@ pub(crate) fn save_toolbar_plan<V: View>(
         );
     }
     if let Some(team) = &plan.team {
+        write_config_file(&team_config_path(root), team)?;
         ensure_store(ctx);
         let previous = opened.team.clone();
         ProjectToolbarStore::handle(ctx).update(ctx, |store, ctx| {
             store.record_gui_save(root, previous.as_deref(), team, ctx)
         });
-        write_config_file(&team_config_path(root), team)?;
     }
     if let Some(personal) = &plan.personal {
         let path = personal_path(root)
@@ -1767,6 +1788,8 @@ fn apply_quick_edit<V: View>(
             }
         }
         QuickEdit::Hide => model.buttons[index].hidden = true,
+        // For a personal override, deleting drops the user's changes, not the shared button.
+        QuickEdit::Delete if model.is_override(index) => model.revert_override(index),
         QuickEdit::Delete => model.remove(index),
     }
     let plan = model

@@ -2,7 +2,7 @@
 //! writing it back with `toml_edit` so comments, key order and formatting the user wrote stay
 //! where they were.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use toml_edit::{ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
@@ -13,7 +13,6 @@ use crate::config::{
     PartialButton, ToolbarButton, apply_override, merge, parse_config,
 };
 use crate::icons::{ButtonIcon, is_contained_relative_path, parse_icon};
-use crate::vars::validate_variables;
 
 /// The keys that each name one kind of action.
 const ACTION_KEYS: &[&str] = &[
@@ -114,7 +113,6 @@ impl ButtonSpec {
                 command, cwd, env, ..
             } => {
                 required("command", command)?;
-                validate_variables(command).map_err(|err| err.to_string())?;
                 if let Some(cwd) = non_empty(cwd)
                     && !is_contained_relative_path(Path::new(cwd))
                 {
@@ -126,9 +124,7 @@ impl ButtonSpec {
                 let mut names = BTreeSet::new();
                 for (name, _) in env {
                     if !is_valid_env_name(name) {
-                        return Err(format!(
-                            "`{name}` is not a valid environment variable name"
-                        ));
+                        return Err(format!("`{name}` is not a valid environment variable name"));
                     }
                     if !names.insert(name) {
                         return Err(format!("the environment variable `{name}` is set twice"));
@@ -241,6 +237,8 @@ pub struct EditorModel {
     pub buttons: Vec<EditorButton>,
     /// The ids of the team file's buttons when the model was loaded.
     team_ids: BTreeSet<String>,
+    /// The team file's own version of each of its buttons, without personal overrides.
+    team_specs: BTreeMap<String, ButtonSpec>,
 }
 
 impl EditorModel {
@@ -260,9 +258,16 @@ impl EditorModel {
         let mut model = Self::default();
         for entry in team.iter().flat_map(|team| &team.entries) {
             model.team_ids.insert(entry.id.clone());
+            // Buttons the team file itself hides aren't shown; saving keeps their entries.
+            if entry.hidden {
+                continue;
+            }
+            if let Some(spec) = spec_from_entry(entry) {
+                model.team_specs.insert(entry.id.clone(), spec);
+            }
             let mut merged = entry.clone();
             let mut scope = Scope::Project;
-            let mut hidden = entry.hidden;
+            let mut hidden = false;
             if let Some(over) = personal_entries.iter().find(|over| over.id == entry.id) {
                 hidden |= over.hidden;
                 if over.overrides_fields() {
@@ -311,6 +316,34 @@ impl EditorModel {
         self.team_ids.contains(id)
     }
 
+    /// Whether the button runs the team file's own action (so running it needs trust in the
+    /// team file), rather than one the user wrote.
+    pub fn runs_team_action(&self, index: usize) -> bool {
+        self.buttons.get(index).is_some_and(|button| {
+            self.team_specs
+                .get(button.spec.id.trim())
+                .is_some_and(|team| team.action == button.spec.action)
+        })
+    }
+
+    /// Whether the button is a personal override of a project button.
+    pub fn is_override(&self, index: usize) -> bool {
+        self.buttons.get(index).is_some_and(|button| {
+            button.scope == Scope::Personal && self.team_specs.contains_key(button.spec.id.trim())
+        })
+    }
+
+    /// Drops the personal changes to a project button, showing the team's version again.
+    pub fn revert_override(&mut self, index: usize) {
+        let Some(button) = self.buttons.get_mut(index) else {
+            return;
+        };
+        if let Some(team) = self.team_specs.get(button.spec.id.trim()) {
+            button.spec = team.clone();
+            button.scope = Scope::Project;
+        }
+    }
+
     /// Puts the buttons back in toolbar order (team-file buttons first), keeping their relative
     /// order, after a scope change.
     pub fn normalize(&mut self) {
@@ -351,10 +384,14 @@ impl EditorModel {
         self.index_of(&id).unwrap_or(self.buttons.len() - 1)
     }
 
-    /// Adds a copy of a button with a new id after it (or at the end of the personal group, for
-    /// a copy of a personal override); returns the copy's index.
+    /// Adds a copy of a button with a new id after it; returns the copy's index. A copy of a
+    /// project button (or of a personal override of one) goes in the team file, so a copied team
+    /// command still needs trust.
     pub fn duplicate(&mut self, index: usize) -> Option<usize> {
-        let original = self.buttons.get(index)?.clone();
+        let mut original = self.buttons.get(index)?.clone();
+        if self.located_in_team(&original) {
+            original.scope = Scope::Project;
+        }
         let id = self.unique_id(&format!("{}-copy", original.spec.id));
         let mut spec = original.spec.clone();
         spec.id = id.clone();
@@ -387,7 +424,10 @@ impl EditorModel {
     pub fn unique_id(&self, base: &str) -> String {
         let base = slug(base);
         let taken = |id: &str| {
-            self.buttons.iter().any(|button| button.spec.id.trim() == id) || self.team_ids.contains(id)
+            self.buttons
+                .iter()
+                .any(|button| button.spec.id.trim() == id)
+                || self.team_ids.contains(id)
         };
         if !taken(&base) {
             return base;
@@ -437,6 +477,12 @@ impl EditorModel {
                 Scope::Personal => team_tables.extend(existing),
             }
         }
+        // Entries the team file hides itself aren't in the editor; keep them.
+        team_tables.extend(
+            team_entries
+                .into_iter()
+                .filter(|table| table.get("hidden").and_then(Item::as_bool) == Some(true)),
+        );
         put_button_tables(&mut team_doc, team_tables, had_team_buttons);
 
         let mut personal_doc = parse_document(personal_text, ConfigSource::Personal)?;
@@ -445,21 +491,32 @@ impl EditorModel {
         let mut personal_tables = Vec::new();
         for button in &self.buttons {
             let existing = take_entry(&mut personal_entries, button.spec.id.trim());
-            match button.scope {
-                Scope::Personal => {
+            let team_spec = self.team_specs.get(button.spec.id.trim());
+            match (button.scope, team_spec) {
+                // Only what differs from the project's button is written, so its command stays
+                // the team's (and keeps needing trust) unless the user changed it.
+                (Scope::Personal, Some(team_spec)) => {
+                    let mut table = existing.unwrap_or_else(new_entry);
+                    table.retain(|key, _| key == "id" || key == "hidden");
+                    set_str(&mut table, "id", Some(button.spec.id.trim()));
+                    write_override(&mut table, &button.spec, team_spec);
+                    set_bool(&mut table, "hidden", button.hidden);
+                    personal_tables.push(table);
+                }
+                (Scope::Personal, None) => {
                     let mut table = existing.unwrap_or_else(new_entry);
                     write_spec(&mut table, &button.spec);
                     set_bool(&mut table, "hidden", button.hidden);
                     personal_tables.push(table);
                 }
-                Scope::Project if button.hidden => {
+                (Scope::Project, _) if button.hidden => {
                     let mut table = existing.unwrap_or_else(new_entry);
                     table.retain(|key, _| key == "id" || key == "hidden");
                     set_str(&mut table, "id", Some(button.spec.id.trim()));
                     set_bool(&mut table, "hidden", true);
                     personal_tables.push(table);
                 }
-                Scope::Project => {}
+                (Scope::Project, _) => {}
             }
         }
         // Entries the editor didn't show: overrides of project buttons that no longer exist are
@@ -515,12 +572,7 @@ fn spec_from_entry(entry: &PartialButton) -> Option<ButtonSpec> {
             command,
             target: entry.target.unwrap_or_default(),
             cwd: entry.cwd.clone(),
-            env: entry
-                .env
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
+            env: entry.env.clone().unwrap_or_default().into_iter().collect(),
         },
         ActionSpec::Workflow(name) => SpecAction::Workflow(name),
         ActionSpec::LaunchConfig(name) => SpecAction::LaunchConfig(name),
@@ -612,11 +664,7 @@ fn put_button_tables(doc: &mut DocumentMut, mut tables: Vec<Table>, had_buttons:
         }
     }
     // The document prints tables by position, so the new order needs new positions.
-    let base = tables
-        .iter()
-        .filter_map(Table::position)
-        .min()
-        .unwrap_or(1);
+    let base = tables.iter().filter_map(Table::position).min().unwrap_or(1);
     let mut array = ArrayOfTables::new();
     for (offset, mut table) in tables.drain(..).enumerate() {
         table.set_position(Some(base + offset as isize));
@@ -690,6 +738,36 @@ fn write_spec(table: &mut Table, spec: &ButtonSpec) {
     }
     set_bool(table, "run_config", spec.placement == Placement::RunConfig);
     set_bool(table, "overflow", spec.placement == Placement::Overflow);
+}
+
+/// Writes the fields of `spec` that differ from the project's `team` version of the button, as
+/// a personal override.
+fn write_override(table: &mut Table, spec: &ButtonSpec, team: &ButtonSpec) {
+    for (key, mine, theirs) in [
+        ("label", &spec.label, &team.label),
+        ("icon", &spec.icon, &team.icon),
+        ("tooltip", &spec.tooltip, &team.tooltip),
+    ] {
+        // An empty value can't unset a team field, so it is left out.
+        let mine = non_empty(mine);
+        set_str(table, key, mine.filter(|_| mine != non_empty(theirs)));
+    }
+    if spec.placement != team.placement {
+        let mut set = |key: &str, value: bool| {
+            table.insert(key, toml_edit::value(value));
+        };
+        set("run_config", spec.placement == Placement::RunConfig);
+        set("overflow", spec.placement == Placement::Overflow);
+    }
+    if spec.action != team.action {
+        let mut action_table = Table::new();
+        write_spec(&mut action_table, spec);
+        for (key, item) in action_table.iter() {
+            if ACTION_KEYS.contains(&key) || ["target", "cwd", "env"].contains(&key) {
+                table.insert(key, item.clone());
+            }
+        }
+    }
 }
 
 /// Sets a string key (removing it for `None`), keeping a changed value's surrounding spaces and

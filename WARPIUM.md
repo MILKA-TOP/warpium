@@ -227,11 +227,15 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
   the "+" at the end of the toolbar, "+ Add button" (what a project without buttons shows, so any
   project can get some), "Customize toolbar…" in the overflow and run-configurations menus, a
   button's right-click menu (Edit…, Duplicate, Move left/right, Hide, Delete; all but Edit save
-  right away) and the palette's "Customize project toolbar". Its model is
+  right away, and Delete on a personal override only drops the override) and the palette's "Customize project toolbar". Its model is
   `warpium_project_toolbar::EditorModel`: both files' buttons in toolbar order (team-file buttons,
   then personal-only ones; moves stay within a group), each with a scope. Project scope writes the
-  team file; Personal scope writes a full personal entry, an override when the id is in the team
-  file (whose own entry is left alone); hiding writes `hidden = true` in the personal file.
+  team file; Personal scope writes a personal entry: for a project button, an override with only
+  the fields that differ (so the team's command stays the team's and keeps needing trust unless
+  the user changed it; the team entry is left alone), otherwise a full button. Hiding writes
+  `hidden = true` in the personal file; entries the team file hides itself are kept but not
+  shown. A copy of a project button goes in the team file. Test run of a button that runs the
+  team's own command needs the team file to be trusted.
   Writes go through `toml_edit`: each button's table is updated in place, only changed keys are
   rewritten (keeping trailing comments), tables move with their comments when reordered, the
   file's header comment stays on top, the first button of a commented template goes below the
@@ -248,7 +252,7 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
   `${cwd}` (the active session's directory, else the root) and `${prompt:Label}` (asked in a
   dialog, `project_toolbar_prompt.rs`, before running; Test run too). Each value is quoted as one
   word for the shell that runs it (the session's, or `$SHELL`'s family for a new tab or split);
-  `$${` is a literal `${`. A missing file or selection shows a toast and runs nothing. Variables
+  any other `${...}` (such as `${HOME}`) is left for the shell, and `$${` is a literal `${`. A missing file or selection shows a toast and runs nothing. Variables
   apply to `command` only, not `cwd` or `env`, and trust compares the unexpanded command.
 - **Merge leniency.** A personal override without an action whose team button no longer exists
   is ignored rather than invalidating the toolbar.
