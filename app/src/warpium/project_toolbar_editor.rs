@@ -28,7 +28,9 @@ use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::{
+    AppContext, Entity, SingletonEntity as _, TypedActionView, View, ViewContext, ViewHandle,
+};
 
 use super::project_toolbar::{ToolbarTexts, read_toolbar_texts, save_toolbar_plan};
 use crate::editor::{

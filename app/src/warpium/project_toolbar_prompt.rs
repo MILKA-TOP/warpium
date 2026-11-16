@@ -18,7 +18,9 @@ use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::{
+    AppContext, Entity, SingletonEntity as _, TypedActionView, View, ViewContext, ViewHandle,
+};
 
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
