@@ -1298,7 +1298,7 @@ impl RowStyle {
             font_family: appearance.monospace_font_family(),
             font_size: appearance.monospace_font_size(),
             char_width: char_width(appearance, ctx),
-            row_height: (font_size * appearance.line_height_ratio()).ceil(),
+            row_height: (appearance.monospace_font_size() * appearance.line_height_ratio()).ceil(),
             meta_color: theme.hint_text_color(theme.background()).into_solid(),
             tag_color: theme.sub_text_color(theme.background()).into_solid(),
             message_color: theme.main_text_color(theme.background()).into_solid(),
