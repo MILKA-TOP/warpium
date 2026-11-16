@@ -68,14 +68,17 @@ impl Workspace {
         });
     }
 
-    /// The active tab's pinned Project Explorer root and its local session's working directory.
+    /// The active tab's locked project root, else its local session's working directory. A
+    /// locked project never falls back to where the terminal is.
     fn project_toolbar_inputs(&self, ctx: &AppContext) -> (Option<PathBuf>, Option<PathBuf>) {
         let pane_group = self.active_tab_pane_group().as_ref(ctx);
-        let pinned_root = pane_group.pinned_explorer_root().cloned();
+        if let Some(root) = pane_group.project_root().primary() {
+            return (Some(root.to_path_buf()), None);
+        }
         let cwd = pane_group
             .active_session_view(ctx)
             .and_then(|view| view.as_ref(ctx).active_session_path_if_local(ctx));
-        (pinned_root, cwd)
+        (None, cwd)
     }
 
     fn handle_project_toolbar_event(

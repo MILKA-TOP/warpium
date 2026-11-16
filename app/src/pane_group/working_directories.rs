@@ -253,6 +253,9 @@ pub enum WorkingDirectoriesEvent {
         /// The repository path of the focused terminal, if any
         focused_repo: Option<LocalOrRemotePath>,
     },
+    /// Warpium: where a locked project's active terminal is changed for a pane group (see
+    /// `WorkingDirectoriesModel::terminal_placement`).
+    TerminalPlacementChanged { pane_group_id: EntityId },
 }
 
 #[derive(Default)]
@@ -300,6 +303,9 @@ pub struct WorkingDirectoriesModel {
     selected_review_repo: HashMap<EntityId, LocalOrRemotePath>,
     global_search_views: HashMap<EntityId, ViewHandle<GlobalSearchView>>,
     file_tree_views: HashMap<EntityId, ViewHandle<FileTreeView>>,
+    /// Warpium: per-pane-group placement of the active terminal relative to a locked project.
+    /// Absent while the pane group's project follows its terminals.
+    terminal_placement: HashMap<EntityId, warpium_project_root::TerminalPlacement>,
 }
 
 #[derive(Default)]
@@ -561,6 +567,7 @@ impl WorkingDirectoriesModel {
         self.code_review_views.remove(&pane_group_id);
         self.focused_repo.remove(&pane_group_id);
         self.selected_review_repo.remove(&pane_group_id);
+        self.terminal_placement.remove(&pane_group_id);
     }
 
     fn handle_empty_pane_group(&mut self, pane_group_id: EntityId, ctx: &mut ModelContext<Self>) {
@@ -598,16 +605,12 @@ impl WorkingDirectoriesModel {
     /// (both local and remote) and code editor paths.
     ///
     /// If `focused_terminal_id` is provided, the repo_to_terminal map will prioritize
-    ///
-    /// `pinned_explorer_root` is shown as the display root, instead of the enclosing repository
-    /// root, for local paths inside it.
     pub fn refresh_working_directories_for_pane_group(
         &mut self,
         pane_group_id: EntityId,
         terminal_cwds: Vec<(EntityId, LocalOrRemotePath)>,
         editor_paths: Vec<(EntityId, LocalOrRemotePath)>,
         focused_terminal_id: Option<EntityId>,
-        pinned_explorer_root: Option<PathBuf>,
         ctx: &mut ModelContext<Self>,
     ) {
         if terminal_cwds.is_empty() && editor_paths.is_empty() {
@@ -633,20 +636,13 @@ impl WorkingDirectoriesModel {
         let old_focused_repo: Option<LocalOrRemotePath> =
             self.focused_repo.get(&pane_group_id).cloned().flatten();
 
-        let pinned_root =
-            pinned_explorer_root.map(|root| dunce::canonicalize(&root).unwrap_or(root));
-        let display_repo_root_for_path = |path: &Path| {
-            let repo_root = repo_root_for_local_path(path, ctx);
-            let Some(pinned_root) = &pinned_root else {
-                return repo_root;
-            };
-            // Editor paths aren't canonicalized, unlike terminal CWDs and the pin.
-            let canonical_path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-            explorer_root_within_repo(&canonical_path, repo_root, Some(pinned_root))
-        };
-
         // Resolve a local path to its detected repository root, or keep the path as-is if no repo is found.
-        let root_for_path = |path: PathBuf| display_repo_root_for_path(&path).unwrap_or(path);
+        let root_for_path = |path: PathBuf| {
+            DetectedRepositories::as_ref(ctx)
+                .get_root_for_path(&LocalOrRemotePath::Local(path.clone()))
+                .and_then(|r| PathBuf::try_from(r).ok())
+                .unwrap_or(path)
+        };
 
         let root_for_raw_path = |raw_path: &str| normalize_cwd(raw_path).map(root_for_path);
 
@@ -688,7 +684,8 @@ impl WorkingDirectoriesModel {
             .into_iter()
             .filter_map(|(view_id, path)| {
                 let path_buf = PathBuf::from(&path);
-                let resolved_path = display_repo_root_for_path(&path_buf)
+                let resolved_path = self
+                    .get_repo_root_for_path(&path_buf, ctx)
                     .or_else(|| path_buf.parent().map(|p| p.to_path_buf()))?;
 
                 if file_path_ancestors.insert(resolved_path.clone()) {
@@ -752,7 +749,7 @@ impl WorkingDirectoriesModel {
             .into_iter()
             .flat_map(|dirs| dirs.iter())
             .filter_map(|lor| lor.to_local_path())
-            .filter_map(|dir| repo_root_for_local_path(dir, ctx))
+            .filter_map(|dir| self.get_repo_root_for_path(dir, ctx))
             .collect();
         let mut new_roots: HashSet<PathBuf> =
             HashSet::from_iter(new_local_repo_roots.iter().cloned());
@@ -768,19 +765,6 @@ impl WorkingDirectoriesModel {
             .collect();
         new_root_to_terminal
             .retain(|cwd, _terminal_id| cwd.to_local_path().is_some_and(|p| new_roots.contains(p)));
-        // A pinned explorer root replaces the repository root as a terminal's display root, but
-        // review panels still look terminals up by repository root.
-        if pinned_root.is_some() {
-            for (terminal_id, cwd) in &local_terminal_cwds {
-                if let Some(repo_root) =
-                    normalize_cwd(cwd).and_then(|path| repo_root_for_local_path(&path, ctx))
-                {
-                    new_root_to_terminal
-                        .entry(LocalOrRemotePath::Local(repo_root))
-                        .or_insert(*terminal_id);
-                }
-            }
-        }
 
         // Resolve remote terminal CWDs to their repo roots and add to mappings.
         let mut new_remote_repo_roots: Vec<LocalOrRemotePath> = Vec::new();
@@ -911,6 +895,13 @@ impl WorkingDirectoriesModel {
         }
     }
 
+    /// Get the repository root for a given path.
+    fn get_repo_root_for_path(&self, path: &Path, ctx: &AppContext) -> Option<PathBuf> {
+        DetectedRepositories::as_ref(ctx)
+            .get_root_for_path(&LocalOrRemotePath::Local(path.to_path_buf()))
+            .and_then(|r| PathBuf::try_from(r).ok())
+    }
+
     /// Emit a DirectoriesChanged event with the current state for a specific pane group.
     /// Directories are returned in most recent first order for use in the UI.
     fn emit_directories_changed(&mut self, pane_group_id: EntityId, ctx: &mut ModelContext<Self>) {
@@ -999,32 +990,6 @@ impl WorkingDirectoriesModel {
     }
 }
 
-/// Get the repository root for a given local path.
-#[cfg(feature = "local_fs")]
-fn repo_root_for_local_path(path: &Path, ctx: &AppContext) -> Option<PathBuf> {
-    DetectedRepositories::as_ref(ctx)
-        .get_root_for_path(&LocalOrRemotePath::Local(path.to_path_buf()))
-        .and_then(|r| PathBuf::try_from(r).ok())
-}
-
-/// Returns the repository-level explorer root for `path`: `pinned_root` when `path` is inside it
-/// and it is inside `repo_root`, otherwise `repo_root`.
-#[cfg(feature = "local_fs")]
-fn explorer_root_within_repo(
-    path: &Path,
-    repo_root: Option<PathBuf>,
-    pinned_root: Option<&Path>,
-) -> Option<PathBuf> {
-    match (repo_root, pinned_root) {
-        (Some(repo_root), Some(pinned_root))
-            if path.starts_with(pinned_root) && pinned_root.starts_with(&repo_root) =>
-        {
-            Some(pinned_root.to_path_buf())
-        }
-        (repo_root, _) => repo_root,
-    }
-}
-
 #[cfg(not(feature = "local_fs"))]
 impl WorkingDirectoriesModel {
     pub fn new() -> Self {
@@ -1062,7 +1027,31 @@ impl WorkingDirectoriesModel {
         _terminal_cwds: Vec<(EntityId, LocalOrRemotePath)>,
         _editor_paths: Vec<(EntityId, LocalOrRemotePath)>,
         _focused_terminal_id: Option<EntityId>,
-        _pinned_explorer_root: Option<std::path::PathBuf>,
+        _ctx: &mut ModelContext<Self>,
+    ) {
+    }
+
+    pub fn refresh_locked_project_for_pane_group(
+        &mut self,
+        _pane_group_id: EntityId,
+        _roots: &warpium_project_root::LockedRoots,
+        _terminal_cwds: Vec<(EntityId, LocalOrRemotePath)>,
+        _focused_terminal_id: Option<EntityId>,
+        _ctx: &mut ModelContext<Self>,
+    ) {
+    }
+
+    pub fn terminal_placement(
+        &self,
+        _pane_group_id: EntityId,
+    ) -> Option<warpium_project_root::TerminalPlacement> {
+        None
+    }
+
+    pub fn set_terminal_placement(
+        &mut self,
+        _pane_group_id: EntityId,
+        _placement: Option<warpium_project_root::TerminalPlacement>,
         _ctx: &mut ModelContext<Self>,
     ) {
     }
@@ -1184,6 +1173,11 @@ fn normalize_cwd(raw_cwd: &str) -> Option<PathBuf> {
     // which would cause path comparison mismatches with CanonicalizedPath.
     dunce::canonicalize(&path).ok()
 }
+
+/// Warpium: refreshing a pane group whose project is locked to folders.
+#[cfg(feature = "local_fs")]
+#[path = "warpium_locked_project.rs"]
+mod warpium_locked_project;
 
 #[cfg(test)]
 #[path = "working_directories_tests.rs"]

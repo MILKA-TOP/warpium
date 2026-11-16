@@ -153,6 +153,9 @@ pub enum ToolPanelView {
     ConversationListView,
 }
 
+#[path = "warpium_project_header.rs"]
+mod warpium_project_header;
+
 /// Encapsulates the active view state to enforce that all mutations go through
 /// `active_view_state::set`, which handles necessary side effects.
 mod active_view_state {
@@ -225,6 +228,8 @@ pub struct LeftPanelView {
     working_directories_model: ModelHandle<WorkingDirectoriesModel>,
     is_agent_management_view_open: bool,
     panel_position: super::PanelPosition,
+    /// Warpium: the Project Explorer's project header buttons.
+    project_header_mouse_states: warpium_project_header::ProjectHeaderMouseStates,
 }
 
 fn toolbelt_tooltip_keybinding(binding_names: &[&'static str], app: &AppContext) -> Option<String> {
@@ -396,6 +401,11 @@ impl LeftPanelView {
         );
 
         ctx.subscribe_to_model(&working_directories_model, |me, _, event, ctx| {
+            // Warpium: the project header shows whether the active terminal is in the project.
+            if let WorkingDirectoriesEvent::TerminalPlacementChanged { .. } = event {
+                ctx.notify();
+                return;
+            }
             if let WorkingDirectoriesEvent::DirectoriesChanged {
                 pane_group_id,
                 directories,
@@ -474,6 +484,7 @@ impl LeftPanelView {
             working_directories_model,
             is_agent_management_view_open: false,
             panel_position: super::PanelPosition::Left,
+            project_header_mouse_states: Default::default(),
         };
         view.update_button_active_states();
 
@@ -991,6 +1002,25 @@ impl Entity for LeftPanelView {
 }
 
 impl LeftPanelView {
+    /// Warpium: the project header above the Project Explorer, for the active tab.
+    fn render_project_header(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        let pane_group = self.active_pane_group.as_ref()?.upgrade(app)?;
+        let placement = self
+            .working_directories_model
+            .as_ref(app)
+            .terminal_placement(pane_group.id());
+        Some(warpium_project_header::render_project_header(
+            pane_group.as_ref(app).project_root(),
+            placement,
+            &self.project_header_mouse_states,
+            appearance,
+        ))
+    }
+
     fn close_button(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder().clone();
         let tooltip_keybinding =
@@ -1342,9 +1372,18 @@ impl View for LeftPanelView {
                 ToolPanelView::ProjectExplorer => match self.active_file_tree_view(app) {
                     Some(file_tree_view) => Shrinkable::new(
                         1.0,
-                        Container::new(ChildView::new(&file_tree_view).finish())
-                            .with_padding_left(2.)
-                            .with_padding_right(2.)
+                        Flex::column()
+                            .with_children(self.render_project_header(appearance, app))
+                            .with_child(
+                                Shrinkable::new(
+                                    1.0,
+                                    Container::new(ChildView::new(&file_tree_view).finish())
+                                        .with_padding_left(2.)
+                                        .with_padding_right(2.)
+                                        .finish(),
+                                )
+                                .finish(),
+                            )
                             .finish(),
                     )
                     .finish(),

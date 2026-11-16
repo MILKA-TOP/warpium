@@ -198,7 +198,8 @@ detection, trust bookkeeping, run-configuration entries and the overflow fit),
 menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions) and
 `app/src/pane_group/warpium_project_toolbar.rs` (splits).
 
-- **Project.** First match wins: the tab's pinned Project Explorer root, the nearest ancestor of
+- **Project.** First match wins: the tab's locked [project root](#tab-project-root) (a locked
+  tab never falls back to its terminal), the nearest ancestor of
   the local session's working directory with a `.warpium/` directory, then its git repository
   (a `.git` file counts, for worktrees). Remote sessions have no project.
 - **Config.** The team config is `<root>/.warpium/toolbar.toml` (`[[button]]` entries with an
@@ -228,6 +229,55 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
 - **Setting:** `warpium.project_toolbar` (default on), in Settings → Features → Warpium and as
   "Enable/Disable project toolbar" in the command palette, next to "Edit project toolbar" and
   "Edit personal toolbar overrides". OSS channel only.
+
+## Tab project root
+
+Each tab has a project root that the Project Explorer, global search, code review, the project
+toolbar and the code index all read through one accessor, `PaneGroup::project_root()`. It has two
+modes (`warpium_project_root::ProjectRoot`):
+
+- **Follow** (upstream behaviour): the explorer's roots come from the repositories of the tab's
+  terminal working directories and open editors
+  (`WorkingDirectoriesModel::refresh_working_directories_for_pane_group`).
+- **Locked** to one or more folders, the first being the primary one: the explorer shows exactly
+  those folders whatever the terminals do. Terminals in other host folders, inside a container
+  (`docker compose run … zsh`, whose paths don't exist on the host) or in an SSH session never add,
+  remove or re-root anything. Terminals inside the project are still attached to their root and
+  repository, so code review and "cd to directory" work for them
+  (`app/src/pane_group/warpium_locked_project.rs`). The locked folders' git repositories are
+  detected when the project is locked, since no terminal may have visited them. Single-root
+  consumers (project toolbar, code index) use the primary folder.
+
+Fork-only code lives in `crates/warpium_project_root` (protoc-free, unit-tested with
+`cargo test -p warpium_project_root`: the mode, adding and removing folders, which roots a locked tab
+shows and which terminal belongs to each, where the active terminal is, the lock target and the
+persisted form), `app/src/warpium/project_root.rs` (actions and palette bindings),
+`app/src/workspace/view/warpium_project_root.rs` (applying changes, folder pickers, terminal
+placement) and `app/src/workspace/view/warpium_project_header.rs` (the explorer header).
+
+- **Locking.** "Open in new tab" in the explorer and **Open Folder as Project…** (folder picker;
+  `cmd-alt-shift-O` because Warp binds `cmd-shift-O` to `/open-repo`) open a new tab locked to the
+  folder. The explorer header's pin button toggles Follow ↔ Locked; locking takes the explorer root
+  holding the active terminal, else the most recent explorer root, else the terminal's directory
+  (`lock_target`). While locked, the header shows the primary folder's name, a folder button
+  (**Change project folder…**, which locks to the picked folder alone) and a plus button (**Add folder
+  to project…**); each extra folder is listed with a remove button. Palette: "Open Folder as
+  Project…", "Lock project to current folder", "Unlock project (follow terminals)", "Change project
+  folder…", "Add folder to project…" (the lock/unlock/add entries depend on the
+  `WarpiumProjectLocked` keymap context flag).
+- **Outside the project.** While locked, the header shows "Terminal is outside the project" when
+  the active terminal is in a host folder outside every root, and "… (not a local folder)" when its
+  directory isn't on this machine (a remote session, or a local session reporting a path that
+  doesn't exist, as inside a container). Nothing else changes.
+- **Persistence.** With the tab in sqlite: the primary folder in the existing
+  `tabs.pinned_explorer_root` column (added for the earlier "Open in new tab" pin) and the others in
+  `tabs.project_extra_roots`, a JSON array of strings. Rows written before either column restore as
+  Follow or locked to their pinned folder; builds without the second column still restore the
+  primary folder. Folders that no longer exist are dropped on restore, and a tab whose folders are
+  all gone follows its terminals again.
+- **Future work:** container ↔ host path mappings (for example in `.warpium/project.toml`), so a
+  terminal inside a container whose working directory maps into the project counts as inside it;
+  locking from the Projects list.
 
 ## Kotlin/Java code index (Go to Class / Symbol / Definition, Find Usages)
 
@@ -282,7 +332,8 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   matched by name are marked `≈`. At most 400 files are parsed per query and files over 128 KB never
   are (parsing is most of the cost, about 1 ms per 7 KB); past that, mentions in files naming the
   class count as approximate.
-- **Project root.** When a Go to palette opens: the tab's pinned Project Explorer root, else the
+- **Project root.** When a Go to palette opens: the tab's locked [project root](#tab-project-root)
+  (its primary folder), else the
   repository of the active session, else its directory if that holds Gradle or Maven build files.
   The home directory and `/` are never indexed. One project is held at a time; switching cancels
   the previous build between batches and drops its index. The watcher is registered on the

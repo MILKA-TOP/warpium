@@ -15588,6 +15588,7 @@ dependencies = [
  "warp_util",
  "warp_web_event_bus",
  "warpium_android",
+ "warpium_project_root",
  "warpium_project_toolbar",
  "warpium_self_update",
  "warpium_upstream_check",
@@ -16382,6 +16383,13 @@ dependencies = [
  "log",
  "regex",
  "tempfile",
+]
+
+[[package]]
+name = "warpium_project_root"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

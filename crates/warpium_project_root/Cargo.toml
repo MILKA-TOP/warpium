@@ -1,0 +1,11 @@
+[package]
+name = "warpium_project_root"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: a tab's project root (follow terminals or locked to folders), its persistence and where terminals are relative to it"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
