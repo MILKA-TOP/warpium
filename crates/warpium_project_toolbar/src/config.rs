@@ -158,6 +158,8 @@ pub struct ToolbarButton {
     pub tooltip: Option<String>,
     /// Listed in the run-configurations dropdown instead of the toolbar.
     pub run_config: bool,
+    /// Always listed in the overflow menu rather than shown inline.
+    pub overflow_only: bool,
     pub action: ButtonAction,
     /// The file the action came from. Commands from the team file need the user's trust.
     pub action_source: ConfigSource,
@@ -194,7 +196,7 @@ impl ToolbarButton {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedConfig {
     source: ConfigSource,
-    entries: Vec<PartialButton>,
+    pub(crate) entries: Vec<PartialButton>,
 }
 
 impl ParsedConfig {
@@ -223,6 +225,7 @@ struct RawButton {
     tooltip: Option<String>,
     hidden: Option<bool>,
     run_config: Option<bool>,
+    overflow: Option<bool>,
     command: Option<String>,
     target: Option<String>,
     cwd: Option<String>,
@@ -236,7 +239,7 @@ struct RawButton {
 
 /// The action key of one entry, before `target`, `cwd` and `env` are attached.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ActionSpec {
+pub(crate) enum ActionSpec {
     Command(String),
     Workflow(String),
     LaunchConfig(String),
@@ -248,18 +251,34 @@ enum ActionSpec {
 /// One validated `[[button]]` entry. In the personal file an entry that overrides a team button
 /// may set only some fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PartialButton {
-    id: String,
-    label: Option<String>,
-    icon: Option<ButtonIcon>,
-    tooltip: Option<String>,
-    hidden: bool,
-    run_config: Option<bool>,
-    action: Option<ActionSpec>,
-    target: Option<CommandTarget>,
-    cwd: Option<String>,
-    env: Option<BTreeMap<String, String>>,
-    action_source: ConfigSource,
+pub(crate) struct PartialButton {
+    pub(crate) id: String,
+    pub(crate) label: Option<String>,
+    pub(crate) icon: Option<ButtonIcon>,
+    pub(crate) tooltip: Option<String>,
+    pub(crate) hidden: bool,
+    pub(crate) run_config: Option<bool>,
+    pub(crate) overflow: Option<bool>,
+    pub(crate) action: Option<ActionSpec>,
+    pub(crate) target: Option<CommandTarget>,
+    pub(crate) cwd: Option<String>,
+    pub(crate) env: Option<BTreeMap<String, String>>,
+    pub(crate) action_source: ConfigSource,
+}
+
+impl PartialButton {
+    /// Whether a personal entry changes anything about a team button besides hiding it.
+    pub(crate) fn overrides_fields(&self) -> bool {
+        self.label.is_some()
+            || self.icon.is_some()
+            || self.tooltip.is_some()
+            || self.run_config.is_some()
+            || self.overflow.is_some()
+            || self.action.is_some()
+            || self.target.is_some()
+            || self.cwd.is_some()
+            || self.env.is_some()
+    }
 }
 
 /// Parses one `toolbar.toml`. Team entries must be complete buttons; personal entries may be
@@ -405,6 +424,7 @@ fn parse_entry(raw: RawButton, source: ConfigSource) -> Result<PartialButton, St
         tooltip: raw.tooltip,
         hidden: raw.hidden.unwrap_or(false),
         run_config: raw.run_config,
+        overflow: raw.overflow,
         action,
         target,
         cwd: raw.cwd,
@@ -439,7 +459,7 @@ pub fn merge(
         .collect()
 }
 
-fn apply_override(base: &mut PartialButton, entry: &PartialButton) {
+pub(crate) fn apply_override(base: &mut PartialButton, entry: &PartialButton) {
     if entry.hidden {
         base.hidden = true;
         return;
@@ -455,6 +475,9 @@ fn apply_override(base: &mut PartialButton, entry: &PartialButton) {
     }
     if entry.run_config.is_some() {
         base.run_config = entry.run_config;
+    }
+    if entry.overflow.is_some() {
+        base.overflow = entry.overflow;
     }
     if entry.action.is_some() {
         base.action = entry.action.clone();
@@ -509,6 +532,7 @@ fn finish(button: PartialButton) -> Result<ToolbarButton, ConfigError> {
         icon: button.icon,
         tooltip: button.tooltip,
         run_config: button.run_config.unwrap_or(false),
+        overflow_only: button.overflow.unwrap_or(false),
         action,
         action_source: button.action_source,
     })

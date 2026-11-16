@@ -70,6 +70,31 @@ pub enum ShellFamily {
     PowerShell,
 }
 
+impl ShellFamily {
+    /// The family of a shell program, such as the `SHELL` environment variable's
+    /// `/opt/homebrew/bin/fish`; POSIX for anything unrecognized.
+    pub fn from_program(program: &str) -> Self {
+        let name = Path::new(program)
+            .file_stem()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        match name.as_str() {
+            "fish" => Self::Fish,
+            "pwsh" | "powershell" => Self::PowerShell,
+            _ => Self::Posix,
+        }
+    }
+
+    /// Quotes `value` as a single word for this shell.
+    pub fn quote(self, value: &str) -> String {
+        match self {
+            Self::Posix => posix_quote(value),
+            Self::Fish => fish_quote(value),
+            Self::PowerShell => powershell_quote(value),
+        }
+    }
+}
+
 /// Resolves a button's `cwd` (relative to the project root; the root itself when absent) to an
 /// absolute directory, without touching the filesystem.
 pub fn resolve_cwd(project_root: &Path, cwd: Option<&str>) -> PathBuf {

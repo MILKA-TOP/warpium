@@ -69,6 +69,7 @@ run_config = true
             }),
             tooltip: Some("Build the debug APK".to_owned()),
             run_config: true,
+            overflow_only: false,
             action: ButtonAction::Command(CommandAction {
                 command: "./gradlew assembleDebug".to_owned(),
                 target: CommandTarget::SplitRight,

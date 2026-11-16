@@ -7,7 +7,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::config::{ButtonAction, CommandAction, CommandTarget, ToolbarButton};
+use crate::config::{
+    ButtonAction, CommandAction, CommandTarget, ConfigSource, ToolbarButton, merge, parse_config,
+};
 
 /// Identifies one version of a team config file.
 pub fn content_hash(bytes: &[u8]) -> String {
@@ -57,6 +59,32 @@ impl ToolbarUserState {
             .insert(key(root), command_signatures(buttons));
     }
 
+    /// Records that the user wrote `new_team_text` to the team config from the toolbar editor,
+    /// replacing `previous_team_text` (`None` when there was no file). The user's own edit
+    /// doesn't need confirming, so the new version is trusted when the version it replaced was
+    /// trusted or had no commands to trust. A previous version that was never trusted stays
+    /// untrusted: saving one button mustn't vouch for commands the user never reviewed. Returns
+    /// whether the new version is trusted.
+    pub fn record_gui_save(
+        &mut self,
+        root: &Path,
+        previous_team_text: Option<&str>,
+        new_team_text: &str,
+    ) -> bool {
+        let previous_ok = match previous_team_text {
+            None => true,
+            Some(previous) => {
+                self.is_trusted(root, &content_hash(previous.as_bytes()))
+                    || command_signatures(&team_buttons(previous)).is_empty()
+            }
+        };
+        if previous_ok {
+            let new_hash = content_hash(new_team_text.as_bytes());
+            self.trust(root, &new_hash, &team_buttons(new_team_text));
+        }
+        previous_ok
+    }
+
     /// The [`command_signatures`] of the last trusted version, if they were recorded.
     pub fn trusted_commands(&self, root: &Path) -> Option<&BTreeMap<String, String>> {
         self.trusted_commands.get(&key(root))
@@ -83,6 +111,13 @@ impl ToolbarUserState {
 
 fn key(root: &Path) -> String {
     root.to_string_lossy().into_owned()
+}
+
+/// The buttons of a team config's text alone; none when it doesn't parse.
+fn team_buttons(text: &str) -> Vec<ToolbarButton> {
+    parse_config(text, ConfigSource::Team)
+        .and_then(|config| merge(Some(&config), None))
+        .unwrap_or_default()
 }
 
 /// Whether running `button` must first ask the user to trust the team config.
