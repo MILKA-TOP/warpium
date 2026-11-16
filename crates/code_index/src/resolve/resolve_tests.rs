@@ -525,7 +525,14 @@ fn usages_past_the_end_of_the_file_are_none() {
         language: Language::Kotlin,
     };
 
-    let result = index.find_usages(&file, Position { line: 6, column: 3 }, 10, 1);
+    let result = index.find_usages(&file, Position { line: 7, column: 3 }, 10, 1);
+
+    assert!(result.is_none());
+}
+
+#[test]
+fn a_column_on_the_trailing_empty_line_has_no_definition() {
+    let result = definition_in_multibyte_file(Position { line: 6, column: 3 });
 
     assert!(result.is_none());
 }

@@ -245,7 +245,8 @@ class MacPlatform:
             )
             Quartz.CGEventSetIntegerValueField(ev, Quartz.kCGMouseEventClickState, click_state)
         if modifiers:
-            Quartz.CGEventSetFlags(ev, self._flags(modifiers))
+            # Added to the event's own flags (such as non-coalesced), not replacing them.
+            Quartz.CGEventSetFlags(ev, Quartz.CGEventGetFlags(ev) | self._flags(modifiers))
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
 
     def post_scroll(self, x: float, y: float, dx: int, dy: int) -> None:

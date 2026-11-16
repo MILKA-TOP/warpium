@@ -259,7 +259,8 @@ def test_click_modifiers():
     assert validate_click_modifiers(["cmd", "shift", "alt", "ctrl"]) == frozenset(
         {"cmd", "shift", "alt", "ctrl"}
     )
-    for bad in (["command"], ["cmd", "cmd"], ["fn"], "cmd", [None], {"cmd": 1}):
+    assert validate_click_modifiers(["meta", "Option"]) == frozenset({"cmd", "alt"})
+    for bad in (["cmd", "command"], ["fn"], ["hyper"], "cmd", [None], {"cmd": 1}):
         with pytest.raises(ValidationError):
             validate_click_modifiers(bad)
 

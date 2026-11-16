@@ -2169,8 +2169,9 @@ impl LocalCodeEditorView {
             log::warn!("[Code index] Navigation requested in an editor without a file");
             return;
         };
-        // `try_as_ref`: navigation must never panic, even if a future caller runs this while the
-        // editor view is being updated.
+        // Callers inside the editor's own update (a link click) must defer to here, as
+        // `CodeIndexDefinitionAt` does. This catches a caller that doesn't, while the editor view
+        // is taken out for its update; WarpUI has no non-panicking read for its model.
         let Some(editor) = self.editor.try_as_ref(ctx) else {
             log::warn!("[Code index] Navigation skipped: the editor is mid-update");
             return;
@@ -2181,41 +2182,35 @@ impl LocalCodeEditorView {
             Some(offset) => editor.offset_to_lsp_position(offset, ctx),
             None => editor.cursor_lsp_position(ctx),
         };
-        let (Ok(line), Ok(column)) = (u32::try_from(position.line), u32::try_from(position.column))
-        else {
-            log::warn!("[Code index] Navigation skipped: position out of range");
-            return;
-        };
         let request = CodeNavigationRequest {
             kind,
             path,
             text: editor.text(ctx).into_string().into(),
-            line,
-            column,
+            line: position.line as u32,
+            column: position.column as u32,
         };
         ctx.dispatch_typed_action(&WorkspaceAction::CodeIndexNavigate(request));
     }
 
     /// Warpium: underlines the cmd-hovered name as a link to its definition in the code index.
     fn code_index_link_for_hover(&mut self, offset: CharOffset, ctx: &mut ViewContext<Self>) {
-        let Some(editor) = self.editor.try_as_ref(ctx) else {
-            log::warn!("[Code index] Cmd-hover skipped: the editor is mid-update");
-            return;
-        };
-        if editor
-            .hovered_symbol_range(ctx)
-            .is_some_and(|range| range.contains(&offset))
-        {
+        // Runs from a `MouseHovered` subscription, after the editor's update, so `as_ref` is safe.
+        let editor = self.editor.as_ref(ctx);
+        let hovered_range = editor.hovered_symbol_range(ctx);
+        if hovered_range.is_some_and(|range| range.contains(&offset)) {
             return;
         }
+        let has_link = hovered_range.is_some();
         let word = editor.word_range_at_offset(offset, ctx);
         // Keywords, words in comments or strings, and whitespace have no definition to go to.
         let Some(word) = word.filter(|_| self.is_code_index_identifier_at(offset, ctx)) else {
-            self.editor.update(ctx, |editor, ctx| {
-                if editor.clear_hovered_symbol_range(ctx) {
-                    ctx.notify();
-                }
-            });
+            if has_link {
+                self.editor.update(ctx, |editor, ctx| {
+                    if editor.clear_hovered_symbol_range(ctx) {
+                        ctx.notify();
+                    }
+                });
+            }
             return;
         };
         let highlight_range = word.start.saturating_sub(&CharOffset::from(1))
@@ -2247,19 +2242,15 @@ impl LocalCodeEditorView {
             else {
                 return false;
             };
-            let Some(editor) = self.editor.try_as_ref(app) else {
-                return false;
-            };
+            let editor = self.editor.as_ref(app);
             let position = editor.offset_to_lsp_position(offset, app);
-            let (Ok(line), Ok(column)) =
-                (u32::try_from(position.line), u32::try_from(position.column))
-            else {
-                return false;
-            };
             code_index::is_identifier_at(
                 &editor.text(app).into_string(),
                 language,
-                code_index::Position { line, column },
+                code_index::Position {
+                    line: position.line as u32,
+                    column: position.column as u32,
+                },
             )
         }
         #[cfg(target_family = "wasm")]

@@ -369,21 +369,24 @@ def validate_click(button: str, count: int) -> None:
         raise ValidationError("count must be 1, 2 or 3")
 
 
-CLICK_MODIFIERS = ("cmd", "shift", "alt", "ctrl")
+CLICK_MODIFIERS = tuple(dict.fromkeys(MODIFIERS.values()))  # cmd, ctrl, alt, shift
 
 
 def validate_click_modifiers(modifiers: list[str] | None) -> frozenset[str]:
-    """Modifier keys held during a click: any of ``CLICK_MODIFIERS``, each at most once."""
+    """Modifier keys held during a click, canonicalized like ``parse_key_combo``'s
+    (``command``/``meta`` are ``cmd``, ``option`` is ``alt``, ...), each at most once."""
     if modifiers is None:
         return frozenset()
     if not isinstance(modifiers, (list, tuple)) or len(modifiers) > len(CLICK_MODIFIERS):
         raise ValidationError(f"modifiers must be a list of {CLICK_MODIFIERS}")
+    canonical = []
     for m in modifiers:
-        if not isinstance(m, str) or m not in CLICK_MODIFIERS:
+        if not isinstance(m, str) or m.lower() not in MODIFIERS:
             raise ValidationError(f"unknown modifier {m!r}; use {CLICK_MODIFIERS}")
-    if len(set(modifiers)) != len(modifiers):
+        canonical.append(MODIFIERS[m.lower()])
+    if len(set(canonical)) != len(canonical):
         raise ValidationError("modifiers must not repeat")
-    return frozenset(modifiers)
+    return frozenset(canonical)
 
 
 def validate_text(text: str, maximum: int = 4000) -> str:

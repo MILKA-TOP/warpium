@@ -135,7 +135,7 @@ def test_click_without_modifiers_posts_no_move(ui, fp):
 
 
 def test_click_rejects_invalid_modifiers(ui, fp):
-    for modifiers in (["meta"], ["cmd", "cmd"], ["fn"], "cmd", [1]):
+    for modifiers in (["cmd", "meta"], ["fn"], "cmd", [1]):
         with pytest.raises(ValidationError):
             ui.click(10, 20, modifiers=modifiers)
     assert fp.events == []
