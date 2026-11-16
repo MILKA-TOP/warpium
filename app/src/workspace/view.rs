@@ -9052,7 +9052,7 @@ impl Workspace {
         let pane_group = self.active_tab_pane_group().clone();
         self.set_project_root_for_pane_group(
             &pane_group,
-            warpium_project_root::ProjectRoot::locked_to(path),
+            ::warpium_project_root::ProjectRoot::locked_to(path),
             ctx,
         );
     }
@@ -15790,7 +15790,7 @@ impl Workspace {
             .map(|terminal_view| terminal_view.id());
 
         // Warpium: a locked project shows its folders whatever the terminals do.
-        if let warpium_project_root::ProjectRoot::Locked(roots) =
+        if let ::warpium_project_root::ProjectRoot::Locked(roots) =
             pane_group.as_ref(ctx).project_root().clone()
         {
             let placement = self.active_terminal_project_placement(pane_group, ctx);
