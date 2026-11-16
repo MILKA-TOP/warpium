@@ -1214,6 +1214,9 @@ pub struct Workspace {
     /// Warpium: the project toolbar in the top-right corner.
     #[cfg(not(target_family = "wasm"))]
     project_toolbar: ViewHandle<crate::warpium::project_toolbar::ProjectToolbarView>,
+    /// Warpium: the project toolbar's editor and its command-variable prompt.
+    #[cfg(not(target_family = "wasm"))]
+    project_toolbar_overlays: warpium_project_toolbar::ProjectToolbarOverlays,
     shared_objects_creation_denied_modal: ViewHandle<SharedObjectsCreationDeniedModal>,
     shown_staging_banner_count: u32,
 
@@ -3427,6 +3430,8 @@ impl Workspace {
         let native_modal = Self::build_native_modal_view(ctx);
         #[cfg(not(target_family = "wasm"))]
         let project_toolbar = Self::build_project_toolbar_view(ctx);
+        #[cfg(not(target_family = "wasm"))]
+        let project_toolbar_overlays = Self::build_project_toolbar_overlays(ctx);
 
         let shared_objects_creation_denied_modal =
             ctx.add_typed_action_view(|ctx| SharedObjectsCreationDeniedModal::new(None, ctx));
@@ -3608,6 +3613,8 @@ impl Workspace {
             native_modal,
             #[cfg(not(target_family = "wasm"))]
             project_toolbar,
+            #[cfg(not(target_family = "wasm"))]
+            project_toolbar_overlays,
             shared_objects_creation_denied_modal,
             file_upload_sessions: Default::default(),
             ai_fact_view,
@@ -25069,6 +25076,10 @@ impl TypedActionView for Workspace {
                 #[cfg(not(target_family = "wasm"))]
                 self.edit_project_toolbar_config(true, ctx);
             }
+            CustomizeProjectToolbar => {
+                #[cfg(not(target_family = "wasm"))]
+                self.customize_project_toolbar(ctx);
+            }
             ToggleProjectToolbar => {
                 crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
                     ctx,
@@ -28277,6 +28288,9 @@ impl View for Workspace {
         if self.current_workspace_state.is_header_toolbar_editor_open {
             stack.add_child(ChildView::new(&self.header_toolbar_editor_modal).finish());
         }
+
+        #[cfg(not(target_family = "wasm"))]
+        self.add_project_toolbar_overlays(&mut stack, app);
 
         if self
             .current_workspace_state
