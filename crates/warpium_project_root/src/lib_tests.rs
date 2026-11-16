@@ -70,18 +70,17 @@ fn removing_the_only_root_keeps_the_project_locked() {
 }
 
 #[test]
-fn restoring_drops_folders_that_no_longer_exist() {
-    let project = ProjectRoot::locked([p("/gone"), p("/kept")])
-        .retain_existing(|root| root == Path::new("/kept"));
+fn adding_a_folder_inside_a_root_changes_nothing() {
+    let project = ProjectRoot::locked_to(p("/repo")).with_root_added(p("/repo/sub"));
 
-    assert_eq!(project, ProjectRoot::locked_to(p("/kept")));
+    assert_eq!(project, ProjectRoot::locked_to(p("/repo")));
 }
 
 #[test]
-fn restoring_follows_terminals_when_every_folder_is_gone() {
-    let project = ProjectRoot::locked_to(p("/gone")).retain_existing(|_| false);
+fn adding_a_folder_containing_a_root_changes_nothing() {
+    let project = ProjectRoot::locked_to(p("/repo/sub")).with_root_added(p("/repo"));
 
-    assert_eq!(project, ProjectRoot::Follow);
+    assert_eq!(project, ProjectRoot::locked_to(p("/repo/sub")));
 }
 
 // Terminal placement.

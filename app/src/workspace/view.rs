@@ -4222,12 +4222,14 @@ impl Workspace {
 
                         let pane_group = self.tabs[tab_index].pane_group.clone();
 
-                        // Warpium: folders of a locked project that were deleted or moved since
-                        // it was saved are dropped.
-                        let project_root =
-                            saved_tab.project_root.retain_existing(|root| root.is_dir());
-                        if project_root.is_locked() {
-                            self.apply_project_root_for_pane_group(&pane_group, project_root, ctx);
+                        // Warpium: a locked project is restored as saved, even when a folder
+                        // is missing right now (an unmounted volume); unlocking clears it.
+                        if saved_tab.project_root.is_locked() {
+                            self.apply_project_root_for_pane_group(
+                                &pane_group,
+                                saved_tab.project_root.clone(),
+                                ctx,
+                            );
                         }
 
                         if let Some(left_panel_snapshot) = &saved_tab.left_panel {
@@ -17115,10 +17117,13 @@ impl Workspace {
                     remote_path.path.clone(),
                 );
                 let pane_group_id = pane_group.id();
+                // Warpium: a remote session never adds a root to a locked project.
+                let is_project_locked = pane_group.as_ref(ctx).project_root().is_locked();
                 if let Some(file_tree_view) = self
                     .working_directories_model
                     .as_ref(ctx)
                     .get_file_tree_view(pane_group_id)
+                    .filter(|_| !is_project_locked)
                 {
                     file_tree_view.update(ctx, |view, ctx| {
                         view.set_remote_root_directories(std::slice::from_ref(&remote_id), ctx);

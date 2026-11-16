@@ -81,8 +81,17 @@ impl ProjectRoot {
         }
     }
 
-    /// Adds `root` to the project. A following tab becomes locked to `root` alone.
+    /// Adds `root` to the project. A following tab becomes locked to `root` alone. A folder that
+    /// is already a root, or is inside or contains one, isn't added (nested roots would show the
+    /// same files twice), so the project is returned unchanged.
     pub fn with_root_added(&self, root: PathBuf) -> Self {
+        let overlaps = self
+            .roots()
+            .iter()
+            .any(|existing| existing.starts_with(&root) || root.starts_with(existing));
+        if overlaps {
+            return self.clone();
+        }
         Self::locked(self.roots().iter().cloned().chain([root]))
     }
 
@@ -93,12 +102,6 @@ impl ProjectRoot {
             Self::Follow => self.clone(),
             locked => locked,
         }
-    }
-
-    /// Keeps the folders `is_dir` accepts, such as the ones that still exist when a session is
-    /// restored. A project whose folders are all gone follows its terminals again.
-    pub fn retain_existing(&self, is_dir: impl Fn(&Path) -> bool) -> Self {
-        Self::locked(self.roots().iter().filter(|r| is_dir(r)).cloned())
     }
 
     /// Where the active terminal is relative to the project, or `None` while following (every

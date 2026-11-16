@@ -242,8 +242,10 @@ modes (`warpium_project_root::ProjectRoot`):
 - **Locked** to one or more folders, the first being the primary one: the explorer shows exactly
   those folders whatever the terminals do. Terminals in other host folders, inside a container
   (`docker compose run … zsh`, whose paths don't exist on the host) or in an SSH session never add,
-  remove or re-root anything. Terminals inside the project are still attached to their root and
-  repository, so code review and "cd to directory" work for them
+  remove or re-root anything (remote repositories an SSH session navigates to aren't added
+  either). Terminals inside the project are still attached to their root and repository, and the
+  repositories of terminals inside a locked folder are reviewable even when the folder itself
+  isn't a repository, so code review and "cd to directory" work for them
   (`app/src/pane_group/warpium_locked_project.rs`). The locked folders' git repositories are
   detected when the project is locked, since no terminal may have visited them. Single-root
   consumers (project toolbar, code index) use the primary folder.
@@ -261,7 +263,8 @@ placement) and `app/src/workspace/view/warpium_project_header.rs` (the explorer 
   holding the active terminal, else the most recent explorer root, else the terminal's directory
   (`lock_target`). While locked, the header shows the primary folder's name, a folder button
   (**Change project folder…**, which locks to the picked folder alone) and a plus button (**Add folder
-  to project…**); each extra folder is listed with a remove button. Palette: "Open Folder as
+  to project…**); each extra folder is listed with a remove button. A folder inside or around an
+  existing root isn't added (it would show the same files twice). Palette: "Open Folder as
   Project…", "Lock project to current folder", "Unlock project (follow terminals)", "Change project
   folder…", "Add folder to project…" (the lock/unlock/add entries depend on the
   `WarpiumProjectLocked` keymap context flag).
@@ -273,8 +276,8 @@ placement) and `app/src/workspace/view/warpium_project_header.rs` (the explorer 
   `tabs.pinned_explorer_root` column (added for the earlier "Open in new tab" pin) and the others in
   `tabs.project_extra_roots`, a JSON array of strings. Rows written before either column restore as
   Follow or locked to their pinned folder; builds without the second column still restore the
-  primary folder. Folders that no longer exist are dropped on restore, and a tab whose folders are
-  all gone follows its terminals again.
+  primary folder. A locked project is restored as saved even when a folder is missing at launch
+  (an unmounted volume); unlock it to follow the terminals again.
 - **Future work:** container ↔ host path mappings (for example in `.warpium/project.toml`), so a
   terminal inside a container whose working directory maps into the project counts as inside it;
   locking from the Projects list.

@@ -18,8 +18,9 @@ use crate::code::buffer_location::LocalOrRemotePath;
 
 impl WorkingDirectoriesModel {
     /// Refreshes a pane group whose project is locked to `roots`: they become its display roots
-    /// (primary first), their repositories its repositories, and only terminals inside them are
-    /// associated with roots.
+    /// (primary first); the repositories of the roots and of the terminals inside them become its
+    /// repositories, and only terminals inside the roots are associated with roots. `roots` must
+    /// be canonical, like terminal working directories.
     pub fn refresh_locked_project_for_pane_group(
         &mut self,
         pane_group_id: EntityId,
@@ -36,15 +37,6 @@ impl WorkingDirectoriesModel {
             .unwrap_or_default();
         let old_focused_repo = self.focused_repo.get(&pane_group_id).cloned().flatten();
 
-        // Terminal CWDs are canonical; make the roots comparable with them.
-        let Some(roots) = LockedRoots::new(
-            roots
-                .as_slice()
-                .iter()
-                .map(|root| dunce::canonicalize(root).unwrap_or_else(|_| root.clone())),
-        ) else {
-            return;
-        };
         let terminals: Vec<(EntityId, TerminalCwd)> = terminal_cwds
             .into_iter()
             .map(|(terminal_id, cwd)| {
@@ -55,7 +47,7 @@ impl WorkingDirectoriesModel {
                 (terminal_id, cwd)
             })
             .collect();
-        let layout = warpium_project_root::locked_layout(&roots, &terminals, focused_terminal_id);
+        let layout = warpium_project_root::locked_layout(roots, &terminals, focused_terminal_id);
 
         // Display roots are kept most recent last, so the primary root goes in last to be shown
         // (and auto-expanded) first.
@@ -81,28 +73,40 @@ impl WorkingDirectoriesModel {
             })
             .collect();
         project_terminals.sort_by_key(|(terminal_id, _)| Some(*terminal_id) != focused_terminal_id);
+        let mut terminal_repos: Vec<LocalOrRemotePath> = Vec::new();
+        let mut focused_repo: Option<LocalOrRemotePath> = None;
         for (terminal_id, path) in &project_terminals {
             if let Some(repo_root) = self.get_repo_root_for_path(path, ctx) {
+                let repo_root = LocalOrRemotePath::Local(repo_root);
                 root_to_terminal
-                    .entry(LocalOrRemotePath::Local(repo_root))
+                    .entry(repo_root.clone())
                     .or_insert(*terminal_id);
+                if Some(*terminal_id) == focused_terminal_id {
+                    focused_repo = Some(repo_root.clone());
+                }
+                terminal_repos.push(repo_root);
             }
         }
 
+        // The roots' repositories first, then those of terminals inside the project (a root may
+        // be a folder of several repositories).
         let mut repo_roots: Vec<LocalOrRemotePath> = Vec::new();
-        for root in &layout.display_roots {
-            if let Some(repo_root) = self.get_repo_root_for_path(root, ctx) {
-                let repo_root = LocalOrRemotePath::Local(repo_root);
-                if !repo_roots.contains(&repo_root) {
-                    repo_roots.push(repo_root);
-                }
+        let root_repos = layout
+            .display_roots
+            .iter()
+            .filter_map(|root| self.get_repo_root_for_path(root, ctx))
+            .map(LocalOrRemotePath::Local);
+        for repo_root in root_repos.chain(terminal_repos) {
+            if !repo_roots.contains(&repo_root) {
+                repo_roots.push(repo_root);
             }
         }
         // Repositories are kept most recent last too: the primary root's repository first.
         repo_roots.reverse();
-        let focused_repo = self
-            .get_repo_root_for_path(&layout.focused_root, ctx)
-            .map(LocalOrRemotePath::Local);
+        let focused_repo = focused_repo.or_else(|| {
+            self.get_repo_root_for_path(&layout.focused_root, ctx)
+                .map(LocalOrRemotePath::Local)
+        });
 
         let orphaned_repos = self.repository_roots.set_paths(pane_group_id, repo_roots);
         self.directory_to_terminal

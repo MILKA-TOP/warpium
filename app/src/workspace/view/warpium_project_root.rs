@@ -3,7 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
-use warpium_project_root::{ProjectRoot, TerminalCwd, TerminalPlacement, lock_target};
+use warpium_project_root::{
+    ProjectRoot, TerminalCwd, TerminalPlacement, containing_root, lock_target,
+};
 use warpui::platform::FilePickerConfiguration;
 use warpui::{AppContext, EntityId, SingletonEntity as _, ViewContext, ViewHandle};
 
@@ -18,9 +20,12 @@ use crate::workspace::ToastStack;
 /// What to do with the folder the user picks.
 #[derive(Clone, Copy)]
 enum PickedFolder {
+    /// Open it in a new tab locked to it.
     OpenInNewTab,
-    LockTo,
-    AddTo,
+    /// Lock the tab with this pane group to it alone.
+    LockTo(EntityId),
+    /// Add it to the project of the tab with this pane group.
+    AddTo(EntityId),
 }
 
 impl Workspace {
@@ -32,13 +37,13 @@ impl Workspace {
         let pane_group = self.active_tab_pane_group().clone();
         match action {
             ProjectRootAction::OpenFolderAsProject => {
-                self.pick_project_folder(pane_group.id(), PickedFolder::OpenInNewTab, ctx)
+                self.pick_project_folder(PickedFolder::OpenInNewTab, ctx)
             }
             ProjectRootAction::ChangeFolder => {
-                self.pick_project_folder(pane_group.id(), PickedFolder::LockTo, ctx)
+                self.pick_project_folder(PickedFolder::LockTo(pane_group.id()), ctx)
             }
             ProjectRootAction::AddFolder => {
-                self.pick_project_folder(pane_group.id(), PickedFolder::AddTo, ctx)
+                self.pick_project_folder(PickedFolder::AddTo(pane_group.id()), ctx)
             }
             ProjectRootAction::LockToCurrentFolder => {
                 self.lock_project_to_current_folder(&pane_group, ctx)
@@ -78,8 +83,7 @@ impl Workspace {
 
     /// Makes `project_root` the tab's project root and updates everything that uses it: the
     /// explorer, global search and code review (through the working directories model) and the
-    /// project toolbar. Doesn't save the session, so restoring one can use it. Returns whether
-    /// the project root changed.
+    /// project toolbar. Doesn't save the session. Returns whether the project root changed.
     pub(super) fn apply_project_root_for_pane_group(
         &mut self,
         pane_group: &ViewHandle<PaneGroup>,
@@ -130,19 +134,33 @@ impl Workspace {
         if !project_root.is_locked() {
             return None;
         }
-        let cwd = match pane_group.active_session_view(ctx) {
-            None => TerminalCwd::Unknown,
-            Some(terminal_view) => {
-                let terminal_view = terminal_view.as_ref(ctx);
-                match terminal_view.pwd_as_local_or_remote(ctx) {
-                    Some(LocalOrRemotePath::Local(path)) => TerminalCwd::Host(path),
-                    Some(LocalOrRemotePath::Remote(_)) => TerminalCwd::NotOnHost,
-                    // A directory that doesn't exist here: a container's path, or an SSH session
-                    // without a remote server.
-                    None if terminal_view.pwd().is_some() => TerminalCwd::NotOnHost,
-                    None => TerminalCwd::Unknown,
+        let Some(terminal_view) = pane_group.active_session_view(ctx) else {
+            return project_root.place_terminal(&TerminalCwd::Unknown);
+        };
+        let terminal_view = terminal_view.as_ref(ctx);
+        let cwd = match terminal_view.pwd_as_local_or_remote(ctx) {
+            Some(LocalOrRemotePath::Local(path)) => TerminalCwd::Host(path),
+            Some(LocalOrRemotePath::Remote(_)) => TerminalCwd::NotOnHost,
+            None => match (
+                terminal_view.active_session_is_local(ctx),
+                terminal_view.pwd(),
+            ) {
+                // No session or no directory reported yet.
+                (None, _) | (_, None) => TerminalCwd::Unknown,
+                // An SSH session without a remote server.
+                (Some(false), Some(_)) => TerminalCwd::NotOnHost,
+                // A local session reporting a directory that doesn't exist here: a container's
+                // path, unless it is lexically inside the project (a directory deleted under the
+                // terminal).
+                (Some(true), Some(pwd)) => {
+                    let path = PathBuf::from(pwd);
+                    if containing_root(project_root.roots(), &path).is_some() {
+                        TerminalCwd::Host(path)
+                    } else {
+                        TerminalCwd::NotOnHost
+                    }
                 }
-            }
+            },
         };
         project_root.place_terminal(&cwd)
     }
@@ -152,6 +170,24 @@ impl Workspace {
         pane_group: &ViewHandle<PaneGroup>,
         ctx: &mut ViewContext<Self>,
     ) {
+        match self.current_folder_lock_target(pane_group, ctx) {
+            Some(root) => {
+                self.set_project_root_for_pane_group(pane_group, ProjectRoot::locked_to(root), ctx)
+            }
+            None => self.show_project_root_toast(
+                "There is no folder to lock the project to. Use Change project folder… to pick one.",
+                ctx,
+            ),
+        }
+    }
+
+    /// The folder "Lock project to current folder" locks `pane_group`'s project to (see
+    /// [`lock_target`]).
+    fn current_folder_lock_target(
+        &self,
+        pane_group: &ViewHandle<PaneGroup>,
+        ctx: &AppContext,
+    ) -> Option<PathBuf> {
         let explorer_roots: Vec<PathBuf> = self
             .working_directories_model
             .as_ref(ctx)
@@ -167,23 +203,10 @@ impl Workspace {
             .active_session_view(ctx)
             .and_then(|view| view.as_ref(ctx).active_session_path_if_local(ctx))
             .map(|path| canonical(&path));
-        match lock_target(&explorer_roots, active_cwd.as_deref()) {
-            Some(root) => {
-                self.set_project_root_for_pane_group(pane_group, ProjectRoot::locked_to(root), ctx)
-            }
-            None => self.show_project_root_toast(
-                "There is no folder to lock the project to. Use Change project folder… to pick one.",
-                ctx,
-            ),
-        }
+        lock_target(&explorer_roots, active_cwd.as_deref())
     }
 
-    fn pick_project_folder(
-        &mut self,
-        pane_group_id: EntityId,
-        then: PickedFolder,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    fn pick_project_folder(&mut self, then: PickedFolder, ctx: &mut ViewContext<Self>) {
         ctx.open_file_picker(
             move |result, ctx| {
                 let path = match result {
@@ -200,7 +223,7 @@ impl Workspace {
                     return;
                 };
                 workspace.update(ctx, |workspace, ctx| {
-                    workspace.apply_picked_folder(pane_group_id, then, path, ctx);
+                    workspace.apply_picked_folder(then, path, ctx);
                 });
             },
             FilePickerConfiguration::new().folders_only(),
@@ -209,25 +232,42 @@ impl Workspace {
 
     fn apply_picked_folder(
         &mut self,
-        pane_group_id: EntityId,
         then: PickedFolder,
         path: PathBuf,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let PickedFolder::OpenInNewTab = then {
-            self.open_directory_in_new_tab(path, ctx);
-            return;
-        }
+        let pane_group_id = match then {
+            PickedFolder::OpenInNewTab => {
+                self.open_directory_in_new_tab(path, ctx);
+                return;
+            }
+            PickedFolder::LockTo(id) | PickedFolder::AddTo(id) => id,
+        };
         // The tab may have been closed while the picker was open.
         let Some(pane_group) = self.get_pane_group_view_with_id(pane_group_id).cloned() else {
             return;
         };
+        let path = canonical(&path);
         let project_root = match then {
-            PickedFolder::LockTo | PickedFolder::OpenInNewTab => ProjectRoot::locked_to(path),
-            PickedFolder::AddTo => pane_group
-                .as_ref(ctx)
-                .project_root()
-                .with_root_added(canonical(&path)),
+            PickedFolder::AddTo(_) => {
+                let current = pane_group.as_ref(ctx).project_root().clone();
+                // A following tab keeps the folder it shows and gains the picked one.
+                let current = match current {
+                    ProjectRoot::Follow => self
+                        .current_folder_lock_target(&pane_group, ctx)
+                        .map_or(ProjectRoot::Follow, ProjectRoot::locked_to),
+                    locked => locked,
+                };
+                let added = current.with_root_added(path);
+                if added == current {
+                    self.show_project_root_toast(
+                        "That folder is already in the project, or inside or around one of its folders.",
+                        ctx,
+                    );
+                }
+                added
+            }
+            PickedFolder::LockTo(_) | PickedFolder::OpenInNewTab => ProjectRoot::locked_to(path),
         };
         self.set_project_root_for_pane_group(&pane_group, project_root, ctx);
     }

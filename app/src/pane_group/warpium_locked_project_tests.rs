@@ -36,7 +36,7 @@ fn locked_project_shows_its_folders_whatever_the_terminals_do() {
                     .expect("canonicalized path"),
             );
         });
-        let roots = LockedRoots::new([project.clone(), library.clone()]).expect("roots");
+        let roots = LockedRoots::new([canonical(&project), canonical(&library)]).expect("roots");
         let pane_group_id = EntityId::new();
         let host_terminal = EntityId::new();
         let ssh_terminal = EntityId::new();
@@ -89,7 +89,7 @@ fn locked_project_keeps_its_folders_without_any_terminal_directory() {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let project = temp_dir.path().join("project");
         fs::create_dir_all(&project).expect("create dir");
-        let roots = LockedRoots::new([project.clone()]).expect("roots");
+        let roots = LockedRoots::new([canonical(&project)]).expect("roots");
         let pane_group_id = EntityId::new();
 
         let model = app.add_model(|_| WorkingDirectoriesModel::new());
@@ -123,7 +123,7 @@ fn locked_project_attaches_terminals_inside_it_to_their_root_and_repository() {
                     .expect("canonicalized path"),
             );
         });
-        let roots = LockedRoots::new([app_dir.clone()]).expect("roots");
+        let roots = LockedRoots::new([canonical(&app_dir)]).expect("roots");
         let pane_group_id = EntityId::new();
         let terminal = EntityId::new();
 
@@ -144,5 +144,42 @@ fn locked_project_attaches_terminals_inside_it_to_their_root_and_repository() {
 
         assert_eq!(root_terminal, Some(terminal));
         assert_eq!(repo_terminal, Some(terminal));
+    });
+}
+
+#[test]
+fn locked_folder_of_repositories_includes_the_repository_of_a_terminal_inside_it() {
+    App::test((), |mut app| async move {
+        let detected_repos = app.add_singleton_model(|_| DetectedRepositories::default());
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let projects = temp_dir.path().join("projects");
+        let repo = projects.join("app");
+        fs::create_dir_all(&repo).expect("create dir");
+        detected_repos.update(&mut app, |repos, _| {
+            repos.insert_test_repo_root(
+                StandardizedPath::from_local_canonicalized(&canonical(&repo))
+                    .expect("canonicalized path"),
+            );
+        });
+        let roots = LockedRoots::new([canonical(&projects)]).expect("roots");
+        let pane_group_id = EntityId::new();
+        let terminal = EntityId::new();
+
+        let model = app.add_model(|_| WorkingDirectoriesModel::new());
+        let repositories = model.update(&mut app, |model, ctx| {
+            model.refresh_locked_project_for_pane_group(
+                pane_group_id,
+                &roots,
+                vec![(terminal, local(&canonical(&repo)))],
+                Some(terminal),
+                ctx,
+            );
+            model
+                .most_recent_repositories_for_pane_group(pane_group_id)
+                .expect("pane group exists")
+                .collect::<Vec<_>>()
+        });
+
+        assert_eq!(repositories, vec![local(&canonical(&repo))]);
     });
 }

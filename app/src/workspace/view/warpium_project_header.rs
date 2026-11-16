@@ -100,21 +100,22 @@ pub(super) fn render_project_header(
             .finish(),
         );
     if project_root.is_locked() {
-        title_row = title_row.with_child(header_button(
-            Icon::Folder,
-            "Change project folder…".to_owned(),
-            ProjectRootAction::ChangeFolder,
-            mouse_states.change.clone(),
-            appearance,
-        ));
+        title_row = title_row
+            .with_child(header_button(
+                Icon::Folder,
+                "Change project folder…".to_owned(),
+                ProjectRootAction::ChangeFolder,
+                mouse_states.change.clone(),
+                appearance,
+            ))
+            .with_child(header_button(
+                Icon::Plus,
+                "Add folder to project…".to_owned(),
+                ProjectRootAction::AddFolder,
+                mouse_states.add.clone(),
+                appearance,
+            ));
     }
-    title_row = title_row.with_child(header_button(
-        Icon::Plus,
-        "Add folder to project…".to_owned(),
-        ProjectRootAction::AddFolder,
-        mouse_states.add.clone(),
-        appearance,
-    ));
 
     let mut column = Flex::column()
         .with_main_axis_size(MainAxisSize::Min)
