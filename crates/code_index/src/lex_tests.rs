@@ -118,3 +118,126 @@ fn is_identifier_at_rejects_keywords_comments_and_strings() {
     assert!(!at(0, 14), "bar in a comment");
     assert!(!at(1, 10), "baz in a string");
 }
+
+#[test]
+fn is_identifier_at_counts_columns_in_characters_after_multibyte_text() {
+    let source = "val s = \"привет 😀\"; foo";
+
+    assert!(crate::is_identifier_at(
+        source,
+        Language::Kotlin,
+        Position {
+            line: 0,
+            column: 20
+        }
+    ));
+}
+
+#[test]
+fn is_identifier_at_finds_cyrillic_identifiers() {
+    let source = "val имя = Привет()";
+
+    assert!(crate::is_identifier_at(
+        source,
+        Language::Kotlin,
+        Position {
+            line: 0,
+            column: 11
+        }
+    ));
+}
+
+#[test]
+fn is_identifier_at_accepts_the_end_of_an_identifier_at_the_line_end() {
+    let source = "foo\nbar";
+
+    assert!(crate::is_identifier_at(
+        source,
+        Language::Kotlin,
+        Position { line: 0, column: 3 }
+    ));
+}
+
+#[test]
+fn is_identifier_at_clamps_a_column_past_the_line_end() {
+    let source = "foo\n    \nbar";
+
+    assert!(!crate::is_identifier_at(
+        source,
+        Language::Kotlin,
+        Position {
+            line: 1,
+            column: 40
+        }
+    ));
+}
+
+#[test]
+fn is_identifier_at_is_false_past_the_last_line() {
+    let source = "foo\nbar";
+
+    assert!(!crate::is_identifier_at(
+        source,
+        Language::Kotlin,
+        Position { line: 7, column: 0 }
+    ));
+}
+
+#[test]
+fn is_identifier_at_is_false_in_empty_text() {
+    assert!(!crate::is_identifier_at(
+        "",
+        Language::Java,
+        Position { line: 0, column: 0 }
+    ));
+}
+
+#[test]
+fn is_identifier_at_handles_crlf_line_endings() {
+    let source = "foo();\r\nbar()";
+
+    assert!(crate::is_identifier_at(
+        source,
+        Language::Java,
+        Position { line: 1, column: 1 }
+    ));
+}
+
+#[test]
+fn offset_of_lands_on_a_char_boundary_after_multibyte_characters() {
+    let source = "😀ц x\nz";
+
+    let offset = offset_of(
+        source,
+        &line_starts(source),
+        Position { line: 0, column: 3 },
+    );
+
+    assert_eq!(offset, Some(7));
+}
+
+#[test]
+fn offset_of_clamps_a_multibyte_line_to_its_end_before_the_newline() {
+    let source = "ц😀\nz";
+
+    let offset = offset_of(
+        source,
+        &line_starts(source),
+        Position { line: 0, column: 9 },
+    );
+
+    assert_eq!(offset, Some(6));
+}
+
+#[test]
+fn offset_of_is_none_past_the_last_line() {
+    let source = "ab\n";
+
+    let offset = offset_of(
+        source,
+        &line_starts(source),
+        Position { line: 2, column: 0 },
+    );
+
+    assert_eq!(offset, None);
+}
