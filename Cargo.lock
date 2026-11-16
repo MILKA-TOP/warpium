@@ -16382,6 +16382,7 @@ dependencies = [
  "log",
  "regex",
  "tempfile",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
