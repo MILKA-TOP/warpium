@@ -426,9 +426,12 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
   `logcat_list::VerticalListAdapter`; horizontal: clipped, like the terminal's wide alt-screen),
   laid out as wide as the widest row. `LogBuffer::max_row_columns` keeps that width up to date as
   rows arrive (evictions don't lower it until the next filter rebuild), so no frame measures the
-  buffer. The **Soft wrap** toggle in the pane's toolbar (off by default) instead splits message
-  lines wider than the pane into several rows (`LogBuffer::set_wrap_columns`), keeping rows
-  uniform for the list; the rows are rebuilt only when the pane's width changes by a column.
+  buffer. Widths are in monospace columns (tabs 4, CJK and emoji 2). The **Soft wrap** toggle in
+  the pane's toolbar (off by default) instead splits message lines wider than the pane into
+  several rows (`LogBuffer::set_wrap_columns`, at least 20 columns; a narrower pane still scrolls
+  horizontally), keeping rows uniform for the list. Re-wrapping re-splits only the shown entries,
+  when the pane's width or the font changes by a column, and keeps the top visible entry in
+  view. A stack frame split by soft wrap stays a link on each of its rows.
 - **Stack frames.** `at [module/]com.foo.Bar$Inner$1.baz(Bar.kt:42)` lines get a link. Clicking it
   looks up `com.foo.Bar.Inner`, then `com.foo.Bar`, in the code index (Kotlin file facades such as
   `BarKt` are skipped), prefers a matching file with the frame's file name or that name next to it,

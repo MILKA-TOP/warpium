@@ -4,12 +4,24 @@
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
 
+use unicode_width::UnicodeWidthChar as _;
+
 use super::entry::{LogEntry, LogTime};
 use super::filter::LogFilter;
 use super::process::{ProcessEvent, parse_activity_manager, process_belongs_to};
 
 /// How many columns a tab advances; the view expands tabs to this many spaces.
 pub const TAB_WIDTH: usize = 4;
+
+/// How many monospace columns `ch` takes: [`TAB_WIDTH`] for a tab, two for wide (CJK, emoji)
+/// characters and none for combining marks.
+pub fn char_columns(ch: char) -> usize {
+    if ch == '\t' {
+        TAB_WIDTH
+    } else {
+        ch.width().unwrap_or(0)
+    }
+}
 
 /// One display line: a line of an entry's message, or a part of one when soft wrap is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,7 +36,12 @@ struct RowRef {
 #[derive(Clone, Copy, Debug)]
 pub struct Row<'a> {
     pub entry: &'a LogEntry,
+    /// The text of this row: a message line, or a part of one when soft wrap is on.
     pub line: &'a str,
+    /// The whole message line `line` is part of (the same text unless soft wrap split it).
+    pub message_line: &'a str,
+    /// Where `line` starts in `message_line`, in bytes.
+    pub line_offset: usize,
     /// Whether this is the first line of its entry (which shows the time, pid and tag).
     pub is_first_line: bool,
     /// The entry's sequence number, stable while it stays in the buffer.
@@ -109,7 +126,7 @@ impl LogBuffer {
             return false;
         }
         self.wrap_columns = columns;
-        self.refilter();
+        self.rewrap();
         true
     }
 
@@ -263,9 +280,21 @@ impl LogBuffer {
 
     fn row_for(&self, row: &RowRef) -> Option<Row<'_>> {
         let entry = self.entries.get((row.seq - self.first_seq) as usize)?;
+        let message = &*entry.message;
+        let (start, end) = (row.start as usize, row.end as usize);
+        let line = message.get(start..end)?;
+        let line_start = message[..start]
+            .rfind('\n')
+            .map_or(0, |newline| newline + 1);
+        let line_end = message[end..]
+            .find('\n')
+            .map_or(message.len(), |newline| end + newline);
+        let message_line = &message[line_start..line_end];
         Some(Row {
             entry,
-            line: entry.message.get(row.start as usize..row.end as usize)?,
+            line,
+            message_line: message_line.strip_suffix('\r').unwrap_or(message_line),
+            line_offset: start - line_start,
             is_first_line: row.start == 0,
             seq: row.seq,
         })
@@ -284,6 +313,31 @@ impl LogBuffer {
                 push_rows(
                     &mut rows,
                     self.first_seq + index as u64,
+                    entry,
+                    self.wrap_columns,
+                    &mut max_row_columns,
+                );
+            }
+        }
+        self.rows = rows;
+        self.max_row_columns = max_row_columns;
+    }
+
+    /// Splits the shown entries into rows again (the wrap width changed), without filtering
+    /// them again.
+    fn rewrap(&mut self) {
+        let mut rows = VecDeque::with_capacity(self.rows.len());
+        let mut max_row_columns = 0;
+        let mut last_seq = None;
+        for row in &self.rows {
+            if last_seq == Some(row.seq) {
+                continue;
+            }
+            last_seq = Some(row.seq);
+            if let Some(entry) = self.entries.get((row.seq - self.first_seq) as usize) {
+                push_rows(
+                    &mut rows,
+                    row.seq,
                     entry,
                     self.wrap_columns,
                     &mut max_row_columns,
@@ -340,7 +394,7 @@ fn push_rows(
         let mut part_start = 0;
         let mut columns = 0;
         for (offset, ch) in trimmed.char_indices() {
-            let width = if ch == '\t' { TAB_WIDTH } else { 1 };
+            let width = char_columns(ch);
             if wrap_columns.is_some_and(|wrap| columns > 0 && columns + width > wrap) {
                 rows.push_back(row_ref(seq, start + part_start, start + offset));
                 *max_row_columns = (*max_row_columns).max(columns);

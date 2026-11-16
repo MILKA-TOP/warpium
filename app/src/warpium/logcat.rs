@@ -27,7 +27,6 @@ use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{
     AxisConfiguration, ClippedAxisConfiguration, DualAxisConfig, ScrollableAppearance,
-    SingleAxisConfig,
 };
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
@@ -82,7 +81,8 @@ const META_CHARS: f32 = TIME_CHARS + PID_CHARS + 2. + TAG_CHARS;
 const ROW_PADDING_LEFT: f32 = 8.;
 /// Room kept after the widest message so its last characters aren't clipped, in columns.
 const ROW_END_CHARS: f32 = 2.;
-/// Soft wrap never makes rows narrower than this many columns.
+/// Soft wrap never makes rows narrower than this many columns; a narrower pane scrolls
+/// horizontally instead.
 const MIN_WRAP_COLUMNS: usize = 20;
 
 pub(crate) fn init(app: &mut AppContext) {
@@ -315,6 +315,7 @@ impl LogcatView {
             |_, _| {},
         );
 
+        ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, _, ctx| me.sync_wrap(ctx));
         let (list_width_tx, list_width_rx) = async_channel::unbounded();
         ctx.spawn_stream_local(
             list_width_rx,
@@ -614,19 +615,27 @@ impl LogcatView {
         }
     }
 
-    /// Re-wraps the rows to the list's width when soft wrap is on, or unwraps them.
+    /// Re-wraps the rows to the list's width when soft wrap is on, or unwraps them, keeping the
+    /// top visible entry in view.
     fn sync_wrap(&mut self, ctx: &mut ViewContext<Self>) {
         let app: &AppContext = ctx;
         let columns = self.soft_wrap.then(|| {
-            let char_width = RowStyle::new(Appearance::as_ref(app), app).char_width;
+            let char_width = char_width(Appearance::as_ref(app), app);
             let message_width = self.list_width
                 - ROW_PADDING_LEFT
                 - (META_CHARS + ROW_END_CHARS) * char_width
                 - ScrollbarWidth::Auto.as_f32();
             ((message_width / char_width).floor().max(0.) as usize).max(MIN_WRAP_COLUMNS)
         });
+        let anchor = if self.follow {
+            None
+        } else {
+            self.buffer.row(self.visible.start).map(|row| row.seq)
+        };
         if self.buffer.set_wrap_columns(columns) {
-            self.after_rows_rebuilt();
+            if let Some(index) = anchor.and_then(|seq| self.buffer.row_index_of(seq)) {
+                self.list_state.scroll_to(index);
+            }
             ctx.notify();
         }
     }
@@ -1071,7 +1080,7 @@ impl LogcatView {
         .finish()
     }
 
-    fn render_list(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    fn render_list(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let row_count = self.buffer.row_count();
         if self.follow && row_count > 0 {
@@ -1089,57 +1098,44 @@ impl LogcatView {
         };
         let list = UniformList::new(self.list_state.clone(), row_count, build_items)
             .notify_visible_items(self.visible_tx.clone());
-        let child = Box::new(VerticalListAdapter::new(list.finish_scrollable()));
-        let nonactive_thumb: Fill = theme.nonactive_ui_detail().into();
-        let active_thumb: Fill = theme.active_ui_detail().into();
+        // Rows are as wide as the widest row (measured as rows arrive) and at least as wide as the
+        // pane, so every row scrolls by the same amount. With soft wrap on, rows only overflow a
+        // pane too narrow for `MIN_WRAP_COLUMNS`.
+        let content_width = (ROW_PADDING_LEFT
+            + (META_CHARS + self.buffer.max_row_columns() as f32 + ROW_END_CHARS)
+                * char_width(appearance, ctx))
+        .max(self.list_width);
+        let max_scroll = (content_width - self.list_width).max(0.);
+        if self.horizontal_scroll_state.scroll_start().as_f32() > max_scroll {
+            self.horizontal_scroll_state
+                .scroll_to(Pixels::new(max_scroll));
+        }
         let scrollbar = ScrollableAppearance::new(ScrollbarWidth::Auto, true);
-        let scrollable = if self.soft_wrap {
-            NewScrollable::vertical(
-                SingleAxisConfig::Manual {
-                    handle: self.scroll_state.clone(),
-                    child,
-                },
-                nonactive_thumb,
-                active_thumb,
-                Fill::None,
-            )
-            .with_vertical_scrollbar(scrollbar)
-            .finish()
-        } else {
-            let char_width = RowStyle::new(appearance, app).char_width;
-            // Rows are as wide as the widest message (measured as rows arrive) and at least as
-            // wide as the pane, so every row scrolls by the same amount.
-            let content_width = (ROW_PADDING_LEFT
-                + (META_CHARS + self.buffer.max_row_columns() as f32 + ROW_END_CHARS) * char_width)
-                .max(self.list_width);
-            let max_scroll = (content_width - self.list_width).max(0.);
-            if self.horizontal_scroll_state.scroll_start().as_f32() > max_scroll {
-                self.horizontal_scroll_state
-                    .scroll_to(Pixels::new(max_scroll));
-            }
-            NewScrollable::horizontal_and_vertical(
-                DualAxisConfig::Manual {
-                    horizontal: AxisConfiguration::Clipped(ClippedAxisConfiguration {
-                        handle: self.horizontal_scroll_state.clone(),
-                        max_size: Some(content_width),
-                        stretch_child: false,
-                    }),
-                    vertical: AxisConfiguration::Manual(self.scroll_state.clone()),
-                    child,
-                },
-                nonactive_thumb,
-                active_thumb,
-                Fill::None,
-            )
-            .with_horizontal_scrollbar(scrollbar)
-            .with_vertical_scrollbar(scrollbar)
-            .finish()
-        };
+        let scrollable = NewScrollable::horizontal_and_vertical(
+            DualAxisConfig::Manual {
+                horizontal: AxisConfiguration::Clipped(ClippedAxisConfiguration {
+                    handle: self.horizontal_scroll_state.clone(),
+                    max_size: Some(content_width),
+                    stretch_child: false,
+                }),
+                vertical: AxisConfiguration::Manual(self.scroll_state.clone()),
+                child: Box::new(VerticalListAdapter::new(list.finish_scrollable())),
+            },
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            Fill::None,
+        )
+        .with_horizontal_scrollbar(scrollbar)
+        .with_vertical_scrollbar(scrollbar)
+        .finish();
         let probe = WidthProbe::new(scrollable, self.list_width, self.list_width_tx.clone());
         EventHandler::new(Box::new(probe))
             .with_always_handle()
             .on_scroll_wheel(|ctx, _, delta, _| {
-                ctx.dispatch_typed_action(LogcatAction::ScrolledBy(delta.y()));
+                // A horizontal swipe carries a little vertical drift, which isn't scrolling up.
+                if delta.y().abs() > delta.x().abs() {
+                    ctx.dispatch_typed_action(LogcatAction::ScrolledBy(delta.y()));
+                }
                 DispatchEventResult::PropagateToParent
             })
             .on_left_mouse_down(|ctx, _, _| {
@@ -1216,8 +1212,8 @@ impl LogcatView {
             LogLevel::Error | LogLevel::Fatal | LogLevel::Warn => level_color,
             LogLevel::Verbose | LogLevel::Debug | LogLevel::Info => style.message_color,
         };
-        let message: Box<dyn Element> = match parse_frame(row.line) {
-            Some(frame) => self.render_frame_line(row.line, &frame, message_color, style),
+        let message: Box<dyn Element> = match parse_frame(row.message_line) {
+            Some(frame) => self.render_frame_line(row, &frame, message_color, style),
             None => text(expand_tabs(row.line), message_color),
         };
         flex.add_child(Shrinkable::new(1., Clipped::new(message).finish()).finish());
@@ -1240,10 +1236,11 @@ impl LogcatView {
             .finish()
     }
 
-    /// A stack-frame line with the `Class.method(File:line)` part as a link.
+    /// A row of a stack-frame line, with its part of `Class.method(File:line)` as a link (soft
+    /// wrap may have split the line).
     fn render_frame_line(
         &self,
-        line: &str,
+        row: Row<'_>,
         frame: &StackFrame,
         color: warpui::color::ColorU,
         style: &RowStyle,
@@ -1253,17 +1250,31 @@ impl LogcatView {
                 .with_color(color)
                 .finish()
         };
-        let line_owned = line.to_owned();
-        let link = EventHandler::new(piece(&line[frame.span.clone()], style.link_color))
+        let line = row.line;
+        let link_start = frame
+            .span
+            .start
+            .saturating_sub(row.line_offset)
+            .min(line.len());
+        let link_end = frame
+            .span
+            .end
+            .saturating_sub(row.line_offset)
+            .min(line.len());
+        if link_start >= link_end {
+            return piece(line, color);
+        }
+        let message_line = row.message_line.to_owned();
+        let link = EventHandler::new(piece(&line[link_start..link_end], style.link_color))
             .on_left_mouse_down(move |ctx, _, _| {
-                ctx.dispatch_typed_action(LogcatAction::OpenFrame(line_owned.clone()));
+                ctx.dispatch_typed_action(LogcatAction::OpenFrame(message_line.clone()));
                 DispatchEventResult::StopPropagation
             })
             .finish();
         Flex::row()
-            .with_child(piece(&line[..frame.span.start], color))
+            .with_child(piece(&line[..link_start], color))
             .with_child(link)
-            .with_child(piece(&line[frame.span.end..], color))
+            .with_child(piece(&line[link_end..], color))
             .finish()
     }
 }
@@ -1281,14 +1292,12 @@ struct RowStyle {
 }
 
 impl RowStyle {
-    fn new(appearance: &Appearance, app: &AppContext) -> Self {
+    fn new(appearance: &Appearance, ctx: &AppContext) -> Self {
         let theme = appearance.theme();
-        let font_family = appearance.monospace_font_family();
-        let font_size = appearance.monospace_font_size();
         Self {
-            font_family,
-            font_size,
-            char_width: app.font_cache().em_width(font_family, font_size),
+            font_family: appearance.monospace_font_family(),
+            font_size: appearance.monospace_font_size(),
+            char_width: char_width(appearance, ctx),
             row_height: (font_size * appearance.line_height_ratio()).ceil(),
             meta_color: theme.hint_text_color(theme.background()).into_solid(),
             tag_color: theme.sub_text_color(theme.background()).into_solid(),
@@ -1296,6 +1305,14 @@ impl RowStyle {
             link_color: theme.accent().into_solid(),
         }
     }
+}
+
+/// The advance of one column of the monospace font, as the editor and terminal measure it.
+fn char_width(appearance: &Appearance, ctx: &AppContext) -> f32 {
+    ctx.font_cache().em_width(
+        appearance.monospace_font_family(),
+        appearance.monospace_font_size(),
+    )
 }
 
 fn level_color(level: LogLevel, appearance: &Appearance) -> warpui::color::ColorU {

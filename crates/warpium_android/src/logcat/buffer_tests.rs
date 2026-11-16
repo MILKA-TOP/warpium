@@ -268,3 +268,58 @@ fn soft_wrap_counts_tabs_and_keeps_characters_whole() {
 
     assert_eq!(lines(&buffer), vec!["\tat", " é1é2é", "3"]);
 }
+
+#[test]
+fn wide_characters_take_two_columns() {
+    let mut buffer = LogBuffer::new(100);
+    buffer.push_batch(vec![info(1, "日本語ab")]);
+    assert_eq!(buffer.max_row_columns(), 8);
+
+    buffer.set_wrap_columns(Some(5));
+
+    assert_eq!(lines(&buffer), vec!["日本", "語ab"]);
+}
+
+#[test]
+fn wrapped_rows_know_their_whole_message_line() {
+    let mut buffer = LogBuffer::new(100);
+    buffer.push_batch(vec![info(1, "head\r\nabcdefg\nz")]);
+
+    buffer.set_wrap_columns(Some(3));
+
+    let rows: Vec<(String, String, usize)> = buffer
+        .rows(0..buffer.row_count())
+        .map(|row| {
+            (
+                row.line.to_owned(),
+                row.message_line.to_owned(),
+                row.line_offset,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("hea".to_owned(), "head".to_owned(), 0),
+            ("d".to_owned(), "head".to_owned(), 3),
+            ("abc".to_owned(), "abcdefg".to_owned(), 0),
+            ("def".to_owned(), "abcdefg".to_owned(), 3),
+            ("g".to_owned(), "abcdefg".to_owned(), 6),
+            ("z".to_owned(), "z".to_owned(), 0),
+        ]
+    );
+}
+
+#[test]
+fn rewrapping_keeps_the_filtered_entries() {
+    let mut buffer = LogBuffer::new(100);
+    buffer.push_batch(vec![info(1, "keep this"), info(2, "drop"), info(1, "keep")]);
+    buffer.set_filter(LogFilter {
+        text: TextFilter::parse("keep", false).unwrap(),
+        ..LogFilter::default()
+    });
+
+    buffer.set_wrap_columns(Some(4));
+
+    assert_eq!(lines(&buffer), vec!["keep", " thi", "s", "keep"]);
+}
