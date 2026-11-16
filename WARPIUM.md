@@ -199,14 +199,20 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
 `app/src/pane_group/warpium_project_toolbar.rs` (splits).
 
 - **Project.** First match wins: the tab's pinned Project Explorer root, the nearest ancestor of
-  the local session's working directory with a `.warpium/` directory, then its git repository
-  (a `.git` file counts, for worktrees). Remote sessions have no project.
+  the tab's location with a `.warpium/` directory, then its git repository (a `.git` file counts,
+  for worktrees). The location is the folder of the focused editor's file (code or notebook
+  pane), else the working directory of the tab's active session. Remote sessions have no project;
+  a tab with neither a session nor a file (only settings, say) keeps the previous project. The
+  toolbar follows tab switches, pane focus, editor file switches (through the pane title) and
+  finished commands.
 - **Config.** The team config is `<root>/.warpium/toolbar.toml` (`[[button]]` entries with an
   `id` and one of `command`, `workflow`, `launch_config`, `tab_config`, `url` or `action`; see
   `TEAM_TEMPLATE` in `crates/warpium_project_toolbar/src/template.rs`). Personal overrides are
   `~/.warp-oss/projects/<folder-name>-<hash of the root path>/toolbar.toml`, merged by `id`: same
   id overrides the fields it sets, `hidden = true` removes the button, a new id adds one. Both are
-  watched and reloaded on change; an invalid file shows a warning button that opens it.
+  watched and reloaded on change; an invalid file shows a warning button whose tooltip has the
+  error and which opens the file at the error's line (the TOML span, or the offending
+  `[[button]]` header for validation errors).
   `action` ids are the parameterless UI actions of the `warpctrl` catalog.
 - **Layout.** Buttons with `run_config = true` and the launch configurations with a pane inside
   the project go in the run-configurations dropdown, with a run button; the selection is
@@ -218,12 +224,19 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
   is ignored rather than invalidating the toolbar.
 - **Trust.** Commands whose action comes from the team file run only after the user trusts that
   exact file version (its SHA-256). The prompt lists every team command with its target, `cwd` and
-  `env`, and comes back whenever the file changes. Personal commands and non-command actions
-  never ask. Trust and run-configuration selections are kept in private preferences under
-  `WarpiumProjectToolbarState`, never in the project.
+  `env` in a scrollable list (its buttons stay in view), and comes back whenever the file changes.
+  It lists the team file's own commands, without personal overrides. When an earlier version was
+  trusted, new and changed commands (by button id; a change in label, command, target, `cwd` or
+  any `env` value counts) come first, marked "New" or "Changed", then the
+  unchanged ones under their own heading, and the intro counts new, changed, unchanged and removed
+  commands. Personal commands and non-command actions never ask. Trust, a fingerprint of each
+  trusted command (to diff against) and run-configuration selections are kept in private
+  preferences under `WarpiumProjectToolbarState`, never in the project.
 - **Running a command.** `current` types it into the active session wrapped so that `cwd` and
   `env` don't leak into that session (a subshell in POSIX shells, `pushd`/`begin` in fish, a
-  script block in PowerShell); a busy or remote session falls back to a new tab. `new_tab`,
+  script block in PowerShell). When another kind of pane, such as an editor, is focused, the
+  tab's most recently focused session takes it if its working directory is inside the project. A
+  busy or remote session, or no such session, falls back to a new tab. `new_tab`,
   `split_right` and `split_down` start a new session in `cwd` with `env` set.
 - **Setting:** `warpium.project_toolbar` (default on), in Settings → Features → Warpium and as
   "Enable/Disable project toolbar" in the command palette, next to "Edit project toolbar" and

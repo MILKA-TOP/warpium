@@ -205,6 +205,79 @@ fn reports_toml_syntax_errors_with_their_location() {
     assert!(message.contains("line 1"), "message: {message}");
 }
 
+fn team_error_location(text: &str) -> Option<TextPosition> {
+    parse_config(text, ConfigSource::Team)
+        .expect_err("team config should be rejected")
+        .location
+}
+
+#[test]
+fn toml_errors_carry_the_line_and_column_of_their_span() {
+    let location = team_error_location("[[button]]\nid = \"x\"\ncommand = make\n");
+
+    assert_eq!(
+        location,
+        Some(TextPosition {
+            line: 3,
+            column: 11
+        })
+    );
+}
+
+#[test]
+fn unknown_key_errors_point_at_the_key() {
+    let location = team_error_location("[[button]]\nid = \"x\"\n  comand = \"make\"\n");
+
+    assert_eq!(location, Some(TextPosition { line: 3, column: 3 }));
+}
+
+#[test]
+fn button_errors_point_at_that_buttons_header() {
+    let location = team_error_location(
+        "# toolbar\n[[button]]\nid = \"a\"\ncommand = \"make\"\n\n  [[ button ]]\nid = \"b\"\n",
+    );
+
+    assert_eq!(location, Some(TextPosition { line: 6, column: 3 }));
+}
+
+#[test]
+fn button_error_location_ignores_headers_inside_strings() {
+    let location = team_error_location(
+        "[[button]]\nid = \"a\"\ncommand = \"\"\"\n[[button]]\necho\n\"\"\"\n[[button]]\nid = \"b\"\n",
+    );
+
+    assert_eq!(location, Some(TextPosition { line: 7, column: 1 }));
+}
+
+#[test]
+fn duplicate_id_error_points_at_the_second_button() {
+    let location = team_error_location(
+        "[[button]]\nid = \"a\"\ncommand = \"make\"\n[[button]]\nid = \"a\"\ncommand = \"make\"\n",
+    );
+
+    assert_eq!(location, Some(TextPosition { line: 4, column: 1 }));
+}
+
+#[test]
+fn position_counts_columns_in_characters() {
+    let position = TextPosition::from_byte_offset("ä = 1\nlabel = \"ü\" x", 18);
+
+    assert_eq!(
+        position,
+        TextPosition {
+            line: 2,
+            column: 11
+        }
+    );
+}
+
+#[test]
+fn position_past_the_end_is_clamped() {
+    let position = TextPosition::from_byte_offset("a\nb", 99);
+
+    assert_eq!(position, TextPosition { line: 2, column: 2 });
+}
+
 #[test]
 fn rejects_unknown_keys() {
     let message = team_error("[[button]]\nid = \"x\"\ncomand = \"make\"\n");
