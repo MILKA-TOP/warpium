@@ -58,6 +58,8 @@ mod prefix;
 #[cfg(target_os = "macos")]
 mod preview_config_migration;
 mod pricing;
+#[cfg(feature = "local_tty")]
+mod process_environment;
 mod profiling;
 mod projects;
 mod prompt;
@@ -136,6 +138,7 @@ pub mod settings_view;
 pub mod tab_configs;
 pub mod terminal;
 pub mod themes;
+use ::ai::hooks::{HookRegistry, LogOnlyMessenger, UnavailableRunner};
 use ::ai::index::DEFAULT_SYNC_REQUESTS_PER_MIN;
 #[cfg(feature = "local_fs")]
 use ::ai::index::full_source_code_embedding::SnapshotStorage;
@@ -149,6 +152,7 @@ pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
 use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
+use ai::blocklist::hooks::HookRuntime;
 use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::chatgpt_subscription::ChatGPTSubscriptionModel;
 use ai::execution_profiles::editor::ExecutionProfileEditorManager;
@@ -174,7 +178,7 @@ use settings::import::model::ImportedConfigModel;
 use settings_view::pane_manager::SettingsPaneManager;
 use terminal::general_settings::GeneralSettings;
 use terminal::keys_settings::KeysSettings;
-#[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+#[cfg(feature = "local_tty")]
 use terminal::local_shell::LocalShellState;
 pub use util::bindings::cmd_or_ctrl_shift;
 use voice::transcriber::VoiceTranscriber;
@@ -1023,6 +1027,8 @@ pub type TuiMountFn = Box<dyn FnOnce(&mut warpui::AppContext)>;
 /// in place of the GUI/CLI `launch()` path.
 fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let mut timer = IntervalTimer::new();
+    #[cfg(feature = "local_tty")]
+    let initial_process_environment = process_environment::InitialProcessEnvironment::capture();
 
     // ── Early initialization (pre-AppBuilder) ──────────────────────
     // These steps run before the platform event loop is started.
@@ -1362,6 +1368,8 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
                 ctx,
             )
         });
+        #[cfg(feature = "local_tty")]
+        ctx.add_singleton_model(move |_| initial_process_environment);
         #[cfg(feature = "crash_reporting")]
         crate::crash_reporting::set_client_type_tag(launch_mode.execution_mode().client_id());
 
@@ -2350,6 +2358,11 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| ActiveAgentViewsModel::new());
     ctx.add_singleton_model(AgentNotificationsModel::new);
     ctx.add_singleton_model(BlocklistAIPermissions::new);
+    // The hook runtime reads the registry handle, so the registry is registered first.
+    ctx.add_singleton_model(|_| HookRegistry::new());
+    ctx.add_singleton_model(|ctx| {
+        HookRuntime::new(Arc::new(UnavailableRunner), Arc::new(LogOnlyMessenger), ctx)
+    });
     ctx.add_singleton_model(ai::blocklist::orchestration_events::OrchestrationEventService::new);
     ctx.add_singleton_model(
         ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
@@ -2471,10 +2484,13 @@ pub(crate) fn initialize_app(
         )
     });
 
-    #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
+    #[cfg(feature = "local_tty")]
     {
         ctx.add_singleton_model(LocalShellState::new);
         ctx.add_singleton_model(system::SystemInfo::new);
+        // Hook processes want the login shell's PATH, so the runner is installed once
+        // `LocalShellState` is available to capture it.
+        HookRuntime::install_command_runner(ctx);
     }
 
     // In a sandboxed Oz runner, mint IAP tokens by self-minting via Workload
