@@ -904,6 +904,8 @@ pub enum WorkspaceAction {
     /// Warpium: opens the personal toolbar overrides of the project, creating them from a
     /// template.
     EditPersonalToolbarOverrides,
+    /// Warpium: opens the project toolbar's editor.
+    CustomizeProjectToolbar,
     /// Warpium: toggles the project toolbar.
     ToggleProjectToolbar,
     /// Warpium: toggles the Kotlin/Java code index behind Go to Class and Go to Symbol.
@@ -1265,6 +1267,7 @@ impl WorkspaceAction {
             | RevealWarpiumUpdateDmg
             | EditProjectToolbar
             | EditPersonalToolbarOverrides
+            | CustomizeProjectToolbar
             | ToggleProjectToolbar
             | ToggleCodeIndex
             | OpenAndroidLogcat

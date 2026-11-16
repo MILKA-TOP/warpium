@@ -12,6 +12,10 @@ pub(crate) mod logcat;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod project_toolbar;
 #[cfg(not(target_family = "wasm"))]
+pub(crate) mod project_toolbar_editor;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod project_toolbar_prompt;
+#[cfg(not(target_family = "wasm"))]
 mod project_toolbar_row;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod self_update;

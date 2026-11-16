@@ -220,6 +220,36 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
   the toolbar has something to show: it gets a share of the width like one more tab (with
   vertical tabs, half of the space the title-bar search bar would otherwise take). The buttons
   that don't fit move, in order, into the overflow menu.
+- **Placement.** `overflow = true` keeps a button in the overflow menu (after the buttons that
+  don't fit); the overflow button then always shows.
+- **Editor.** `app/src/warpium/project_toolbar_editor.rs`, a modal owned by the workspace
+  (`ProjectToolbarOverlays` in `app/src/workspace/view/warpium_project_toolbar.rs`). Opened from
+  the "+" at the end of the toolbar, "+ Add button" (what a project without buttons shows, so any
+  project can get some), "Customize toolbar…" in the overflow and run-configurations menus, a
+  button's right-click menu (Edit…, Duplicate, Move left/right, Hide, Delete; all but Edit save
+  right away) and the palette's "Customize project toolbar". Its model is
+  `warpium_project_toolbar::EditorModel`: both files' buttons in toolbar order (team-file buttons,
+  then personal-only ones; moves stay within a group), each with a scope. Project scope writes the
+  team file; Personal scope writes a full personal entry, an override when the id is in the team
+  file (whose own entry is left alone); hiding writes `hidden = true` in the personal file.
+  Writes go through `toml_edit`: each button's table is updated in place, only changed keys are
+  rewritten (keeping trailing comments), tables move with their comments when reordered, the
+  file's header comment stays on top, the first button of a commented template goes below the
+  comments, and a missing file is created only when it gets a button. Every button is validated
+  first (errors show inline and select the button), and the result is parsed and merged before
+  anything is written. Saving refuses if either file changed on disk since the editor opened.
+- **Trust after a GUI save.** Writing the team file from the editor is the user's own edit: when
+  the version it replaces was trusted (or had no commands, or there was no file), the new version
+  is trusted at once (`ToolbarUserState::record_gui_save`), so there is no prompt. An untrusted
+  version stays untrusted (saving one button must not vouch for a teammate's commands), and any
+  later external change asks again as before.
+- **Variables.** Commands can use `${projectRoot}`, `${file}` and `${fileDir}` (the focused code
+  or notebook editor's file), `${selection}` (its selection, else the focused terminal's),
+  `${cwd}` (the active session's directory, else the root) and `${prompt:Label}` (asked in a
+  dialog, `project_toolbar_prompt.rs`, before running; Test run too). Each value is quoted as one
+  word for the shell that runs it (the session's, or `$SHELL`'s family for a new tab or split);
+  `$${` is a literal `${`. A missing file or selection shows a toast and runs nothing. Variables
+  apply to `command` only, not `cwd` or `env`, and trust compares the unexpanded command.
 - **Merge leniency.** A personal override without an action whose team button no longer exists
   is ignored rather than invalidating the toolbar.
 - **Trust.** Commands whose action comes from the team file run only after the user trusts that

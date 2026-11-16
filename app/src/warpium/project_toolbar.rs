@@ -24,11 +24,11 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpium_android::project::{AndroidAppModule, find_app_modules};
 use warpium_project_toolbar::{
-    ButtonIcon, ConfigError, ConfigSource, ProjectContext, RunConfigItem, RunConfigKind,
-    TextPosition, ToolbarButton, ToolbarUserState, TrustChange, TrustListing, TrustReview,
-    android_app_run_config, content_hash, detect_project, merge, needs_trust, parse_config,
-    personal_config_path, run_config_items, selected_run_config, team_config_path, toolbar_buttons,
-    trust_review,
+    ButtonIcon, ConfigError, ConfigSource, EditorModel, Placement, ProjectContext, RunConfigItem,
+    RunConfigKind, SavePlan, TextPosition, ToolbarButton, ToolbarUserState, TrustChange,
+    TrustListing, TrustReview, android_app_run_config, content_hash, detect_project,
+    inline_buttons, merge, needs_trust, overflow_menu_buttons, parse_config, personal_config_path,
+    run_config_items, selected_run_config, team_config_path, trust_review,
 };
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
@@ -60,7 +60,8 @@ use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::settings_view::ToggleSettingActionPair;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::BindingGroup;
-use crate::workspace::WorkspaceAction;
+use crate::view_components::DismissibleToast;
+use crate::workspace::{ToastStack, WorkspaceAction};
 
 /// Private-preferences key holding the serialized [`ToolbarUserState`].
 const STATE_KEY: &str = "WarpiumProjectToolbarState";
@@ -122,6 +123,13 @@ pub(crate) fn init_bindings(app: &mut AppContext) {
 
     app.register_editable_bindings([
         EditableBinding::new(
+            "workspace:customize_project_toolbar",
+            "Customize project toolbar",
+            WorkspaceAction::CustomizeProjectToolbar,
+        )
+        .with_group(BindingGroup::Settings.as_str())
+        .with_context_predicate(id!("Workspace")),
+        EditableBinding::new(
             "workspace:edit_project_toolbar",
             "Edit project toolbar",
             WorkspaceAction::EditProjectToolbar,
@@ -146,6 +154,8 @@ pub(crate) fn init_bindings(app: &mut AppContext) {
         )],
         app,
     );
+    super::project_toolbar_editor::init(app);
+    super::project_toolbar_prompt::init(app);
 }
 
 impl ProjectToolbarStore {
@@ -166,6 +176,23 @@ impl ProjectToolbarStore {
             log::warn!("[Project toolbar] Failed to save the toolbar state: {err:#}");
         }
         ctx.emit(ProjectToolbarStoreEvent::StateChanged);
+    }
+
+    /// Trusts a team config the user wrote from the toolbar editor, when the version it replaced
+    /// was trusted (see [`ToolbarUserState::record_gui_save`]).
+    fn record_gui_save(
+        &mut self,
+        root: &Path,
+        previous_team_text: Option<&str>,
+        new_team_text: &str,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.update_state(
+            |state| {
+                state.record_gui_save(root, previous_team_text, new_team_text);
+            },
+            ctx,
+        );
     }
 
     fn watch(&mut self, dir: &Path, ctx: &mut ModelContext<Self>) {
@@ -258,11 +285,33 @@ pub(crate) enum ProjectToolbarAction {
     OpenInvalidConfig,
     ConfirmTrust,
     CancelTrust,
-    EditConfig { personal: bool },
+    EditConfig {
+        personal: bool,
+    },
     ToggleDeviceMenu,
     SelectAndroidDevice(String),
     LaunchAndroidAvd(String),
     OpenLogcat,
+    /// Open the toolbar editor, with this button selected.
+    Customize(Option<String>),
+    /// Open the toolbar editor with a new button.
+    AddButton,
+    /// Show a toolbar button's context menu.
+    OpenButtonMenu(String),
+    QuickEdit {
+        id: String,
+        edit: QuickEdit,
+    },
+}
+
+/// A change made from a toolbar button's context menu, saved right away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QuickEdit {
+    Duplicate,
+    MoveLeft,
+    MoveRight,
+    Hide,
+    Delete,
 }
 
 pub(crate) enum ProjectToolbarEvent {
@@ -292,6 +341,13 @@ pub(crate) enum ProjectToolbarEvent {
         module: AndroidAppModule,
     },
     OpenLogcat,
+    /// Open the toolbar editor for the project at `root`, with the button `select` selected or,
+    /// with `add`, a new button.
+    Customize {
+        root: PathBuf,
+        select: Option<String>,
+        add: bool,
+    },
 }
 
 enum LoadedConfig {
@@ -313,6 +369,8 @@ enum OpenMenu {
     RunConfigs,
     Overflow,
     Devices,
+    /// The context menu of the button in [`ProjectToolbarView::context_button`].
+    Button,
 }
 
 struct TrustPrompt {
@@ -338,6 +396,7 @@ struct MouseStates {
     device_chip: MouseStateHandle,
     run_button: MouseStateHandle,
     overflow_button: MouseStateHandle,
+    add_button: MouseStateHandle,
     invalid_config_button: MouseStateHandle,
     trust_confirm: MouseStateHandle,
     trust_cancel: MouseStateHandle,
@@ -368,6 +427,8 @@ pub(crate) struct ProjectToolbarView {
     watched_dirs: Vec<PathBuf>,
     menu: ViewHandle<Menu<ProjectToolbarAction>>,
     open_menu: Option<OpenMenu>,
+    /// The button whose context menu is open.
+    context_button: Option<String>,
     trust_prompt: Option<TrustPrompt>,
     /// Per button id, kept across reloads.
     button_mouse_states: HashMap<String, MouseStateHandle>,
@@ -473,6 +534,7 @@ impl ProjectToolbarView {
             watched_dirs: Vec::new(),
             menu,
             open_menu: None,
+            context_button: None,
             trust_prompt: None,
             button_mouse_states: HashMap::new(),
             mouse_states: MouseStates::default(),
@@ -484,16 +546,10 @@ impl ProjectToolbarView {
         }
     }
 
-    /// Whether the toolbar shows anything: buttons, the run-configurations widget or an invalid
-    /// config warning.
+    /// Whether the toolbar shows anything: buttons, the run-configurations widget, an invalid
+    /// config warning, or for a project without buttons the "Add button" affordance.
     pub(crate) fn has_content(&self) -> bool {
-        match &self.loaded {
-            Some(LoadedConfig::Invalid { .. }) => true,
-            Some(LoadedConfig::Buttons { buttons, .. }) => {
-                !toolbar_buttons(buttons).is_empty() || !self.run_configs.is_empty()
-            }
-            None => false,
-        }
+        self.project.is_some() && self.loaded.is_some()
     }
 
     /// The detected project, if the toolbar is on.
@@ -885,7 +941,7 @@ impl ProjectToolbarView {
                     android.refresh_avds(ctx);
                 });
             }
-            OpenMenu::Overflow => {}
+            OpenMenu::Overflow | OpenMenu::Button => {}
         }
         self.set_menu_items(menu, ctx);
         self.open_menu = Some(menu);
@@ -897,6 +953,7 @@ impl ProjectToolbarView {
         let items = match menu {
             OpenMenu::RunConfigs => self.run_config_menu_items(),
             OpenMenu::Overflow => self.overflow_menu_items(),
+            OpenMenu::Button => self.button_menu_items(),
             OpenMenu::Devices => {
                 let mut items = device_menu_items(
                     AndroidModel::as_ref(ctx),
@@ -918,7 +975,7 @@ impl ProjectToolbarView {
             OpenMenu::Devices => AndroidModel::as_ref(ctx)
                 .selected_serial()
                 .map(|serial| ProjectToolbarAction::SelectAndroidDevice(serial.to_owned())),
-            OpenMenu::Overflow => None,
+            OpenMenu::Overflow | OpenMenu::Button => None,
         };
         self.menu.update(ctx, |menu_view, ctx| {
             menu_view.set_items(items, ctx);
@@ -950,21 +1007,118 @@ impl ProjectToolbarView {
     }
 
     fn overflow_menu_items(&self) -> Vec<MenuItem<ProjectToolbarAction>> {
-        let mut items = toolbar_buttons(self.buttons())
-            .into_iter()
-            .skip(self.visible_buttons.load(Ordering::Relaxed))
-            .map(|button| {
-                MenuItem::Item(
-                    MenuItemFields::new(button.display_label())
-                        .with_tooltip(button.tooltip_text())
-                        .with_on_select_action(ProjectToolbarAction::ClickButton(
-                            button.id.clone(),
-                        )),
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut items =
+            overflow_menu_buttons(self.buttons(), self.visible_buttons.load(Ordering::Relaxed))
+                .into_iter()
+                .map(|button| {
+                    MenuItem::Item(
+                        MenuItemFields::new(button.display_label())
+                            .with_tooltip(button.tooltip_text())
+                            .with_on_select_action(ProjectToolbarAction::ClickButton(
+                                button.id.clone(),
+                            )),
+                    )
+                })
+                .collect::<Vec<_>>();
         items.extend(edit_menu_items());
         items
+    }
+
+    fn button_menu_items(&self) -> Vec<MenuItem<ProjectToolbarAction>> {
+        let Some(id) = self.context_button.clone() else {
+            return Vec::new();
+        };
+        let quick = |label: &str, edit| {
+            MenuItem::Item(MenuItemFields::new(label).with_on_select_action(
+                ProjectToolbarAction::QuickEdit {
+                    id: id.clone(),
+                    edit,
+                },
+            ))
+        };
+        vec![
+            MenuItem::Item(
+                MenuItemFields::new("Edit…")
+                    .with_on_select_action(ProjectToolbarAction::Customize(Some(id.clone()))),
+            ),
+            quick("Duplicate", QuickEdit::Duplicate),
+            quick("Move left", QuickEdit::MoveLeft),
+            quick("Move right", QuickEdit::MoveRight),
+            MenuItem::Separator,
+            quick("Hide", QuickEdit::Hide),
+            quick("Delete", QuickEdit::Delete),
+        ]
+    }
+
+    /// Applies a context-menu change to the config files and reloads.
+    fn quick_edit(&mut self, id: &str, edit: QuickEdit, ctx: &mut ViewContext<Self>) {
+        self.open_menu = None;
+        let Some(root) = self.project_root().map(Path::to_path_buf) else {
+            return;
+        };
+        match apply_quick_edit(&root, id, edit, ctx) {
+            Ok(()) => self.reload(ctx),
+            Err(message) => {
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |stack, ctx| {
+                    stack.add_ephemeral_toast(
+                        DismissibleToast::error(format!("Project toolbar: {message}")),
+                        window_id,
+                        ctx,
+                    );
+                });
+            }
+        }
+        ctx.emit(ProjectToolbarEvent::MenuClosed);
+        ctx.notify();
+    }
+
+    fn customize(&mut self, select: Option<String>, add: bool, ctx: &mut ViewContext<Self>) {
+        self.open_menu = None;
+        if let Some(root) = self.project_root().map(Path::to_path_buf) {
+            ctx.emit(ProjectToolbarEvent::Customize { root, select, add });
+        }
+        ctx.notify();
+    }
+
+    /// The "+" at the end of the toolbar, or "+ Add button" when it has no buttons yet.
+    fn render_add_button(&self, with_label: bool, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let color = theme.sub_text_color(theme.background());
+        let plus = sized_icon(Icon::Plus.to_warpui_icon(color).finish());
+        let label = if with_label {
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(plus)
+                .with_child(
+                    Container::new(
+                        Text::new_inline("Add button", appearance.ui_font_family(), FONT_SIZE)
+                            .with_color(color.into_solid())
+                            .finish(),
+                    )
+                    .with_margin_left(2.)
+                    .finish(),
+                )
+                .finish()
+        } else {
+            plus
+        };
+        let ui_builder = appearance.ui_builder().clone();
+        toolbar_button(
+            self.mouse_states.add_button.clone(),
+            label,
+            if with_label { (4., 6.) } else { (4., 4.) },
+            appearance,
+        )
+        .with_tooltip(move || {
+            ui_builder
+                .tool_tip("Add a button to this project's toolbar".to_owned())
+                .build()
+                .finish()
+        })
+        .build()
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(ProjectToolbarAction::AddButton))
+        .finish()
     }
 
     fn render_invalid_config(
@@ -1086,8 +1240,14 @@ impl ProjectToolbarView {
             None => ui_builder.tool_tip(tooltip).build().finish(),
         })
         .build()
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(ProjectToolbarAction::ClickButton(id.clone()))
+        .on_click({
+            let id = id.clone();
+            move |ctx, _, _| {
+                ctx.dispatch_typed_action(ProjectToolbarAction::ClickButton(id.clone()))
+            }
+        })
+        .on_right_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(ProjectToolbarAction::OpenButtonMenu(id.clone()))
         })
         .finish()
     }
@@ -1518,6 +1678,129 @@ fn trust_change_summary(review: &TrustReview) -> String {
     .join(", ")
 }
 
+/// The text of a project's two toolbar config files; `None` for a file that doesn't exist.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ToolbarTexts {
+    pub(crate) team: Option<String>,
+    pub(crate) personal: Option<String>,
+}
+
+/// Reads both toolbar config files of the project at `root`.
+pub(crate) fn read_toolbar_texts(root: &Path) -> Result<ToolbarTexts, String> {
+    let read = |path: &Path| match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("couldn't read {}: {err}", path.display())),
+    };
+    Ok(ToolbarTexts {
+        team: read(&team_config_path(root))?,
+        personal: personal_path(root)
+            .map(|path| read(&path))
+            .transpose()?
+            .flatten(),
+    })
+}
+
+/// Writes the files a [`SavePlan`] changes, after checking that neither file changed since
+/// `opened` was read. Writing the team file from the GUI counts as the user's own edit, so its
+/// trust is carried over to the new version first (see [`ToolbarUserState::record_gui_save`]).
+pub(crate) fn save_toolbar_plan<V: View>(
+    root: &Path,
+    opened: &ToolbarTexts,
+    plan: &SavePlan,
+    ctx: &mut ViewContext<V>,
+) -> Result<(), String> {
+    if read_toolbar_texts(root)? != *opened {
+        return Err(
+            "the toolbar config changed on disk while you were editing it; close the editor and \
+             open it again"
+                .to_owned(),
+        );
+    }
+    if let Some(team) = &plan.team {
+        ensure_store(ctx);
+        let previous = opened.team.clone();
+        ProjectToolbarStore::handle(ctx).update(ctx, |store, ctx| {
+            store.record_gui_save(root, previous.as_deref(), team, ctx)
+        });
+        write_config_file(&team_config_path(root), team)?;
+    }
+    if let Some(personal) = &plan.personal {
+        let path = personal_path(root)
+            .ok_or_else(|| "couldn't find the home directory for personal buttons".to_owned())?;
+        write_config_file(&path, personal)?;
+    }
+    Ok(())
+}
+
+fn write_config_file(path: &Path, text: &str) -> Result<(), String> {
+    path.parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(path, text))
+        .map_err(|err| {
+            log::warn!("[Project toolbar] Failed to write a toolbar config: {err:#}");
+            format!("couldn't write {}: {err}", path.display())
+        })
+}
+
+/// Applies a context-menu change to a button of the project at `root` and saves it.
+fn apply_quick_edit<V: View>(
+    root: &Path,
+    id: &str,
+    edit: QuickEdit,
+    ctx: &mut ViewContext<V>,
+) -> Result<(), String> {
+    let texts = read_toolbar_texts(root)?;
+    let mut model = EditorModel::load(texts.team.as_deref(), texts.personal.as_deref())
+        .map_err(|err| err.to_string())?;
+    let index = model
+        .index_of(id)
+        .ok_or_else(|| "the button is no longer in the toolbar config".to_owned())?;
+    match edit {
+        QuickEdit::Duplicate => {
+            model.duplicate(index);
+        }
+        QuickEdit::MoveLeft | QuickEdit::MoveRight => {
+            let delta = if edit == QuickEdit::MoveLeft { -1 } else { 1 };
+            if !move_past_visible_neighbor(&mut model, index, delta) {
+                return Ok(());
+            }
+        }
+        QuickEdit::Hide => model.buttons[index].hidden = true,
+        QuickEdit::Delete => model.remove(index),
+    }
+    let plan = model
+        .plan_save(texts.team.as_deref(), texts.personal.as_deref())
+        .map_err(|err| err.message)?;
+    save_toolbar_plan(root, &texts, &plan, ctx)
+}
+
+/// Moves a button past its nearest neighbor shown inline on the toolbar in direction `delta`
+/// (skipping hidden, overflow-only and run-configuration buttons); returns whether it moved.
+fn move_past_visible_neighbor(model: &mut EditorModel, index: usize, delta: isize) -> bool {
+    let mut probe = index;
+    let target = loop {
+        match model.move_target(probe, delta) {
+            Some(next) => {
+                probe = next;
+                let button = &model.buttons[next];
+                if !button.hidden && button.spec.placement == Placement::Toolbar {
+                    break next;
+                }
+            }
+            None => return false,
+        }
+    };
+    let mut position = index;
+    while position != target {
+        match model.move_button(position, delta) {
+            Some(next) => position = next,
+            None => return false,
+        }
+    }
+    true
+}
+
 /// Reads and merges the team and personal configs of the project at `root`.
 fn load(root: &Path) -> LoadedConfig {
     let team_path = team_config_path(root);
@@ -1624,6 +1907,10 @@ fn collect_pane_cwds(layout: &PaneTemplateType, cwds: &mut Vec<PathBuf>) {
 fn edit_menu_items() -> Vec<MenuItem<ProjectToolbarAction>> {
     vec![
         MenuItem::Separator,
+        MenuItem::Item(
+            MenuItemFields::new("Customize toolbar…")
+                .with_on_select_action(ProjectToolbarAction::Customize(None)),
+        ),
         MenuItem::Item(
             MenuItemFields::new("Edit project toolbar…")
                 .with_on_select_action(ProjectToolbarAction::EditConfig { personal: false }),
@@ -1748,6 +2035,14 @@ impl TypedActionView for ProjectToolbarView {
                 ctx.emit(ProjectToolbarEvent::OpenLogcat);
                 ctx.notify();
             }
+            ProjectToolbarAction::Customize(select) => self.customize(select.clone(), false, ctx),
+            ProjectToolbarAction::AddButton => self.customize(None, true, ctx),
+            ProjectToolbarAction::OpenButtonMenu(id) => {
+                self.context_button = Some(id.clone());
+                self.open_menu = None;
+                self.toggle_menu(OpenMenu::Button, ctx);
+            }
+            ProjectToolbarAction::QuickEdit { id, edit } => self.quick_edit(id, *edit, ctx),
         }
     }
 }
@@ -1765,53 +2060,86 @@ impl View for ProjectToolbarView {
         let row = match loaded {
             LoadedConfig::Invalid { error, .. } => self.render_invalid_config(error, appearance),
             LoadedConfig::Buttons { buttons, .. } => {
-                let toolbar_buttons = toolbar_buttons(buttons);
-                if toolbar_buttons.is_empty() && self.run_configs.is_empty() {
-                    return Empty::new().finish();
-                }
-                let rendered_buttons = toolbar_buttons
+                let toolbar_buttons = inline_buttons(buttons);
+                let has_overflow_only = buttons
                     .iter()
-                    .map(|button| {
-                        Container::new(self.render_button(button, root, appearance, app))
-                            .with_margin_left(2.)
-                            .finish()
-                    })
-                    .collect::<Vec<_>>();
-                let overflow_button = Container::new(self.render_overflow_button(appearance))
-                    .with_margin_left(2.)
-                    .finish();
-                let run_widget = (!self.run_configs.is_empty()).then(|| {
-                    let mut run_widget =
-                        Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-                    if !toolbar_buttons.is_empty() {
-                        let theme = appearance.theme();
-                        run_widget.add_child(
-                            Container::new(
-                                ConstrainedBox::new(
-                                    Rect::new().with_background(theme.outline()).finish(),
-                                )
-                                .with_width(1.)
-                                .with_height(16.)
-                                .finish(),
-                            )
-                            .with_margin_left(6.)
-                            .with_margin_right(4.)
-                            .finish(),
-                        );
-                    }
-                    run_widget.add_child(self.render_run_widget(appearance, app));
-                    run_widget.finish()
-                });
-                ToolbarRow::new(
-                    rendered_buttons,
-                    overflow_button,
-                    run_widget,
-                    self.visible_buttons.clone(),
-                )
-                .finish()
+                    .any(|button| button.overflow_only && !button.run_config);
+                if toolbar_buttons.is_empty() && !has_overflow_only && self.run_configs.is_empty() {
+                    self.render_add_button(true, appearance)
+                } else {
+                    self.render_button_row(
+                        &toolbar_buttons,
+                        has_overflow_only,
+                        root,
+                        appearance,
+                        app,
+                    )
+                }
             }
         };
+        self.render_with_overlays(row, appearance)
+    }
+}
 
+impl ProjectToolbarView {
+    /// The inline buttons (moving into the overflow menu as space runs out), the overflow menu
+    /// button, the "+" button and the run-configurations widget.
+    fn render_button_row(
+        &self,
+        toolbar_buttons: &[&ToolbarButton],
+        has_overflow_only: bool,
+        root: &Path,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let rendered_buttons = toolbar_buttons
+            .iter()
+            .map(|button| {
+                Container::new(self.render_button(button, root, appearance, app))
+                    .with_margin_left(2.)
+                    .finish()
+            })
+            .collect::<Vec<_>>();
+        let overflow_button = Container::new(self.render_overflow_button(appearance))
+            .with_margin_left(2.)
+            .finish();
+        let mut trailing = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Container::new(self.render_add_button(false, appearance))
+                    .with_margin_left(2.)
+                    .finish(),
+            );
+        if !self.run_configs.is_empty() {
+            let theme = appearance.theme();
+            trailing.add_child(
+                Container::new(
+                    ConstrainedBox::new(Rect::new().with_background(theme.outline()).finish())
+                        .with_width(1.)
+                        .with_height(16.)
+                        .finish(),
+                )
+                .with_margin_left(6.)
+                .with_margin_right(4.)
+                .finish(),
+            );
+            trailing.add_child(self.render_run_widget(appearance, app));
+        }
+        ToolbarRow::new(
+            rendered_buttons,
+            overflow_button,
+            Some(trailing.finish()),
+            has_overflow_only,
+            self.visible_buttons.clone(),
+        )
+        .finish()
+    }
+
+    fn render_with_overlays(
+        &self,
+        row: Box<dyn Element>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
         let mut stack = Stack::new();
         stack.add_child(row);
         let positioning = OffsetPositioning::offset_from_parent(
