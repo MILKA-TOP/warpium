@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -98,6 +98,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::model::BlockId;
+use crate::terminal::shell::ShellType;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workspaces::user_workspaces::{HeadlessTeamScope, ResolvedTeamScope, UserWorkspaces};
 use crate::workspaces::workspace::BillingMetadata;
@@ -1038,8 +1039,10 @@ pub(crate) struct StandbyWorkspace {
 pub(crate) enum WorkspaceState {
     /// Set up when the run starts.
     Pending(environment::WorkspaceConfiguration),
+    PendingRunner(environment::WorkspaceConfiguration),
     /// Set up ahead of time by a standby sandbox, so the run skips preparation entirely.
     Prepared(StandbyWorkspace),
+    RunnerPrepared(StandbyWorkspace),
 }
 
 /// Owns a headless terminal for agent runs or standby resource preparation.
@@ -1769,6 +1772,9 @@ impl AgentDriver {
         // after `same_preparation` confirms it matches, so those results stand.
         self.workspace = match self.workspace.take() {
             prepared @ Some(WorkspaceState::Prepared(_)) => prepared,
+            Some(WorkspaceState::RunnerPrepared(_)) => {
+                Some(WorkspaceState::PendingRunner(workspace))
+            }
             _ => Some(WorkspaceState::Pending(workspace)),
         };
         self.skill_dirs = skill_dirs;
@@ -2075,7 +2081,7 @@ impl AgentDriver {
                 {
                     report_error!(e);
                 }
-                let (finished, cause, interrupt_watch) =
+                let (mut finished, cause, interrupt_watch) =
                     match Self::run_until_end(task, &foreground, &background).await {
                         Ok(outcome) => outcome,
                         Err(error) => {
@@ -2103,6 +2109,17 @@ impl AgentDriver {
                             "Sandbox deadline approaching (WARP_SANDBOX_DEADLINE); aborting \
                              run_internal to allow recording finalization"
                         );
+                        if let Some(task_id) = task_id {
+                            finished = Some(
+                                Self::resolve_sandbox_deadline(
+                                    task_id,
+                                    finished.unwrap_or(Err(AgentDriverError::InvalidRuntimeState)),
+                                    &server_api,
+                                    &foreground,
+                                )
+                                .await,
+                            );
+                        }
                     }
                     RunEndCause::Signal(Interrupt::Terminate) => {
                         log::warn!(
@@ -2218,6 +2235,40 @@ impl AgentDriver {
         }
     }
 
+    async fn resolve_sandbox_deadline(
+        task_id: AmbientAgentTaskId,
+        result: Result<(), AgentDriverError>,
+        server_api: &Arc<dyn AIClient>,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<(), AgentDriverError> {
+        if !Self::flush_task_status_before_exit(task_id, false, server_api, foreground).await {
+            return result;
+        }
+        let latest_state = foreground
+            .spawn(move |_, ctx| {
+                LocalAgentTaskSyncModel::as_ref(ctx).latest_delivered_task_state(&task_id)
+            })
+            .await?;
+        match latest_state {
+            Some(
+                state @ (AgentTaskState::Succeeded
+                | AgentTaskState::Failed
+                | AgentTaskState::Error
+                | AgentTaskState::Cancelled
+                | AgentTaskState::Blocked),
+            ) => {
+                tracing::info!(
+                    tags.cloud_agent = true,
+                    %task_id,
+                    task_state = ?state,
+                    "sandbox deadline fired while idle; skipping task state report"
+                );
+                Ok(())
+            }
+            Some(AgentTaskState::InProgress | AgentTaskState::Claimed) | None => result,
+        }
+    }
+
     /// Flushes task-status reporting before the process may exit: waits
     /// (bounded by [`TASK_STATUS_FLUSH_TIMEOUT`]) for `LocalAgentTaskSyncModel`
     /// to finish delivering queued `update_agent_task` calls, then — for
@@ -2235,13 +2286,15 @@ impl AgentDriver {
     ///
     /// Failed runs only get the drain: the caller reports the error itself via
     /// `report_driver_error` after receiving the result.
+    ///
+    /// Returns whether queued status updates finished draining before the timeout.
     async fn flush_task_status_before_exit(
         task_id: AmbientAgentTaskId,
         run_succeeded: bool,
         server_api: &Arc<dyn AIClient>,
         foreground: &ModelSpawner<Self>,
-    ) {
-        match foreground
+    ) -> bool {
+        let drained = match foreground
             .spawn(move |_, ctx| {
                 LocalAgentTaskSyncModel::handle(ctx)
                     .update(ctx, |model, _| model.wait_for_idle(task_id))
@@ -2253,13 +2306,19 @@ impl AgentDriver {
                     log::warn!(
                         "Timed out waiting for queued task status updates to flush for task {task_id}"
                     );
+                    false
+                } else {
+                    true
                 }
             }
-            Err(err) => log::warn!("Could not wait for the task status flush: {err}"),
-        }
+            Err(err) => {
+                log::warn!("Could not wait for the task status flush: {err}");
+                false
+            }
+        };
 
         if !run_succeeded {
-            return;
+            return drained;
         }
 
         let confirmed_terminal_state = foreground
@@ -2271,7 +2330,7 @@ impl AgentDriver {
             .flatten();
         if let Some(state) = confirmed_terminal_state {
             log::debug!("Task {task_id} already reported terminal state {state:?} before exit");
-            return;
+            return drained;
         }
 
         log::warn!(
@@ -2294,6 +2353,7 @@ impl AgentDriver {
                 "Failed to report the fallback SUCCEEDED state for task {task_id}"
             )));
         }
+        drained
     }
 
     /// Log all valid environment IDs for the user.
@@ -2463,9 +2523,9 @@ impl AgentDriver {
                     )
                 })
                 .await?;
-            let (global_skill_resolution, prepared_workspace) = match workspace
-                .ok_or(AgentDriverError::InvalidRuntimeState)?
-            {
+            let workspace = workspace.ok_or(AgentDriverError::InvalidRuntimeState)?;
+            let runner_preparation = matches!(&workspace, WorkspaceState::PendingRunner(_));
+            let (global_skill_resolution, prepared_workspace) = match workspace {
                 // A standby sandbox already cloned the repositories and ran the setup
                 // commands, so the run resumes from those results.
                 WorkspaceState::Prepared(prepared) => {
@@ -2482,23 +2542,48 @@ impl AgentDriver {
                         },
                     )
                 }
-                WorkspaceState::Pending(mut workspace) => {
+                WorkspaceState::Pending(mut workspace)
+                | WorkspaceState::PendingRunner(mut workspace) => {
                     let launch_file_warmup = match &task.harness {
                         HarnessKind::ThirdParty(harness) => {
                             LaunchFileWarmup::start(harness.launch_file_roots(), &setup_events)
                         }
                         HarnessKind::Oz | HarnessKind::Unsupported(_) => None,
                     };
-                    Self::initialize_setup_vars(&foreground, true).await?;
+                    if !runner_preparation {
+                        Self::initialize_setup_vars(&foreground, true).await?;
+                    }
                     let global_skill_resolution =
                         agent_setup::prepare_global_skills(&foreground, &setup_events).await?;
                     // The Factory definition checkout is run-scoped: the dispatch decides
                     // whether this run gets one by attaching the clone variables,
                     // independent of which environment the run executes in.
-                    environment::prepend_factory_definition_clone(
-                        &mut workspace.setup_commands,
-                        session_shell_type,
-                    );
+                    if runner_preparation {
+                        workspace = foreground
+                            .spawn(move |me, _| {
+                                let value = |name| {
+                                    me.resolved_env_vars
+                                        .get(OsStr::new(name))
+                                        .and_then(|value| value.to_str())
+                                        .unwrap_or_default()
+                                };
+                                environment::prepend_factory_definition_clone_for_values(
+                                    value(environment::FACTORY_REPO_CLONE_URL_ENV_VAR),
+                                    value(environment::FACTORY_REPO_DIR_ENV_VAR),
+                                    workspace.factory_definition_sha.as_deref(),
+                                    session_shell_type.unwrap_or(ShellType::Bash),
+                                    &mut workspace.setup_commands,
+                                );
+                                workspace
+                            })
+                            .await?;
+                    } else {
+                        environment::prepend_factory_definition_clone(
+                            &mut workspace.setup_commands,
+                            workspace.factory_definition_sha.as_deref(),
+                            session_shell_type,
+                        );
+                    }
                     let cloud_env_mcp_scan = if workspace.needs_preparation() {
                         // Subscribe to file-based MCP discovery BEFORE prepare_environment
                         // triggers the pipeline so no CloudEnvMcpScanComplete events are
@@ -2574,6 +2659,9 @@ impl AgentDriver {
                         .await?;
                     }
                     (global_skill_resolution, prepared)
+                }
+                WorkspaceState::RunnerPrepared(_) => {
+                    return Err(AgentDriverError::InvalidRuntimeState);
                 }
             };
             if matches!(&task.harness, HarnessKind::Oz) {
@@ -3518,6 +3606,13 @@ impl AgentDriver {
         let resolved_mcp_servers =
             Self::resolve_mcp_specs_to_json(&mcp_specs, secrets, managed_mcp_client, foreground)
                 .await?;
+        let harness_kind = harness.harness();
+        let resolved_mcp_servers = foreground
+            .spawn(move |me, ctx| {
+                me.with_builtin_computer_use_mcp(harness_kind, resolved_mcp_servers, ctx)
+            })
+            .await
+            .map_err(|_| AgentDriverError::InvalidRuntimeState)?;
         if !resolved_mcp_servers.configs.is_empty() {
             log::info!(
                 "Resolved {} MCP server(s) for third-party harness",
