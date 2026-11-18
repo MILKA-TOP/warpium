@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pathfinder_geometry::vector::{Vector2F, vec2f};
-use warpium_project_toolbar::fit_inline_buttons;
+use warpium_project_toolbar::fit_inline_buttons_with_overflow;
 use warpui::elements::Point;
 use warpui::event::DispatchedEvent;
 use warpui::{
@@ -20,6 +20,8 @@ pub(super) struct ToolbarRow {
     buttons: Vec<Box<dyn Element>>,
     overflow_button: Box<dyn Element>,
     trailing: Option<Box<dyn Element>>,
+    /// Show the overflow menu button even when every button fits (some are overflow-only).
+    always_overflow: bool,
     /// How many leading buttons the last layout showed, shared with the view so the overflow
     /// menu lists the others.
     visible_buttons: Arc<AtomicUsize>,
@@ -34,6 +36,7 @@ impl ToolbarRow {
         buttons: Vec<Box<dyn Element>>,
         overflow_button: Box<dyn Element>,
         trailing: Option<Box<dyn Element>>,
+        always_overflow: bool,
         visible_buttons: Arc<AtomicUsize>,
     ) -> Self {
         let visible = buttons.len();
@@ -41,6 +44,7 @@ impl ToolbarRow {
             buttons,
             overflow_button,
             trailing,
+            always_overflow,
             visible_buttons,
             visible,
             show_overflow: false,
@@ -80,11 +84,12 @@ impl Element for ToolbarRow {
             trailing.layout(child_constraint, ctx, app).x()
         });
 
-        let fit = fit_inline_buttons(
+        let fit = fit_inline_buttons_with_overflow(
             &button_widths,
             overflow_width,
             trailing_width,
             constraint.max.x(),
+            self.always_overflow,
         );
         self.visible = fit.visible;
         self.show_overflow = fit.overflow;

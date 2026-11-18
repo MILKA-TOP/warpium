@@ -65,6 +65,8 @@ To build a release `.dmg` like the published ones, see the [developer guide](WAR
 
 Buttons for your project's everyday commands sit in the top-right corner of the window, like the toolbar in JetBrains IDEs, next to a run-configurations dropdown and a **Run** button. When the window gets narrow, the buttons that don't fit move into a **…** menu.
 
+- Click **+** at the end of the toolbar (or **+ Add button** in a project that has none), choose **Customize toolbar…** in the **…** menu, run **Customize project toolbar** from the command palette, or right-click a button to edit it. The editor adds, reorders, hides and deletes buttons, runs any shell command (in the current session, a new tab or a split, with a working directory and environment variables), a workflow, a launch configuration, a tab config, a URL or a built-in action, and saves each button either for the whole project or just for you. **Test run** tries a command before you save.
+- Commands can use `${projectRoot}`, `${file}`, `${fileDir}`, `${selection}`, `${cwd}` and `${prompt:Label}` (asks you for a value when the button runs). Warpium quotes each value for your shell, so write them without quotes.
 - Run **Edit project toolbar** from the command palette to create `.warpium/toolbar.toml` in the project; commit it to share the buttons with your team. The file starts with commented examples.
 - Run **Edit personal toolbar overrides** to add, change or hide buttons just for yourself. These are kept in `~/.warp-oss/projects/`, never in the project.
 - A button can run a command in the current tab, a new tab or a split, run a saved workflow, open a launch configuration or tab config, open a link, or trigger a Warpium action such as opening the Project Explorer.

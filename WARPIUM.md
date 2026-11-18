@@ -199,15 +199,20 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
 `app/src/pane_group/warpium_project_toolbar.rs` (splits).
 
 - **Project.** First match wins: the tab's locked [project root](#tab-project-root) (a locked
-  tab never falls back to its terminal), the nearest ancestor of
-  the local session's working directory with a `.warpium/` directory, then its git repository
-  (a `.git` file counts, for worktrees). Remote sessions have no project.
+  tab never falls back to its location), the nearest ancestor of the tab's location with a
+  `.warpium/` directory, then its git repository (a `.git` file counts, for worktrees). The
+  location is the folder of the focused editor's file (code or notebook pane), else the working
+  directory of the tab's active session. Remote sessions have no project; a tab with neither a
+  session nor a file (only settings, say) keeps the previous project. The toolbar follows tab
+  switches, pane focus, editor file switches (through the pane title) and finished commands.
 - **Config.** The team config is `<root>/.warpium/toolbar.toml` (`[[button]]` entries with an
   `id` and one of `command`, `workflow`, `launch_config`, `tab_config`, `url` or `action`; see
   `TEAM_TEMPLATE` in `crates/warpium_project_toolbar/src/template.rs`). Personal overrides are
   `~/.warp-oss/projects/<folder-name>-<hash of the root path>/toolbar.toml`, merged by `id`: same
   id overrides the fields it sets, `hidden = true` removes the button, a new id adds one. Both are
-  watched and reloaded on change; an invalid file shows a warning button that opens it.
+  watched and reloaded on change; an invalid file shows a warning button whose tooltip has the
+  error and which opens the file at the error's line (the TOML span, or the offending
+  `[[button]]` header for validation errors).
   `action` ids are the parameterless UI actions of the `warpctrl` catalog.
 - **Layout.** Buttons with `run_config = true` and the launch configurations with a pane inside
   the project go in the run-configurations dropdown, with a run button; the selection is
@@ -215,16 +220,57 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
   the toolbar has something to show: it gets a share of the width like one more tab (with
   vertical tabs, half of the space the title-bar search bar would otherwise take). The buttons
   that don't fit move, in order, into the overflow menu.
+- **Placement.** `overflow = true` keeps a button in the overflow menu (after the buttons that
+  don't fit); the overflow button then always shows.
+- **Editor.** `app/src/warpium/project_toolbar_editor.rs`, a modal owned by the workspace
+  (`ProjectToolbarOverlays` in `app/src/workspace/view/warpium_project_toolbar.rs`). Opened from
+  the "+" at the end of the toolbar, "+ Add button" (what a project without buttons shows, so any
+  project can get some), "Customize toolbar…" in the overflow and run-configurations menus, a
+  button's right-click menu (Edit…, Duplicate, Move left/right, Hide, Delete; all but Edit save
+  right away, and Delete on a personal override only drops the override) and the palette's "Customize project toolbar". Its model is
+  `warpium_project_toolbar::EditorModel`: both files' buttons in toolbar order (team-file buttons,
+  then personal-only ones; moves stay within a group), each with a scope. Project scope writes the
+  team file; Personal scope writes a personal entry: for a project button, an override with only
+  the fields that differ (so the team's command stays the team's and keeps needing trust unless
+  the user changed it; the team entry is left alone), otherwise a full button. Hiding writes
+  `hidden = true` in the personal file; entries the team file hides itself are kept but not
+  shown. A copy of a project button goes in the team file. Test run of a button that runs the
+  team's own command needs the team file to be trusted.
+  Writes go through `toml_edit`: each button's table is updated in place, only changed keys are
+  rewritten (keeping trailing comments), tables move with their comments when reordered, the
+  file's header comment stays on top, the first button of a commented template goes below the
+  comments, and a missing file is created only when it gets a button. Every button is validated
+  first (errors show inline and select the button), and the result is parsed and merged before
+  anything is written. Saving refuses if either file changed on disk since the editor opened.
+- **Trust after a GUI save.** Writing the team file from the editor is the user's own edit: when
+  the version it replaces was trusted (or had no commands, or there was no file), the new version
+  is trusted at once (`ToolbarUserState::record_gui_save`), so there is no prompt. An untrusted
+  version stays untrusted (saving one button must not vouch for a teammate's commands), and any
+  later external change asks again as before.
+- **Variables.** Commands can use `${projectRoot}`, `${file}` and `${fileDir}` (the focused code
+  or notebook editor's file), `${selection}` (its selection, else the focused terminal's),
+  `${cwd}` (the active session's directory, else the root) and `${prompt:Label}` (asked in a
+  dialog, `project_toolbar_prompt.rs`, before running; Test run too). Each value is quoted as one
+  word for the shell that runs it (the session's, or `$SHELL`'s family for a new tab or split);
+  any other `${...}` (such as `${HOME}`) is left for the shell, and `$${` is a literal `${`. A missing file or selection shows a toast and runs nothing. Variables
+  apply to `command` only, not `cwd` or `env`, and trust compares the unexpanded command.
 - **Merge leniency.** A personal override without an action whose team button no longer exists
   is ignored rather than invalidating the toolbar.
 - **Trust.** Commands whose action comes from the team file run only after the user trusts that
   exact file version (its SHA-256). The prompt lists every team command with its target, `cwd` and
-  `env`, and comes back whenever the file changes. Personal commands and non-command actions
-  never ask. Trust and run-configuration selections are kept in private preferences under
-  `WarpiumProjectToolbarState`, never in the project.
+  `env` in a scrollable list (its buttons stay in view), and comes back whenever the file changes.
+  It lists the team file's own commands, without personal overrides. When an earlier version was
+  trusted, new and changed commands (by button id; a change in label, command, target, `cwd` or
+  any `env` value counts) come first, marked "New" or "Changed", then the
+  unchanged ones under their own heading, and the intro counts new, changed, unchanged and removed
+  commands. Personal commands and non-command actions never ask. Trust, a fingerprint of each
+  trusted command (to diff against) and run-configuration selections are kept in private
+  preferences under `WarpiumProjectToolbarState`, never in the project.
 - **Running a command.** `current` types it into the active session wrapped so that `cwd` and
   `env` don't leak into that session (a subshell in POSIX shells, `pushd`/`begin` in fish, a
-  script block in PowerShell); a busy or remote session falls back to a new tab. `new_tab`,
+  script block in PowerShell). When another kind of pane, such as an editor, is focused, the
+  tab's most recently focused session takes it if its working directory is inside the project. A
+  busy or remote session, or no such session, falls back to a new tab. `new_tab`,
   `split_right` and `split_down` start a new session in `cwd` with `env` set.
 - **Setting:** `warpium.project_toolbar` (default on), in Settings → Features → Warpium and as
   "Enable/Disable project toolbar" in the command palette, next to "Edit project toolbar" and
@@ -461,6 +507,18 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
 - **Rendering.** A `UniformList` lays out only the visible rows; the list follows new rows until
   the user scrolls up or presses the mouse in it (a click or a scrollbar drag), and keeps its place when old rows are evicted. Pause collects new entries
   aside and applies them on resume.
+- **Long lines.** Rows scroll horizontally (trackpad swipe, shift-scroll, or the horizontal
+  scrollbar), whole rows including the time/pid/level/tag columns. The list is the child of a
+  dual-axis `NewScrollable` (vertical: the list's own scroll state through
+  `logcat_list::VerticalListAdapter`; horizontal: clipped, like the terminal's wide alt-screen),
+  laid out as wide as the widest row. `LogBuffer::max_row_columns` keeps that width up to date as
+  rows arrive (evictions don't lower it until the next filter rebuild), so no frame measures the
+  buffer. Widths are in monospace columns (tabs 4, CJK and emoji 2). The **Soft wrap** toggle in
+  the pane's toolbar (off by default) instead splits message lines wider than the pane into
+  several rows (`LogBuffer::set_wrap_columns`, at least 20 columns; a narrower pane still scrolls
+  horizontally), keeping rows uniform for the list. Re-wrapping re-splits only the shown entries,
+  when the pane's width or the font changes by a column, and keeps the top visible entry in
+  view. A stack frame split by soft wrap stays a link on each of its rows.
 - **Stack frames.** `at [module/]com.foo.Bar$Inner$1.baz(Bar.kt:42)` lines get a link. Clicking it
   looks up `com.foo.Bar.Inner`, then `com.foo.Bar`, in the code index (Kotlin file facades such as
   `BarKt` are skipped), prefers a matching file with the frame's file name or that name next to it,
