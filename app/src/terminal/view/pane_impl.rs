@@ -720,6 +720,7 @@ impl BackingView for TerminalView {
                     .into_item(),
             );
         }
+        items.extend(self.warpium_bottom_panel_menu_items(ctx));
 
         items
     }

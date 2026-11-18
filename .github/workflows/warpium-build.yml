@@ -205,6 +205,9 @@ jobs:
           # The Intel host can't run the arm64 binary to dump the settings
           # schema, so the bundle ships without settings_schema.json.
           SKIP_SETTINGS_SCHEMA: '1'
+          # Features still in development (dogfood) are built into branch and PR artifacts so
+          # they can be tested, never into releases.
+          DOGFOOD_FEATURES: ${{ needs.preflight.outputs.release_tag == '' && ',warpium_bottom_panel' || '' }}
         # warp_control_cli enables Warp's local-control API and bundles the
         # `warpctrl-oss` wrapper, so test harnesses can drive the app without focus
         # or synthetic input. The control server binds no port or socket and
@@ -215,7 +218,7 @@ jobs:
         run: |
           df -h "$GITHUB_WORKSPACE"
           ./script/bundle --channel oss --arch aarch64 --selfsign \
-            --features warp_control_cli \
+            --features "warp_control_cli$DOGFOOD_FEATURES" \
             --dmg-name-suffix "$WARPIUM_VERSION_TAG-arm64"
 
       - name: Verify bundle version, icon and warpctrl

@@ -1021,6 +1021,10 @@ pub enum FeatureFlag {
     /// Refreshes the short-lived proxy credentials of managed MCP servers during an agent run,
     /// before they expire and on first use after they have expired.
     ManagedMcpCredentialRefresh,
+
+    /// Warpium: the per-tab bottom panel that keeps panes (and their running processes) out of
+    /// the split layout.
+    WarpiumBottomPanel,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1101,6 +1105,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PreviewUrlsMcp,
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
+    FeatureFlag::WarpiumBottomPanel,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

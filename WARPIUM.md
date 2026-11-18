@@ -280,6 +280,47 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
   "Enable/Disable project toolbar" in the command palette, next to "Edit project toolbar" and
   "Edit personal toolbar overrides". OSS channel only.
 
+## Bottom panel
+
+A per-tab dock below the split layout for panes whose processes should keep running out of the
+way (JetBrains-style tool window, roadmap item 14; design in
+[docs/warpium/research/bottom-panel.md](docs/warpium/research/bottom-panel.md)). Gated by
+`FeatureFlag::WarpiumBottomPanel` (cargo feature `warpium_bottom_panel`, also in `DOGFOOD_FLAGS`),
+which CI builds into branch and PR artifacts only (see [CI](#ci)). Fork-only code lives in
+`crates/warpium_bottom_panel` (protoc-free, `cargo test -p warpium_bottom_panel`: sub-tab order and
+selection, restore position, layout anchor), `app/src/pane_group/warpium_bottom_dock.rs` (the
+dock in `PaneGroup`: move/restore/close, hooks, rendering, bindings) and
+`app/src/terminal/view/warpium_bottom_panel.rs` (the terminal menu items).
+
+- **Lifecycle.** A docked pane leaves the layout tree but stays in `PaneGroup::pane_contents`
+  without being detached, like an off-tree child agent pane, so its terminal manager and PTY keep
+  running and its subscriptions (shell exit, titles) keep working. Quit and close-tab warnings
+  count its running commands because they walk `pane_contents`. Closing the tab closes the dock.
+- **Commands.** `cmd-j` (Mac) toggles the panel and opens a terminal in it when it is empty;
+  palette "Move pane to bottom panel", "Restore pane to layout", "Toggle bottom panel"; terminal
+  context and pane header menus offer "Move to bottom panel" (or "Restore pane to layout" for a
+  docked pane). The panel's strip has a sub-tab per pane (click to show and focus, `x` to close),
+  "Restore pane to layout" and "Hide bottom panel" buttons, and the panel is resizable from its
+  top edge.
+- **Rules.** Restoring puts the pane back next to its previous neighbor when that pane is still
+  visible, else right of the layout pane focused last. `exit` in a docked terminal closes only its
+  sub-tab. Closing or moving away the layout's last visible pane while the dock has panes opens a
+  fresh terminal in the layout instead of closing the tab, and so does docking the last one.
+  Splits from a docked pane split the layout pane focused last; layout navigation from a docked
+  pane returns focus to the layout; docked panes can't be dragged or dropped onto. Focusing a
+  docked pane (from the panel, session navigation or a closed neighbor) shows the panel on it.
+- **Not yet.** Docked panes aren't persisted, so they aren't restored on relaunch (needs the
+  project-root `TabSnapshot` changes first). Only terminal panes can be docked; Logcat, the
+  collapsed chip strip and unread badges come later.
+- **Upstream touch points** (one-line hooks into `warpium_bottom_dock.rs`, check after upstream
+  merges): `pane_group/mod.rs` (`PaneGroupAction::WarpiumBottomPanel`, the `warpium_bottom_dock`
+  field, `close_pane`, `remove_pane_for_move`, `focus_pane`, `update_pane_history`,
+  `handle_focus_change`, `add_pane_with_options`, `handle_pane_view_event`, `handle_pane_event`,
+  `handle_action`, `keymap_context`, `render`, `reveal_and_focus_pane`), `pane_group/focus_state.rs`
+  (docked set), `pane_group/pane/mod.rs` (`PaneEvent::WarpiumBottomPanel`),
+  `terminal/view/action.rs` and `terminal/view.rs` (`TerminalAction::WarpiumBottomPanel`, menu
+  items) and `terminal/view/pane_impl.rs` (header menu).
+
 ## Kotlin/Java code index (Go to Class / Symbol / Definition, Find Usages)
 
 An in-process declaration index for Kotlin and Java projects, KMP and plain JVM alike: phases 0
@@ -605,6 +646,9 @@ gated to `warpdotdev` and don't run here. Don't change whether workflows are ena
   [Upstream Warp update notification](#upstream-warp-update-notification)), then
   the macOS job builds on `macos-15-intel` and cross-compiles arm64 with `--selfsign`
   (about 1.5 h). It checks the plist version and the app icon in the built bundle.
+- **Dogfood features:** branch and PR builds add the cargo features in the bundle step's
+  `DOGFOOD_FEATURES` (currently `warpium_bottom_panel`) so features in development can be tested
+  from the artifact; release builds leave them out.
 - **Cross-compile caveat:** the Intel runner can't run the arm64 binary that generates
   `settings_schema.json`, so CI builds lack the bundled `modify-settings` agent skill. Local
   builds on Apple silicon include it.
