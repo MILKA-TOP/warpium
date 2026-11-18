@@ -24,6 +24,7 @@ pub(crate) mod tests;
 mod vertical_tabs;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_android;
+mod warpium_project_root;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_project_toolbar;
 #[cfg(target_family = "wasm")]
@@ -4228,17 +4229,14 @@ impl Workspace {
 
                         let pane_group = self.tabs[tab_index].pane_group.clone();
 
-                        // A pin whose folder was deleted or moved since it was saved is dropped.
-                        if let Some(pinned_root) = saved_tab
-                            .pinned_explorer_root
-                            .as_ref()
-                            .filter(|pinned_root| pinned_root.is_dir())
-                        {
-                            pane_group.update(ctx, |pane_group, _| {
-                                pane_group.set_pinned_explorer_root(pinned_root.clone())
-                            });
-                            // Adding the tab may already have computed its roots without the pin.
-                            self.refresh_working_directories_for_pane_group(&pane_group, ctx);
+                        // Warpium: a locked project is restored as saved, even when a folder
+                        // is missing right now (an unmounted volume); unlocking clears it.
+                        if saved_tab.project_root.is_locked() {
+                            self.apply_project_root_for_pane_group(
+                                &pane_group,
+                                saved_tab.project_root.clone(),
+                                ctx,
+                            );
                         }
 
                         if let Some(left_panel_snapshot) = &saved_tab.left_panel {
@@ -9057,14 +9055,13 @@ impl Workspace {
             None,
             ctx,
         );
+        // Warpium: an explicitly opened folder locks the new tab's project to it.
         let pane_group = self.active_tab_pane_group().clone();
-        pane_group.update(ctx, |pane_group, _| {
-            pane_group.set_pinned_explorer_root(path)
-        });
-        // Activating the tab may already have computed its roots without the pin.
-        self.refresh_working_directories_for_pane_group(&pane_group, ctx);
-        #[cfg(not(target_family = "wasm"))]
-        self.refresh_project_toolbar(ctx);
+        self.set_project_root_for_pane_group(
+            &pane_group,
+            ::warpium_project_root::ProjectRoot::locked_to(path),
+            ctx,
+        );
     }
 
     #[cfg(feature = "local_fs")]
@@ -12052,7 +12049,7 @@ impl Workspace {
                     // enabled.
                     pinned: FeatureFlag::PinnedTabs.is_enabled()
                         && self.tabs.get(tab_index).is_some_and(|tab| tab.pinned),
-                    pinned_explorer_root: pane_group.pinned_explorer_root().cloned(),
+                    project_root: pane_group.project_root().clone(),
                 }
             })
             .filter(|tab| {
@@ -14950,7 +14947,7 @@ impl Workspace {
         });
     }
 
-    /// Warpium: indexes the project of the active tab: its pinned Project Explorer root, else the
+    /// Warpium: indexes the project of the active tab: its locked project root, else the
     /// repository of the active session, else the session's directory.
     #[cfg_attr(target_family = "wasm", allow(unused_variables))]
     fn ensure_code_index_project(&self, ctx: &mut ViewContext<Self>) {
@@ -14960,8 +14957,9 @@ impl Workspace {
             let mut root = self
                 .active_tab_pane_group()
                 .as_ref(ctx)
-                .pinned_explorer_root()
-                .cloned();
+                .project_root()
+                .primary()
+                .map(Path::to_path_buf);
             if root.is_none() {
                 root = crate::search::files::model::FileSearchModel::as_ref(ctx).repo_root(ctx);
             }
@@ -15798,15 +15796,31 @@ impl Workspace {
             .active_session_view(ctx)
             .map(|terminal_view| terminal_view.id());
 
-        let pinned_explorer_root = pane_group.as_ref(ctx).pinned_explorer_root().cloned();
+        // Warpium: a locked project shows its folders whatever the terminals do.
+        if let ::warpium_project_root::ProjectRoot::Locked(roots) =
+            pane_group.as_ref(ctx).project_root().clone()
+        {
+            let placement = self.active_terminal_project_placement(pane_group, ctx);
+            self.working_directories_model.update(ctx, |model, ctx| {
+                model.refresh_locked_project_for_pane_group(
+                    pane_group_id,
+                    &roots,
+                    terminal_cwds,
+                    focused_terminal_id,
+                    ctx,
+                );
+                model.set_terminal_placement(pane_group_id, placement, ctx);
+            });
+            return;
+        }
 
         self.working_directories_model.update(ctx, |model, ctx| {
+            model.set_terminal_placement(pane_group_id, None, ctx);
             model.refresh_working_directories_for_pane_group(
                 pane_group_id,
                 terminal_cwds,
                 local_paths,
                 focused_terminal_id,
-                pinned_explorer_root,
                 ctx,
             );
         });
@@ -17122,10 +17136,13 @@ impl Workspace {
                     remote_path.path.clone(),
                 );
                 let pane_group_id = pane_group.id();
+                // Warpium: a remote session never adds a root to a locked project.
+                let is_project_locked = pane_group.as_ref(ctx).project_root().is_locked();
                 if let Some(file_tree_view) = self
                     .working_directories_model
                     .as_ref(ctx)
                     .get_file_tree_view(pane_group_id)
+                    .filter(|_| !is_project_locked)
                 {
                     file_tree_view.update(ctx, |view, ctx| {
                         view.set_remote_root_directories(std::slice::from_ref(&remote_id), ctx);
@@ -25098,6 +25115,7 @@ impl TypedActionView for Workspace {
                 );
                 ctx.notify();
             }
+            WarpiumProjectRoot(action) => self.handle_project_root_action(action, ctx),
             OpenAndroidLogcat => {
                 #[cfg(not(target_family = "wasm"))]
                 self.open_android_logcat(None, true, ctx);
@@ -27442,6 +27460,14 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::ANDROID_CONTEXT_FLAG);
+        }
+        if self
+            .get_pane_group_view(self.active_tab_index)
+            .is_some_and(|pane_group| pane_group.as_ref(app).project_root().is_locked())
+        {
+            context
+                .set
+                .insert(crate::warpium::project_root::PROJECT_LOCKED_CONTEXT_FLAG);
         }
 
         if self.team_uid(app).is_some() {

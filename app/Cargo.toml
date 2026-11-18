@@ -274,6 +274,7 @@ hashbrown.workspace = true
 rustc-hash.workspace = true
 warpium_self_update.workspace = true
 warpium_project_toolbar.workspace = true
+warpium_project_root.workspace = true
 warpium_upstream_check.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
