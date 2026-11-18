@@ -310,6 +310,7 @@ wgpu.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 code_index.workspace = true
 warpium_android.workspace = true
+warpium_agent_mcp.workspace = true
 app-installation-detection.workspace = true
 async-io.workspace = true
 axum.workspace = true

@@ -15,8 +15,8 @@ pub mod project;
 pub mod run;
 pub mod sdk;
 pub mod stack;
-#[cfg(test)]
-mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod tracker;
 mod worker;
 

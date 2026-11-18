@@ -221,6 +221,20 @@ fn row_index_of_finds_the_first_row_of_an_entry() {
 }
 
 #[test]
+fn entries_keep_sequence_numbers_across_evictions() {
+    let mut buffer = LogBuffer::new(2);
+
+    buffer.push_batch(vec![info(1, "a"), info(1, "b"), info(1, "c")]);
+
+    let entries: Vec<(u64, &str)> = buffer
+        .entries()
+        .map(|(seq, entry)| (seq, &*entry.message))
+        .collect();
+    assert_eq!(entries, vec![(1, "b"), (2, "c")]);
+    assert_eq!(buffer.next_seq(), 3);
+}
+
+#[test]
 fn tracks_the_widest_row_incrementally() {
     let mut buffer = LogBuffer::new(100);
     buffer.push_batch(vec![info(1, "abc\n\tx")]);

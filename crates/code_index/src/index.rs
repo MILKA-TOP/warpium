@@ -343,6 +343,16 @@ impl CodeIndex {
             .collect()
     }
 
+    /// Type declarations whose fully qualified name is `qualified` (`com.foo.Bar.Inner`).
+    pub fn types_named(&self, qualified: &str) -> Vec<SymbolInfo> {
+        let simple = qualified.rsplit('.').next().unwrap_or(qualified);
+        self.search(simple, SearchScope::Types, 50)
+            .into_iter()
+            .map(|result| result.symbol)
+            .filter(|symbol| symbol.qualified_name() == qualified)
+            .collect()
+    }
+
     /// The `expect` declaration and `actual` implementations sharing `symbol`'s fully qualified
     /// name, in other source sets. Empty unless `symbol` is itself `expect` or `actual`.
     pub fn expect_actual_counterparts(&self, symbol: &SymbolInfo) -> Vec<SymbolInfo> {

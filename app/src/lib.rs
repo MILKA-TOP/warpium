@@ -1625,6 +1625,9 @@ pub(crate) fn initialize_app(
     // Warpium: Android devices, AVDs and the Logcat pane (adb is contacted on first use).
     #[cfg(not(target_family = "wasm"))]
     warpium::android::init(ctx);
+    // Warpium: its MCP servers for coding agents (Warp's registry entry and installs elsewhere).
+    #[cfg(not(target_family = "wasm"))]
+    warpium::agent_mcp::init(ctx);
 
     if FeatureFlag::UIZoom.is_enabled() {
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());

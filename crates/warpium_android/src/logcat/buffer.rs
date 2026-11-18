@@ -209,6 +209,27 @@ impl LogBuffer {
         }
     }
 
+    /// The entries with their sequence numbers, oldest first. Sequence numbers keep counting
+    /// across evictions and [`Self::clear`], so they can mark a position in the stream.
+    pub fn entries(&self) -> impl DoubleEndedIterator<Item = (u64, &LogEntry)> {
+        self.entries_from(0)
+    }
+
+    /// [`Self::entries`] from the one with sequence number `seq` on.
+    pub fn entries_from(&self, seq: u64) -> impl DoubleEndedIterator<Item = (u64, &LogEntry)> {
+        let first_seq = self.first_seq;
+        let start = (seq.saturating_sub(first_seq) as usize).min(self.entries.len());
+        self.entries
+            .range(start..)
+            .enumerate()
+            .map(move |(offset, entry)| (first_seq + (start + offset) as u64, entry))
+    }
+
+    /// The sequence number the next pushed entry gets.
+    pub fn next_seq(&self) -> u64 {
+        self.first_seq + self.entries.len() as u64
+    }
+
     /// The time of the newest entry.
     pub fn last_time(&self) -> Option<LogTime> {
         self.entries.back().map(|entry| entry.time)

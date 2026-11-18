@@ -749,6 +749,8 @@ pub enum FeaturesPageAction {
     ToggleCopyOnSelect,
     /// Warpium: toggles the project toolbar.
     ToggleWarpiumProjectToolbar,
+    /// Warpium: toggles registering the Logcat MCP server for Warp's agent.
+    ToggleWarpiumLogcatMcp,
     ToggleAsyncFind,
     ToggleNotifications,
     ToggleRestoreSession,
@@ -912,6 +914,12 @@ impl FeaturesPageAction {
                 action: "ToggleWarpiumProjectToolbar".to_string(),
                 value: to_string(
                     *crate::warpium::sync_settings::WarpiumSettings::as_ref(ctx).project_toolbar,
+                ),
+            },
+            Self::ToggleWarpiumLogcatMcp => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleWarpiumLogcatMcp".to_string(),
+                value: to_string(
+                    *crate::warpium::sync_settings::WarpiumAgentSettings::as_ref(ctx).logcat_mcp,
                 ),
             },
             Self::ToggleCopyOnSelect => TelemetryEvent::FeaturesPageAction {
@@ -1508,6 +1516,14 @@ impl TypedActionView for FeaturesPageView {
                     ctx,
                     |settings, ctx| {
                         report_if_error!(settings.project_toolbar.toggle_and_save_value(ctx));
+                    },
+                );
+            }
+            ToggleWarpiumLogcatMcp => {
+                crate::warpium::sync_settings::WarpiumAgentSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.logcat_mcp.toggle_and_save_value(ctx));
                     },
                 );
             }
@@ -3123,7 +3139,11 @@ impl FeaturesPageView {
         if crate::warpium::is_warpium_channel() {
             categories.push(Category::new(
                 "Warpium",
-                vec![Box::new(WarpiumProjectToolbarWidget::default())],
+                vec![
+                    Box::new(WarpiumProjectToolbarWidget::default()),
+                    Box::new(WarpiumLogcatMcpWidget::default()),
+                    Box::new(WarpiumAgentMcpInstallWidget::default()),
+                ],
             ));
         }
 
@@ -7440,6 +7460,122 @@ impl SettingsWidget for WarpiumProjectToolbarWidget {
             Some(
                 "Buttons from the project's .warpium/toolbar.toml and your personal overrides, \
                  in the top-right corner of the window."
+                    .into(),
+            ),
+        )
+    }
+}
+
+/// Warpium: registering the Logcat MCP server in Warp's MCP servers.
+#[derive(Default)]
+struct WarpiumLogcatMcpWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for WarpiumLogcatMcpWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "warpium logcat mcp server agent android logs crashes"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::warpium::sync_settings::{LogcatMcp, WarpiumAgentSettings};
+
+        render_body_item::<FeaturesPageAction>(
+            "Logcat MCP server for Warp's agent".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                LogcatMcp::storage_key(),
+                LogcatMcp::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*WarpiumAgentSettings::as_ref(app).logcat_mcp)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleWarpiumLogcatMcp);
+                })
+                .finish(),
+            Some(
+                "Lets Warp's agent read the project's Android app logs and crashes. Logs stay in \
+                 memory and are scoped to one app unless the agent asks for all."
+                    .into(),
+            ),
+        )
+    }
+}
+
+/// Warpium: installing its MCP servers into other coding agents.
+#[derive(Default)]
+struct WarpiumAgentMcpInstallWidget {
+    install_button_mouse_state: MouseStateHandle,
+    uninstall_button_mouse_state: MouseStateHandle,
+}
+
+impl SettingsWidget for WarpiumAgentMcpInstallWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "warpium mcp servers ai agents install uninstall claude code codex kimi arc logcat code index"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        _app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        let uninstall = ui_builder
+            .button(
+                ButtonVariant::Text,
+                self.uninstall_button_mouse_state.clone(),
+            )
+            .with_text_label("Uninstall".to_owned())
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::UninstallAgentMcpServers);
+            })
+            .finish();
+        let install = ui_builder
+            .button(
+                ButtonVariant::Secondary,
+                self.install_button_mouse_state.clone(),
+            )
+            .with_text_label("Install".to_owned())
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::InstallAgentMcpServers);
+            })
+            .finish();
+        render_body_item::<FeaturesPageAction>(
+            "MCP servers for AI agents".into(),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(Container::new(uninstall).with_margin_right(8.).finish())
+                .with_child(install)
+                .finish(),
+            Some(
+                "Adds the Logcat and code index servers to Claude Code, Codex and Kimi Code \
+                 (local configs), or to the private layer of an arc project."
                     .into(),
             ),
         )

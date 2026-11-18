@@ -202,6 +202,24 @@ fn qualified_query_narrows_by_package_or_container() {
 }
 
 #[test]
+fn types_named_matches_the_fully_qualified_name_only() {
+    let dir = fixture("plain");
+    let index = CodeIndex::build(dir.path(), 2);
+
+    let nested = index.types_named("org.acme.legacy.LegacyUserService.Cache");
+    let wrong_package = index.types_named("org.acme.Cache");
+
+    assert_eq!(
+        nested
+            .iter()
+            .map(|symbol| symbol.rel_path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["src/main/java/org/acme/legacy/LegacyUserService.java"]
+    );
+    assert!(wrong_package.is_empty());
+}
+
+#[test]
 fn receiver_qualified_query_finds_extension_functions() {
     let dir = fixture("plain");
     let index = CodeIndex::build(dir.path(), 2);

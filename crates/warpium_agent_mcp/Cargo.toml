@@ -1,0 +1,16 @@
+[package]
+name = "warpium_agent_mcp"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: registering its MCP servers with coding agents (Warp, Claude Code, Codex, Kimi Code, arc)"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+command.workspace = true
+serde_json.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
