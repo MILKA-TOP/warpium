@@ -31,6 +31,12 @@ on:
       - 'specs/**'
       - 'tools/**'
   workflow_dispatch:
+    inputs:
+      profile:
+        description: Cargo profile (debug builds in a fraction of the time; release is what ships)
+        type: choice
+        options: [release, debug]
+        default: release
   # Called by warpium-release.yml. Tags pushed with GITHUB_TOKEN don't trigger other
   # workflows, so the release workflow runs this build itself.
   workflow_call:
@@ -73,6 +79,11 @@ jobs:
       release_tag: ${{ steps.version.outputs.release_tag }}
       # The upstream Warp commit the build is based on; empty if it couldn't be determined.
       upstream_base: ${{ steps.upstream_base.outputs.upstream_base }}
+      # JSON list of Cargo profiles to build: `debug` for pull requests (fast to build,
+      # enough for functional checks in the test VM), `release` (ThinLTO) for tags and
+      # releases, both for master pushes (the debug build there keeps the debug cache
+      # that pull requests restore warm).
+      profiles: ${{ steps.version.outputs.profiles }}
     steps:
       - name: Report runner
         run: |
@@ -93,9 +104,18 @@ jobs:
           REF_TYPE: ${{ inputs.release_tag && 'tag' || github.ref_type }}
           REF_NAME: ${{ inputs.release_tag || github.ref_name }}
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_PROFILE: ${{ inputs.profile || '' }}
         run: |
           version="$(script/warpium/version --tag)"
           plist_version="$(script/warpium/version --plist)"
+          if [[ "$EVENT_NAME" == "pull_request" || "$DISPATCH_PROFILE" == "debug" ]]; then
+            profiles='["debug"]'
+          elif [[ "$EVENT_NAME" == "push" && "$REF_TYPE" == "branch" && "$REF_NAME" == "master" ]]; then
+            profiles='["release","debug"]'
+          else
+            profiles='["release"]'
+          fi
           if [[ "$REF_TYPE" == "tag" ]]; then
             if [[ "$REF_NAME" != "$version" ]]; then
               echo "::error::Tag $REF_NAME does not match WARPIUM_VERSION ($version). Bump WARPIUM_VERSION before tagging."
@@ -107,13 +127,18 @@ jobs:
             artifact_name="Warpium-$version-${SHA::8}-macos-arm64"
             release_tag=""
           fi
+          if [[ -n "$release_tag" && "$profiles" != '["release"]' ]]; then
+            echo "::error::Releases must be built with the release profile only."
+            exit 1
+          fi
           {
             echo "version=$version"
             echo "plist_version=$plist_version"
             echo "artifact_name=$artifact_name"
             echo "release_tag=$release_tag"
+            echo "profiles=$profiles"
           } >> "$GITHUB_OUTPUT"
-          echo "Warpium $version (CFBundleShortVersionString $plist_version), artifact $artifact_name" >> "$GITHUB_STEP_SUMMARY"
+          echo "Warpium $version (CFBundleShortVersionString $plist_version), profiles $profiles, artifact $artifact_name (debug builds add -debug)" >> "$GITHUB_STEP_SUMMARY"
 
       # Embedded as WARPIUM_UPSTREAM_BASE so the app can notify when upstream Warp has commits
       # this build lacks. A failed lookup only turns that notification off.
@@ -146,8 +171,14 @@ jobs:
           echo "upstream_base=$base" >> "$GITHUB_OUTPUT"
 
   macos-arm64:
-    name: Build macOS (arm64)
+    name: Build macOS (arm64, ${{ matrix.profile }})
     needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJSON(needs.preflight.outputs.profiles) }}
+    env:
+      ARTIFACT_NAME: ${{ needs.preflight.outputs.artifact_name }}${{ matrix.profile == 'debug' && '-debug' || '' }}
     # Hosted macOS arm64 runners (macos-26, macos-15) were never acquired for
     # this repository while ubuntu runners were, so cross-compile the arm64
     # app on an Intel runner instead.
@@ -179,9 +210,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2.9.3
         with:
-          key: warpium-oss-macos-arm64
-          # Feature branches can restore master's cache but don't save their
-          # own, so the repository holds a single build cache.
+          # One cache per profile: debug and release artifacts share nothing.
+          key: warpium-oss-macos-arm64-${{ matrix.profile }}
+          # Feature branches restore master's caches but don't save their own
+          # (a PR-scoped cache is invisible to other PRs); master saves both.
           save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Install build dependencies
@@ -205,6 +237,10 @@ jobs:
           # The Intel host can't run the arm64 binary to dump the settings
           # schema, so the bundle ships without settings_schema.json.
           SKIP_SETTINGS_SCHEMA: '1'
+          PROFILE: ${{ matrix.profile }}
+          # Debug builds: no debuginfo at all (smaller objects, faster links, a smaller
+          # cache). Panics still print symbolized backtraces from the symbol table.
+          CARGO_PROFILE_DEV_DEBUG: '0'
         # warp_control_cli enables Warp's local-control API and bundles the
         # `warpctrl-oss` wrapper, so test harnesses can drive the app without focus
         # or synthetic input. The control server binds no port or socket and
@@ -214,7 +250,11 @@ jobs:
         # are visible regardless.
         run: |
           df -h "$GITHUB_WORKSPACE"
-          ./script/bundle --channel oss --arch aarch64 --selfsign \
+          profile_flag=()
+          if [[ "$PROFILE" == "debug" ]]; then
+            profile_flag=(--debug)
+          fi
+          ./script/bundle --channel oss --arch aarch64 --selfsign "${profile_flag[@]}" \
             --features warp_control_cli \
             --dmg-name-suffix "$WARPIUM_VERSION_TAG-arm64"
 
@@ -261,7 +301,7 @@ jobs:
       - name: Upload .dmg artifact
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ needs.preflight.outputs.artifact_name }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: ${{ steps.bundle.outputs.dmg_path }}
           if-no-files-found: error
           retention-days: 30

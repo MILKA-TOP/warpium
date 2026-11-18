@@ -510,6 +510,20 @@ def test_pick_artifact():
         pick_artifact([], None)
 
 
+def test_pick_artifact_profiles():
+    rel = {"name": "Warpium-v1-a70e8571-macos-arm64", "expired": False}
+    dbg = {"name": "Warpium-v1-a70e8571-macos-arm64-debug", "expired": False}
+    # A pull-request run has only the debug build.
+    assert pick_artifact([dbg], None) == dbg["name"]
+    # A master run has both: the release build wins unless asked for.
+    assert pick_artifact([dbg, rel], None) == rel["name"]
+    assert pick_artifact([dbg, rel], dbg["name"]) == dbg["name"]
+    # Two debug builds are still ambiguous.
+    other = {"name": "Warpium-v1-b0000000-macos-arm64-debug", "expired": False}
+    with pytest.raises(WorkspaceError):
+        pick_artifact([dbg, other], None)
+
+
 def _fake_app(apps_dir: Path, name: str, exe: str = "warp-oss") -> Path:
     import plistlib
 

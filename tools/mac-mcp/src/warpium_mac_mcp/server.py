@@ -268,6 +268,8 @@ def create_server(s: Services) -> FastMCP:
         .app into ~/warpium-mac-test/apps/. Never touches /Applications. Background job.
         Without artifact_name, the run's artifacts are listed and the single non-expired
         'Warpium-*' one is used (e.g. run 43262238821 -> Warpium-a70e8571-macos-arm64).
+        Pull-request runs build a debug app (artifact name ends in -debug); master runs build
+        release and debug, and the release one is picked unless artifact_name says otherwise.
         Disabled with --no-build."""
         job = await _thread(s.workspace.install_artifact, run_id, artifact_name)
         return job.summary()
