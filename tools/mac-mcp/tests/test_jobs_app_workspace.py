@@ -765,3 +765,36 @@ def test_install_artifact_download_stall_fails(ws, tmp_path, monkeypatch):
     with pytest.raises(ProcessLookupError):
         os.kill(int((tmp_path / "gh.pid").read_text()), 0)
     assert "hdiutil" not in calls.read_text()
+
+
+def test_install_artifact_retries_failed_download(ws, tmp_path, monkeypatch):
+    w, cfg = ws
+    counter = tmp_path / "attempts"
+    body = f"""
+n=$(cat {counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {counter}
+echo partial > "$DIR/partial.bin"
+if [ $n -lt 3 ]; then echo "connection reset by peer" >&2; exit 1; fi
+rm -f "$DIR/partial.bin"
+echo dmg > "$DIR/Warpium.dmg"
+"""
+    _fake_tools(tmp_path, monkeypatch, body)
+    job = wait(w.install_artifact("123"), 20)
+    assert job.state == "succeeded", (job.summary(), w.jobs.logs(job.id, 100))
+    assert counter.read_text().strip() == "3"
+    assert "attempt 2/3 failed" in w.jobs.logs(job.id, 200)
+    assert sorted(p.name for p in (cfg.downloads_dir / "123").iterdir()) == ["Warpium.dmg"]
+
+
+def test_install_artifact_gives_up_after_attempts(ws, tmp_path, monkeypatch):
+    w, cfg = ws
+    w.download_attempts = 2
+    counter = tmp_path / "attempts"
+    body = f"""
+n=$(cat {counter} 2>/dev/null || echo 0); echo $((n+1)) > {counter}
+exit 1
+"""
+    calls = _fake_tools(tmp_path, monkeypatch, body)
+    job = wait(w.install_artifact("123"), 20)
+    assert job.state == "failed", job.summary()
+    assert counter.read_text().strip() == "2"
+    assert "hdiutil" not in calls.read_text()
