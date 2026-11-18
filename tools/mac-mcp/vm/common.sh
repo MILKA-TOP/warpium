@@ -24,28 +24,166 @@
 #                          and Screen Sharing still on) to boot bridged without asking
 #   WARPIUM_VM_CHANGE_PASSWORD=1   also replace the guest's admin/admin password with a
 #                          random one (opt-in; see harden_guest below)
+#
+# Shared VM mode (README "Using the Muhtar VM"): the Warpium server runs as a guest
+# in a VM another project's scripts own (create/start/stop/reset/snapshot), next
+# to that project's own server. These scripts then only install the Warpium server
+# there and open/close its forward; they never start, stop or change the VM.
+#   WARPIUM_VM_HOST=muhtar  preset for the Muhtar VM (lipt-mocker tools/mac-mcp):
+#                          VM muhtar-test, SSH key, known hosts and host key alias
+#                          from ~/.config/muhtar-mac-mcp
+#   WARPIUM_VM_SHARED=1    shared mode without a preset; then also set WARPIUM_VM_NAME,
+#                          WARPIUM_VM_SSH_KEY and WARPIUM_VM_KNOWN_HOSTS
+#   WARPIUM_VM_SSH_KEY, WARPIUM_VM_KNOWN_HOSTS, WARPIUM_VM_HOST_KEY_ALIAS (default: the
+#                          VM name), WARPIUM_VM_OWNER_STATE_DIR (the owner's state dir,
+#                          read for its net_mode/bridge_if and VM log),
+#                          WARPIUM_VM_OWNER_START (the command that starts the VM, shown
+#                          when it is not running): override the preset's values
+# setup.sh saves the resolved values in $CONF_DIR/vm/shared_vm, so later runs of
+# every script reuse them. WARPIUM_VM_SHARED=0 ignores that file for one run;
+# WARPIUM_VM_SHARED=0 vm/setup.sh deletes it (back to the Warpium-owned VM).
 
 set -euo pipefail
 
 VM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MCP_DIR="$(cd "$VM_DIR/.." && pwd)"
 
-VM_NAME="${WARPIUM_VM_NAME:-warpium-test}"
+# --- output ---------------------------------------------------------------
+if [ -t 1 ]; then
+  _B=$'\033[1m' _G=$'\033[32m' _Y=$'\033[33m' _R=$'\033[31m' _N=$'\033[0m'
+else
+  _B="" _G="" _Y="" _R="" _N=""
+fi
+step() { printf '%s==> %s%s\n' "$_B" "$*" "$_N"; }
+ok() { printf '%s    ok:%s %s\n' "$_G" "$_N" "$*"; }
+warn() { printf '%s    warning:%s %s\n' "$_Y" "$_N" "$*" >&2; }
+die() {
+  printf '%serror:%s %s\n' "$_R" "$_N" "$*" >&2
+  exit 1
+}
+
+MCP_PORT="${WARPIUM_MCP_PORT:-17654}"
+CONF_DIR="${WARPIUM_MCP_CONFIG_DIR:-$HOME/.config/warpium-mac-mcp}"
+STATE_DIR="$CONF_DIR/vm"
+
+# --- shared VM mode -----------------------------------------------------------
+SHARED_VM_FILE="$STATE_DIR/shared_vm"
+
+# shared_saved <key>: the value setup.sh saved for <key> ("" if none).
+shared_saved() {
+  if [ "${WARPIUM_VM_SHARED:-}" != "0" ] && [ -f "$SHARED_VM_FILE" ]; then
+    sed -n "s/^$1=//p" "$SHARED_VM_FILE" | head -1
+  fi
+}
+
+SHARED_VM=0
+VM_HOST_PRESET=""
+OWNER_STATE_DIR=""
+OWNER_START=""
+OWNER_SCRIPTS=""
+if [ "${WARPIUM_VM_SHARED:-}" != "0" ] &&
+  { [ "${WARPIUM_VM_SHARED:-}" = "1" ] || [ -n "${WARPIUM_VM_HOST:-}" ] || [ -s "$SHARED_VM_FILE" ]; }; then
+  SHARED_VM=1
+  VM_HOST_PRESET="${WARPIUM_VM_HOST:-$(shared_saved host)}"
+  p_name="" p_key="" p_known="" p_state="" p_start="" p_scripts=""
+  case "$VM_HOST_PRESET" in
+    muhtar)
+      p_name="muhtar-test"
+      p_key="$HOME/.config/muhtar-mac-mcp/vm_ed25519"
+      p_known="$HOME/.config/muhtar-mac-mcp/vm_known_hosts"
+      p_state="$HOME/.config/muhtar-mac-mcp/vm"
+      p_scripts="lipt-mocker's tools/mac-mcp/vm/ scripts"
+      p_start="cd <your lipt-mocker checkout>/tools/mac-mcp && vm/start.sh"
+      [ "$MCP_PORT" != "17655" ] || die "WARPIUM_MCP_PORT=17655 is the Muhtar server's port; keep Warpium on 17654"
+      ;;
+    "") ;;
+    *) die "unknown WARPIUM_VM_HOST '$VM_HOST_PRESET' (known: muhtar; or WARPIUM_VM_SHARED=1 with WARPIUM_VM_NAME, WARPIUM_VM_SSH_KEY, WARPIUM_VM_KNOWN_HOSTS)" ;;
+  esac
+  VM_NAME="${WARPIUM_VM_NAME:-$(shared_saved name)}"
+  VM_NAME="${VM_NAME:-$p_name}"
+  SSH_KEY="${WARPIUM_VM_SSH_KEY:-$(shared_saved ssh_key)}"
+  SSH_KEY="${SSH_KEY:-$p_key}"
+  KNOWN_HOSTS="${WARPIUM_VM_KNOWN_HOSTS:-$(shared_saved known_hosts)}"
+  KNOWN_HOSTS="${KNOWN_HOSTS:-$p_known}"
+  HOST_KEY_ALIAS="${WARPIUM_VM_HOST_KEY_ALIAS:-$(shared_saved host_key_alias)}"
+  HOST_KEY_ALIAS="${HOST_KEY_ALIAS:-$VM_NAME}"
+  OWNER_STATE_DIR="${WARPIUM_VM_OWNER_STATE_DIR:-$(shared_saved owner_state_dir)}"
+  OWNER_STATE_DIR="${OWNER_STATE_DIR:-$p_state}"
+  OWNER_START="${WARPIUM_VM_OWNER_START:-$(shared_saved owner_start)}"
+  OWNER_START="${OWNER_START:-${p_start:-the start command of the project that owns $VM_NAME}}"
+  OWNER_SCRIPTS="${p_scripts:-the scripts of the project that owns $VM_NAME}"
+  [ -n "$VM_NAME" ] && [ -n "$SSH_KEY" ] && [ -n "$KNOWN_HOSTS" ] ||
+    die "shared VM mode needs WARPIUM_VM_NAME, WARPIUM_VM_SSH_KEY and WARPIUM_VM_KNOWN_HOSTS (or WARPIUM_VM_HOST=muhtar)"
+  case "$VM_NAME$SSH_KEY$KNOWN_HOSTS$HOST_KEY_ALIAS$OWNER_STATE_DIR$OWNER_START" in
+    *$'\n'*) die "shared VM settings must not contain newlines" ;;
+  esac
+  unset p_name p_key p_known p_state p_start p_scripts
+else
+  VM_NAME="${WARPIUM_VM_NAME:-warpium-test}"
+  SSH_KEY="$CONF_DIR/vm_ed25519"
+  KNOWN_HOSTS="$CONF_DIR/vm_known_hosts"
+  HOST_KEY_ALIAS="$VM_NAME"
+fi
+
+# Saves the shared-mode settings for later runs (setup.sh), or deletes them
+# with WARPIUM_VM_SHARED=0.
+save_shared_mode() {
+  mkdir -p "$STATE_DIR"
+  if [ "${WARPIUM_VM_SHARED:-}" = "0" ]; then
+    if [ -f "$SHARED_VM_FILE" ]; then
+      rm -f "$SHARED_VM_FILE"
+      ok "shared VM mode turned off (removed $SHARED_VM_FILE)"
+    fi
+    return 0
+  fi
+  [ "$SHARED_VM" = 1 ] || return 0
+  {
+    echo "host=$VM_HOST_PRESET"
+    echo "name=$VM_NAME"
+    echo "ssh_key=$SSH_KEY"
+    echo "known_hosts=$KNOWN_HOSTS"
+    echo "host_key_alias=$HOST_KEY_ALIAS"
+    echo "owner_state_dir=$OWNER_STATE_DIR"
+    echo "owner_start=$OWNER_START"
+  } >"$SHARED_VM_FILE.tmp"
+  mv -f "$SHARED_VM_FILE.tmp" "$SHARED_VM_FILE"
+  ok "shared VM mode saved in $SHARED_VM_FILE (VM $VM_NAME; later runs reuse it)"
+}
+
+# refuse_in_shared_mode <what>: dies in shared mode, where the VM owner's
+# scripts do <what>.
+refuse_in_shared_mode() {
+  [ "$SHARED_VM" = 1 ] || return 0
+  die "shared VM mode: $VM_NAME belongs to $OWNER_SCRIPTS, so $1 is done there, not here (README \"Using the Muhtar VM\"). WARPIUM_VM_SHARED=0 targets the Warpium-owned VM instead"
+}
+
+# require_vm_running: dies unless the VM runs. In shared mode the message names
+# the owner's start command: these scripts never start a VM they don't own
+# (it needs the owner's shares and network flags).
+require_vm_running() {
+  vm_running "$VM_NAME" && return 0
+  if [ "$SHARED_VM" = 1 ]; then
+    die "VM $VM_NAME is not running. It belongs to $OWNER_SCRIPTS; start it with:
+    $OWNER_START
+then re-run this script."
+  fi
+  die "VM $VM_NAME is not running; run vm/start.sh (or vm/setup.sh)"
+}
+
 GOLDEN_NAME="${WARPIUM_VM_GOLDEN:-${VM_NAME}-golden}"
 VM_CPU="${WARPIUM_VM_CPU:-4}"
 VM_MEMORY_MB="${WARPIUM_VM_MEMORY_MB:-8192}"
 VM_DISK_GB="${WARPIUM_VM_DISK_GB:-}"
-MCP_PORT="${WARPIUM_MCP_PORT:-17654}"
-CONF_DIR="${WARPIUM_MCP_CONFIG_DIR:-$HOME/.config/warpium-mac-mcp}"
-STATE_DIR="$CONF_DIR/vm"
-SSH_KEY="$CONF_DIR/vm_ed25519"
-KNOWN_HOSTS="$CONF_DIR/vm_known_hosts"
 ADMIN_PASSWORD_FILE="$CONF_DIR/vm_admin_password"
 # A password WARPIUM_VM_CHANGE_PASSWORD=1 is applying; renamed to
 # $ADMIN_PASSWORD_FILE once the guest uses it everywhere.
 PENDING_PASSWORD_FILE="$ADMIN_PASSWORD_FILE.pending"
 FORWARD_PID_FILE="$STATE_DIR/forward.pid"
 VM_LOG="$STATE_DIR/$VM_NAME.log"
+# In shared mode the owner's scripts start the VM and write its log.
+if [ "$SHARED_VM" = 1 ] && [ -n "$OWNER_STATE_DIR" ]; then
+  VM_LOG="$OWNER_STATE_DIR/$VM_NAME.log"
+fi
 FORWARD_LOG="$STATE_DIR/forward.log"
 VNC_LOG_MARK_FILE="$STATE_DIR/$VM_NAME.vnc-log-mark"
 
@@ -61,6 +199,13 @@ VMNET_MASK="255.255.255.0"
 VM_SUGGEST_SUBNET="${WARPIUM_VM_SUGGEST_SUBNET:-192.168.251.1}"
 NET_MODE_FILE="$STATE_DIR/net_mode"
 BRIDGE_IF_FILE="$STATE_DIR/bridge_if"
+# Shared mode: the owner's saved network mode tells how `tart ip` finds the
+# guest (read only: save_net_mode is never called in shared mode). Without an
+# owner state dir, WARPIUM_VM_NET says it (default nat).
+if [ "$SHARED_VM" = 1 ]; then
+  NET_MODE_FILE="${OWNER_STATE_DIR:-/nonexistent}/net_mode"
+  BRIDGE_IF_FILE="${OWNER_STATE_DIR:-/nonexistent}/bridge_if"
+fi
 HARDENED_MARKER="$STATE_DIR/$VM_NAME.hardened"
 
 GUEST_USER="admin"
@@ -74,20 +219,6 @@ GUEST_DIR="warpium-mac-mcp" # relative to the guest's home
 GUEST_AGENT_LABEL="dev.milka.warpium-mac-mcp.vm"
 # Non-login SSH shells don't read ~/.zprofile; Homebrew lives here on arm64.
 GUEST_PATH='/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
-
-# --- output ---------------------------------------------------------------
-if [ -t 1 ]; then
-  _B=$'\033[1m' _G=$'\033[32m' _Y=$'\033[33m' _R=$'\033[31m' _N=$'\033[0m'
-else
-  _B="" _G="" _Y="" _R="" _N=""
-fi
-step() { printf '%s==> %s%s\n' "$_B" "$*" "$_N"; }
-ok() { printf '%s    ok:%s %s\n' "$_G" "$_N" "$*"; }
-warn() { printf '%s    warning:%s %s\n' "$_Y" "$_N" "$*" >&2; }
-die() {
-  printf '%serror:%s %s\n' "$_R" "$_N" "$*" >&2
-  exit 1
-}
 
 # --- checks ---------------------------------------------------------------
 require_macos_arm64() {
@@ -105,6 +236,10 @@ require_tart() {
 }
 
 require_key() {
+  if [ "$SHARED_VM" = 1 ]; then
+    [ -f "$SSH_KEY" ] || die "no SSH key for the shared VM $VM_NAME at $SSH_KEY; set the VM up with $OWNER_SCRIPTS first (or point WARPIUM_VM_SSH_KEY at its key)"
+    return 0
+  fi
   [ -f "$SSH_KEY" ] || die "no VM SSH key at $SSH_KEY; run vm/setup.sh first"
 }
 
@@ -152,14 +287,14 @@ guest_ssh() {
   local ip="$1"
   shift
   ssh -i "$SSH_KEY" -o IdentitiesOnly=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
-    -o HostKeyAlias="$VM_NAME" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+    -o HostKeyAlias="$HOST_KEY_ALIAS" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
     -o BatchMode=yes -o LogLevel=ERROR "$GUEST_USER@$ip" "$@"
 }
 
 # The rsync -e value (rsync splits it on spaces, so paths are %q-quoted).
 rsync_ssh_cmd() {
   printf 'ssh -i %q -o IdentitiesOnly=yes -o UserKnownHostsFile=%q -o HostKeyAlias=%q -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR' \
-    "$SSH_KEY" "$KNOWN_HOSTS" "$VM_NAME"
+    "$SSH_KEY" "$KNOWN_HOSTS" "$HOST_KEY_ALIAS"
 }
 
 wait_for_key_ssh() {
@@ -189,6 +324,12 @@ EOF
   fi
   cat <<EOF
 Check the VM log: $VM_LOG
+EOF
+  if [ "$SHARED_VM" = 1 ]; then
+    echo "$VM_NAME belongs to $OWNER_SCRIPTS: check and restart it with those."
+    return 0
+  fi
+  cat <<EOF
 To look at the guest screen: vm/stop.sh, then 'tart run ${NET_ARGS[*]:+${NET_ARGS[*]} }$VM_NAME'
 (opens a window; user admin, password admin, or the one in $ADMIN_PASSWORD_FILE if it exists).
 The vanilla image has no Tart guest agent, so 'tart exec' does not work.
@@ -209,7 +350,7 @@ ssh_with_password() {
   chmod 700 "$askpass"
   WARPIUM_ASKPASS_PW="$pw" SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=none \
     ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive \
-    -o UserKnownHostsFile="$KNOWN_HOSTS" -o HostKeyAlias="$VM_NAME" \
+    -o UserKnownHostsFile="$KNOWN_HOSTS" -o HostKeyAlias="$HOST_KEY_ALIAS" \
     -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o LogLevel=ERROR \
     -o NumberOfPasswordPrompts=1 "$GUEST_USER@$ip" "$@" || rc=$?
   rm -f "$askpass"
@@ -457,6 +598,8 @@ vm_net_mode() {
 # (start.sh, provision.sh, ...). Call it after start_vm_headless accepted them.
 save_net_mode() {
   local m
+  # Shared mode: NET_MODE_FILE is the owner's; never write it.
+  [ "$SHARED_VM" = 0 ] || return 0
   mkdir -p "$STATE_DIR"
   if [ -n "${WARPIUM_VM_NET:-}" ]; then
     m="$(vm_net_mode)"
@@ -718,6 +861,14 @@ vm_run_cmdline() {
 
 start_vm_headless() {
   local cmd want
+  # Never start or check the flags of a shared VM: its owner's start script
+  # sets its shares and network.
+  if [ "$SHARED_VM" = 1 ]; then
+    require_vm_running
+    ! vnc_requested || warn "WARPIUM_VM_VNC=1 is ignored in shared VM mode: start $VM_NAME with VNC via $OWNER_SCRIPTS"
+    ok "VM $VM_NAME is running (shared VM, started by $OWNER_SCRIPTS)"
+    return 0
+  fi
   mkdir -p "$STATE_DIR"
   resolve_net_args
   if vm_running "$VM_NAME"; then
@@ -782,6 +933,7 @@ wait_for_vnc_url() {
 
 # Stops the VM and waits (up to 30 s) for its `tart run` process to exit.
 stop_vm() {
+  refuse_in_shared_mode "stopping the VM"
   if vm_running "$VM_NAME"; then
     step "Stopping VM $VM_NAME"
     tart stop --timeout 60 "$VM_NAME" || warn "tart stop failed; check 'tart list'"

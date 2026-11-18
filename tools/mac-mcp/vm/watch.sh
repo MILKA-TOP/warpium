@@ -18,11 +18,11 @@ case "$RECORDS" in '' | *[!0-9]*) die "usage: vm/watch.sh [number of past audit 
 require_macos_arm64
 require_tart
 require_key
-vm_running "$VM_NAME" || die "VM $VM_NAME is not running; run vm/start.sh"
+require_vm_running
 IP="$(vm_ip 30)" || die "no IP for $VM_NAME; see $VM_LOG"
 
 step "Watching $GUEST_USER@$IP (audit log + new screenshots); Ctrl+C to stop"
-echo "    fetch a screenshot: scp -i $SSH_KEY -o UserKnownHostsFile=$KNOWN_HOSTS -o HostKeyAlias=$VM_NAME $GUEST_USER@$IP:<path> ."
+echo "    fetch a screenshot: scp -i $SSH_KEY -o UserKnownHostsFile=$KNOWN_HOSTS -o HostKeyAlias=$HOST_KEY_ALIAS $GUEST_USER@$IP:<path> ."
 
 # -tt: a remote tty, so Ctrl+C (SIGINT/SIGHUP) also ends tail and the poll
 # loop in the guest instead of leaving them running.

@@ -192,6 +192,37 @@ def is_app_bundle(p: Path) -> bool:
     )
 
 
+# downloads/ entries install_artifact writes per run: the artifact itself and
+# gh's private TMPDIR. `<id>-mnt` is left alone (it may still be mounted).
+_RUN_DOWNLOAD_RE = re.compile(r"[0-9]{1,20}(-tmp)?")
+
+
+def remove_old_downloads(downloads_dir: Path, keep_run_id: str, log: Callable[[str], None]) -> None:
+    """Best effort: deletes earlier runs' downloads from ``downloads_dir``
+    (already jail-resolved), so the guest keeps at most one cached artifact
+    (a few hundred MB each; the VM disk may be shared with another project).
+    The installed app in apps/ is separate and stays. Only ``<run id>`` and
+    ``<run id>-tmp`` entries other than ``keep_run_id``'s are touched; a
+    symlink is unlinked, never followed."""
+    try:
+        entries = sorted(downloads_dir.iterdir())
+    except OSError as e:
+        log(f"could not list {downloads_dir}: {e}")
+        return
+    keep = {keep_run_id, f"{keep_run_id}-tmp"}
+    for p in entries:
+        if p.name in keep or not _RUN_DOWNLOAD_RE.fullmatch(p.name):
+            continue
+        try:
+            if p.is_symlink() or not p.is_dir():
+                p.unlink()
+            else:
+                shutil.rmtree(p)
+            log(f"removed old download {p}")
+        except OSError as e:
+            log(f"could not remove {p}: {e}")
+
+
 def remove_self_update_backups(apps_dir: Path, log: Callable[[str], None]) -> None:
     """Best effort: deletes ``.*-previous.app`` backups the self-updater left
     directly in ``apps_dir`` (already jail-resolved). A symlink is unlinked,
@@ -423,6 +454,8 @@ class Workspace:
             # out from under a running install.
             if dl_dir.exists():
                 shutil.rmtree(dl_dir)
+            # Free the space of earlier artifacts before downloading this one.
+            remove_old_downloads(dl_dir.parent, run_id, log)
             dl_dir.mkdir(parents=True)
             info = check_run_info(gh_api(""))
             # Artifact names embed the commit sha (the merge commit on

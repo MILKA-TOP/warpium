@@ -9,6 +9,7 @@ source "$(dirname "$0")/common.sh"
 
 require_macos_arm64
 require_tart
+refuse_in_shared_mode "snapshotting the VM (no golden copy is made for it here)"
 vm_exists "$VM_NAME" || die "VM $VM_NAME does not exist; run vm/setup.sh"
 
 if vm_exists "$GOLDEN_NAME"; then
