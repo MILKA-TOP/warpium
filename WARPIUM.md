@@ -734,13 +734,23 @@ gated to `warpdotdev` and don't run here. Don't change whether workflows are ena
 - **Jobs:** a cheap `ubuntu-latest` preflight computes the version, the artifact name and the
   upstream base commit (`WARPIUM_UPSTREAM_BASE`, see
   [Upstream Warp update notification](#upstream-warp-update-notification)), then
-  the macOS job builds on `macos-15-intel` and cross-compiles arm64 with `--selfsign`
-  (about 1.5 h). It checks the plist version and the app icon in the built bundle.
+  the macOS job builds on `macos-15-intel` and cross-compiles arm64 with `--selfsign`.
+  It checks the plist version and the app icon in the built bundle.
+- **Profiles:** pull requests build a **debug** app (`script/bundle --debug`, Cargo `dev`
+  profile, no debuginfo): much faster than release, good enough for functional checks in the
+  test VM, but not for performance measurements, and `debug_assertions` are on (overflow
+  checks and `debug_assert!` can panic where a release build wouldn't). Master pushes build
+  **release** (ThinLTO, about 1.5 h) and **debug** in parallel; tags, releases and manual runs
+  build release only (a manual run can pick debug). Each profile has its own Rust cache, saved
+  only by master runs, so PR builds restore master's warm debug cache. Measure performance on
+  a master or release build.
 - **Cross-compile caveat:** the Intel runner can't run the arm64 binary that generates
   `settings_schema.json`, so CI builds lack the bundled `modify-settings` agent skill. Local
   builds on Apple silicon include it.
-- **Artifacts:** `Warpium-<version>-<sha8>-macos-arm64` for branch and PR builds,
-  `Warpium-<version>-macos-arm64` for tags; each contains `Warpium-<version>-arm64.dmg`.
+- **Artifacts:** `Warpium-<version>-<sha8>-macos-arm64` for branch builds,
+  `Warpium-<version>-macos-arm64` for tags, with `-debug` appended for debug builds (so PR
+  artifacts end in `-debug`); each contains `Warpium-<version>-arm64.dmg`. The mac-mcp
+  `install_artifact` tool picks the release artifact of a master run unless told otherwise.
 - **Releases:** the `release` job runs for a `workflow_call` from Warpium Release (see
   [Releasing](#releasing)) or a pushed tag with the extra fork component
   (`v*.*.*.*.*.*.*_*.*`), so mirrored upstream tags can't publish a release. Preflight fails if

@@ -156,6 +156,9 @@ def pick_artifact(artifacts: list[dict], wanted: str | None) -> str:
             return wanted
         raise WorkspaceError(f"artifact {wanted!r} not found; run has {[a['name'] for a in live]}")
     cands = [a["name"] for a in live if a["name"].startswith("Warpium-")]
+    # Master runs build both profiles; without a choice, take the release build.
+    if len(cands) == 2 and sum(c.endswith("-debug") for c in cands) == 1:
+        cands = [c for c in cands if not c.endswith("-debug")]
     if len(cands) != 1:
         raise WorkspaceError(
             f"expected exactly one non-expired 'Warpium-*' artifact, found {cands}; "
