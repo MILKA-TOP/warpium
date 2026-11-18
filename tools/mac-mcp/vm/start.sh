@@ -8,12 +8,20 @@
 # (tart run --vnc-experimental; nothing runs in the guest) and prints the
 # vnc:// URL to watch the guest screen live. The VM must be started this way:
 # if it already runs without VNC, stop it first (vm/stop.sh).
+#
+# Shared VM mode (vm/common.sh, README "Using the Muhtar VM"): the VM must
+# already run, started by its owner's scripts; this never starts it. It only
+# makes sure the Warpium server answers and opens the 17654 forward.
 source "$(dirname "$0")/common.sh"
 
 require_macos_arm64
 require_tart
 require_key
-vm_exists "$VM_NAME" || die "VM $VM_NAME does not exist; run vm/setup.sh (or vm/reset.sh)"
+if [ "$SHARED_VM" = 1 ]; then
+  vm_exists "$VM_NAME" || die "shared VM $VM_NAME does not exist; create it with $OWNER_SCRIPTS (setup.sh) first"
+else
+  vm_exists "$VM_NAME" || die "VM $VM_NAME does not exist; run vm/setup.sh (or vm/reset.sh)"
+fi
 mkdir -p "$STATE_DIR"
 vm_net_mode >/dev/null # validates WARPIUM_VM_NET early
 
@@ -58,7 +66,7 @@ else
   fi
   # Binds the host's loopback only; never 0.0.0.0.
   nohup ssh -i "$SSH_KEY" -o IdentitiesOnly=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
-    -o HostKeyAlias="$VM_NAME" -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    -o HostKeyAlias="$HOST_KEY_ALIAS" -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
     -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
     -N -L "127.0.0.1:$MCP_PORT:127.0.0.1:$MCP_PORT" "$GUEST_USER@$IP" \
     >>"$FORWARD_LOG" 2>&1 </dev/null &
@@ -83,7 +91,7 @@ ${_B}Ready.${_N} The container connects to http://host.docker.internal:$MCP_PORT
 Watch tool calls and new screenshots live: vm/watch.sh
 EOF
 
-if vnc_requested; then
+if vnc_requested && [ "$SHARED_VM" = 0 ]; then
   if url="$(wait_for_vnc_url 30)"; then
     cat <<EOF
 

@@ -192,15 +192,17 @@ impl Workspace {
         });
     }
 
-    /// The active tab's pinned Project Explorer root and where it is working: the folder of the
-    /// focused editor's file, else the working directory of the tab's active (most recently
-    /// focused) session if it is local.
+    /// The active tab's locked project root and where it is working: the folder of the focused
+    /// editor's file, else the working directory of the tab's active (most recently focused)
+    /// session if it is local. A locked project never falls back to where the tab is working.
     fn project_toolbar_inputs(
         &self,
         ctx: &AppContext,
     ) -> Option<(Option<PathBuf>, ProjectLocation)> {
         let pane_group = self.get_pane_group_view(self.active_tab_index)?.as_ref(ctx);
-        let pinned_root = pane_group.pinned_explorer_root().cloned();
+        if let Some(root) = pane_group.project_root().primary() {
+            return Some((Some(root.to_path_buf()), ProjectLocation::NoProject));
+        }
         let focused = pane_group.focused_pane_id(ctx);
         let editor_file = pane_group
             .code_pane_by_id(focused)
@@ -215,7 +217,7 @@ impl Workspace {
             .and_then(Path::parent)
             .filter(|dir| !dir.as_os_str().is_empty())
         {
-            return Some((pinned_root, ProjectLocation::Directory(dir.to_path_buf())));
+            return Some((None, ProjectLocation::Directory(dir.to_path_buf())));
         }
         let location = match pane_group.active_session_view(ctx) {
             Some(view) => match view.as_ref(ctx).active_session_path_if_local(ctx) {
@@ -224,7 +226,7 @@ impl Workspace {
             },
             None => ProjectLocation::Unknown,
         };
-        Some((pinned_root, location))
+        Some((None, location))
     }
 
     fn handle_project_toolbar_event(

@@ -910,6 +910,8 @@ pub enum WorkspaceAction {
     ToggleProjectToolbar,
     /// Warpium: toggles the Kotlin/Java code index behind Go to Class and Go to Symbol.
     ToggleCodeIndex,
+    /// Warpium: changes the active tab's project root (lock, unlock, change or add folders).
+    WarpiumProjectRoot(crate::warpium::project_root::ProjectRootAction),
     /// Warpium: opens (or focuses) the Logcat pane.
     OpenAndroidLogcat,
     /// Warpium: opens the Logcat pane's device menu.
@@ -1276,6 +1278,9 @@ impl WorkspaceAction {
             | CustomizeProjectToolbar
             | ToggleProjectToolbar
             | ToggleCodeIndex
+            // Saved by the handler once the project root has changed (some actions wait for a
+            // folder picker).
+            | WarpiumProjectRoot(_)
             | OpenAndroidLogcat
             | SelectAndroidDevice
             | LaunchAndroidAvd

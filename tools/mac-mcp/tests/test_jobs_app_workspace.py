@@ -22,6 +22,7 @@ from warpium_mac_mcp.workspace import (
     check_run_info,
     normalize_remote,
     pick_artifact,
+    remove_old_downloads,
     remove_self_update_backups,
     reset_git_config,
 )
@@ -573,6 +574,36 @@ def test_remove_self_update_backups(ws, tmp_path):
     ]
     assert (outside / "x").read_text() == "keep"  # symlink target not followed
     assert len(lines) == 2
+
+
+def test_remove_old_downloads_keeps_only_current_run(ws, tmp_path):
+    _, cfg = ws
+    d = cfg.downloads_dir
+    for name in ("111", "111-tmp", "222", "222-tmp", "111-mnt", "notes"):
+        (d / name).mkdir(parents=True)
+        (d / name / "f").write_text("x")
+    (d / "333").write_text("stray file")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x").write_text("keep")
+    (d / "444").symlink_to(outside)
+    lines = []
+    remove_old_downloads(d, "222", lines.append)
+    assert sorted(p.name for p in d.iterdir()) == ["111-mnt", "222", "222-tmp", "notes"]
+    assert (outside / "x").read_text() == "keep"  # symlink target not followed
+    assert len(lines) == 4
+
+
+def test_install_artifact_removes_old_downloads(ws, tmp_path, monkeypatch):
+    w, cfg = ws
+    (cfg.downloads_dir / "99").mkdir(parents=True)
+    (cfg.downloads_dir / "99" / "Old.dmg").write_text("old")
+    _fake_tools(tmp_path, monkeypatch, 'echo dmg > "$DIR/Warpium.dmg"')
+    job = w.install_artifact("123")
+    wait(job, 10)
+    assert job.state == "succeeded", job.summary()
+    assert not (cfg.downloads_dir / "99").exists()
+    assert (cfg.downloads_dir / "123" / "Warpium.dmg").exists()
 
 
 def test_remove_self_update_backups_is_best_effort(ws, monkeypatch):

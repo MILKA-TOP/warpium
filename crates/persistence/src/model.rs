@@ -359,8 +359,11 @@ pub struct Tab {
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
     pub pinned: bool,
-    /// Platform-encoded path of the tab's pinned Project Explorer root.
+    /// Platform-encoded path of the tab's primary locked project root (Warpium); NULL while the
+    /// tab's project follows its terminals.
     pub pinned_explorer_root: Option<Vec<u8>>,
+    /// JSON array of the tab's other locked project roots (Warpium).
+    pub project_extra_roots: Option<String>,
 }
 
 #[derive(Insertable)]
@@ -372,6 +375,7 @@ pub struct NewTab {
     pub tab_group_id: Option<i32>,
     pub pinned: bool,
     pub pinned_explorer_root: Option<Vec<u8>>,
+    pub project_extra_roots: Option<String>,
 }
 
 /// Persisted form of a tab group. `name` is optional — untitled groups omit

@@ -13,7 +13,7 @@ source "$(dirname "$0")/common.sh"
 require_macos_arm64
 require_tart
 require_key
-vm_running "$VM_NAME" || die "VM $VM_NAME is not running; run vm/start.sh"
+require_vm_running
 IP="$(vm_ip 60)" || die "no IP for $VM_NAME"
 
 read -r -s -p "Fine-grained token (input hidden): " token

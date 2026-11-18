@@ -6,6 +6,7 @@ source "$(dirname "$0")/common.sh"
 
 require_macos_arm64
 require_tart
+refuse_in_shared_mode "resetting the VM (no golden copy is kept for it here)"
 vm_exists "$GOLDEN_NAME" || die "no golden copy $GOLDEN_NAME; create one with vm/snapshot.sh"
 [ "${1:-}" = "--yes" ] || die "this deletes everything inside $VM_NAME; re-run as: vm/reset.sh --yes"
 

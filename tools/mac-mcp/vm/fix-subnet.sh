@@ -50,6 +50,7 @@ ADDRESS="${ADDRESS:-$VM_SUGGEST_SUBNET}"
 
 require_macos_arm64
 require_tart
+refuse_in_shared_mode "moving the vmnet subnet (it restarts the VM)"
 is_ipv4 "$ADDRESS" || die "'$ADDRESS' is not an IPv4 address (expected something like 192.168.251.1)"
 case "$ADDRESS" in
   *.1) ;;

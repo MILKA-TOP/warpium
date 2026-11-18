@@ -1042,21 +1042,25 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
             let tabs: Vec<NewTab> = window
                 .tabs
                 .iter()
-                .map(|tab| NewTab {
-                    window_id,
-                    custom_title: tab.custom_title.clone(),
-                    // We only persist and restore the selected color here
-                    // (the default color based on the pwd is separately persisted and then applied on-restore)
-                    color: match tab.selected_color {
-                        // Keep the column NULL for the common no-override case
-                        SelectedTabColor::Unset => None,
-                        _ => serde_yaml::to_string(&tab.selected_color).ok(),
-                    },
-                    tab_group_id: tab
-                        .group_id
-                        .and_then(|group_id| tab_group_row_ids.get(&group_id).copied()),
-                    pinned: tab.pinned,
-                    pinned_explorer_root: tab.pinned_explorer_root.clone().map(encode_path),
+                .map(|tab| {
+                    let project_root = tab.project_root.to_persisted();
+                    NewTab {
+                        window_id,
+                        custom_title: tab.custom_title.clone(),
+                        // We only persist and restore the selected color here
+                        // (the default color based on the pwd is separately persisted and then applied on-restore)
+                        color: match tab.selected_color {
+                            // Keep the column NULL for the common no-override case
+                            SelectedTabColor::Unset => None,
+                            _ => serde_yaml::to_string(&tab.selected_color).ok(),
+                        },
+                        tab_group_id: tab
+                            .group_id
+                            .and_then(|group_id| tab_group_row_ids.get(&group_id).copied()),
+                        pinned: tab.pinned,
+                        pinned_explorer_root: project_root.primary.map(encode_path),
+                        project_extra_roots: project_root.extra_roots,
+                    }
                 })
                 .collect();
 
@@ -2613,7 +2617,10 @@ fn read_sqlite_data(
                                 right_panel,
                                 group_id,
                                 pinned: tab.pinned,
-                                pinned_explorer_root: tab.pinned_explorer_root.map(decode_path),
+                                project_root: warpium_project_root::ProjectRoot::from_persisted(
+                                    tab.pinned_explorer_root.map(decode_path),
+                                    tab.project_extra_roots.as_deref(),
+                                ),
                             })
                         })
                         .collect();
