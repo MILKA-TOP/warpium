@@ -9,6 +9,7 @@ from warpium_mac_mcp.validation import (
     validate_bin,
     validate_branch,
     validate_click,
+    validate_click_modifiers,
     validate_env,
     validate_features,
     validate_grep,
@@ -250,6 +251,18 @@ def test_click_args():
     for b, c in [("x", 1), ("left", 0), ("left", 4), ("left", True)]:
         with pytest.raises(ValidationError):
             validate_click(b, c)
+
+
+def test_click_modifiers():
+    assert validate_click_modifiers(None) == frozenset()
+    assert validate_click_modifiers([]) == frozenset()
+    assert validate_click_modifiers(["cmd", "shift", "alt", "ctrl"]) == frozenset(
+        {"cmd", "shift", "alt", "ctrl"}
+    )
+    assert validate_click_modifiers(["meta", "Option"]) == frozenset({"cmd", "alt"})
+    for bad in (["cmd", "command"], ["fn"], ["hyper"], "cmd", [None], {"cmd": 1}):
+        with pytest.raises(ValidationError):
+            validate_click_modifiers(bad)
 
 
 def test_wildcard_bind_refused():

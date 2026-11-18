@@ -406,12 +406,17 @@ def create_server(s: Services) -> FastMCP:
             count: int = 1,
             window: str = "frontmost-warpium",
             from_screenshot: bool = False,
+            modifiers: list[Literal["cmd", "shift", "alt", "ctrl"]] | None = None,
         ) -> dict:
             """Click at window-relative point (x, y). With from_screenshot=true, x/y are pixel
-            coordinates in the last screenshot of that window. Refused unless Warpium is
-            frontmost and the point is not covered by another app's window."""
+            coordinates in the last screenshot of that window. modifiers (e.g. ["cmd"] for a
+            cmd-click) are held for the click, including a mouse move to the point first so
+            cmd-hover handling sees them. Refused unless Warpium is frontmost and the point is
+            not covered by another app's window."""
             win = _win_arg(window)
-            return await _thread(s.ui.click, x, y, button, count, win, from_screenshot)
+            return await _thread(
+                s.ui.click, x, y, button, count, win, from_screenshot, "window", modifiers
+            )
 
     else:
 
@@ -425,6 +430,7 @@ def create_server(s: Services) -> FastMCP:
             window: str = "frontmost-warpium",
             from_screenshot: bool = False,
             target: Literal["window", "screen"] = "window",
+            modifiers: list[Literal["cmd", "shift", "alt", "ctrl"]] | None = None,
         ) -> dict:
             """Click at window-relative point (x, y) of a Warpium window (guarded: Warpium must
             be frontmost and the point uncovered) or, VM mode only, of a system dialog
@@ -432,9 +438,12 @@ def create_server(s: Services) -> FastMCP:
             first). target='screen': x/y are screen points (or, with from_screenshot=true,
             pixels of the last screenshot(window='screen')) and the click goes to whatever is
             there. With from_screenshot=true, x/y are pixels in the last screenshot of the
-            window."""
+            window. modifiers (e.g. ["cmd"] for a cmd-click) are held for the click, including
+            a mouse move to the point first so cmd-hover handling sees them."""
             win = _win_arg(window)
-            return await _thread(s.ui.click, x, y, button, count, win, from_screenshot, target)
+            return await _thread(
+                s.ui.click, x, y, button, count, win, from_screenshot, target, modifiers
+            )
 
     if not cfg.vm_mode:
 

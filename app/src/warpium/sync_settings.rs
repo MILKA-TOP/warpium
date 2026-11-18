@@ -116,17 +116,25 @@ define_settings_group!(WarpiumSettings, settings: [
 /// Keymap context flag present while [`WarpiumAgentSettings::logcat_mcp`] is on.
 pub(crate) const LOGCAT_MCP_CONTEXT_FLAG: &str = "WarpiumLogcatMcp";
 
+pub(crate) use agent::{LogcatMcp, WarpiumAgentSettings, WarpiumAgentSettingsChangedEvent};
+
 // Kept apart from `WarpiumSettings` so the many subscribers matching on its events don't need an
-// arm for every agent setting.
-define_settings_group!(WarpiumAgentSettings, settings: [
-    logcat_mcp: LogcatMcp {
-        type: bool,
-        default: false,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Never,
-        surface: ::settings::SettingSurfaces::GUI,
-        private: false,
-        toml_path: "warpium.logcat_mcp",
-        description: "Whether Warpium registers its Logcat MCP server in Warp's MCP servers, so agents can read the project's Android app logs and crashes. The server keeps logs in memory only, scoped to one app unless an agent asks for all.",
-    },
-]);
+// arm for every agent setting. In its own module because each `define_settings_group!` imports
+// `ChangeEventReason`, so two groups can't share one.
+mod agent {
+    use ::settings::{SupportedPlatforms, SyncToCloud};
+    use warp_core::define_settings_group;
+
+    define_settings_group!(WarpiumAgentSettings, settings: [
+        logcat_mcp: LogcatMcp {
+            type: bool,
+            default: false,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            surface: ::settings::SettingSurfaces::GUI,
+            private: false,
+            toml_path: "warpium.logcat_mcp",
+            description: "Whether Warpium registers its Logcat MCP server in Warp's MCP servers, so agents can read the project's Android app logs and crashes. The server keeps logs in memory only, scoped to one app unless an agent asks for all.",
+        },
+    ]);
+}

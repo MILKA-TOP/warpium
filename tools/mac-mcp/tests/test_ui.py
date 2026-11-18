@@ -54,8 +54,9 @@ class FakePlatform:
         if self.after_event:
             self.after_event(self)
 
-    def post_mouse(self, kind, x, y, button, click_state):
-        self._record(("mouse", kind, x, y, button, click_state))
+    def post_mouse(self, kind, x, y, button, click_state, modifiers=frozenset()):
+        event = ("mouse", kind, x, y, button, click_state)
+        self._record(event + (tuple(sorted(modifiers)),) if modifiers else event)
 
     def post_scroll(self, x, y, dx, dy):
         self._record(("scroll", x, y, dx, dy))
@@ -115,6 +116,36 @@ def test_click_when_frontmost(ui, fp):
         ("mouse", "down", 110, 120, "left", 1),
         ("mouse", "up", 110, 120, "left", 1),
     ]
+
+
+def test_cmd_click_moves_first_and_holds_modifiers(ui, fp):
+    r = ui.click(10, 20, modifiers=["cmd"])
+    assert fp.events == [
+        ("mouse", "move", 110, 120, "left", 0, ("cmd",)),
+        ("mouse", "down", 110, 120, "left", 1, ("cmd",)),
+        ("mouse", "up", 110, 120, "left", 1, ("cmd",)),
+    ]
+    assert r["clicked"]["modifiers"] == ["cmd"]
+
+
+def test_click_without_modifiers_posts_no_move(ui, fp):
+    r = ui.click(10, 20, modifiers=[])
+    assert [e[1] for e in fp.events] == ["down", "up"]
+    assert r["clicked"]["modifiers"] == []
+
+
+def test_click_rejects_invalid_modifiers(ui, fp):
+    for modifiers in (["cmd", "meta"], ["fn"], "cmd", [1]):
+        with pytest.raises(ValidationError):
+            ui.click(10, 20, modifiers=modifiers)
+    assert fp.events == []
+
+
+def test_modified_click_checks_focus_before_the_move(ui, fp):
+    fp.front = OTHER
+    with pytest.raises(FocusError):
+        ui.click(10, 20, modifiers=["cmd", "shift"])
+    assert fp.events == []
 
 
 def test_double_click_click_states(ui, fp):

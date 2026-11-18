@@ -1,22 +1,24 @@
 //! Warpium: runs the project toolbar's buttons and opens its config files.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use warp_util::path::LineAndColumnArg;
 use warpium_project_toolbar::{
     BuiltinAction, ButtonAction, CommandAction, CommandTarget, PERSONAL_TEMPLATE, ShellFamily,
-    TEAM_TEMPLATE, ToolbarButton, detect_project, resolve_cwd, shell_line, team_config_path,
+    TEAM_TEMPLATE, ToolbarButton, VariableValues, expand_variables, has_variables, prompt_labels,
+    resolve_cwd, shell_line, team_config_path,
 };
-use warpui::elements::{Align, ChildView, Element, Shrinkable};
+use warpui::elements::{Align, ChildView, Element, ParentElement, Shrinkable, Stack};
 use warpui::{AppContext, SingletonEntity as _, TypedActionView as _, ViewContext, ViewHandle};
 
 use super::Workspace;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::palette::PaletteMode;
-use crate::pane_group::{Direction, NewTerminalOptions, PanesLayout};
+use crate::pane_group::{Direction, FilePane, NewTerminalOptions, PanesLayout};
 use crate::root_view::OpenLaunchConfigArg;
 use crate::server::telemetry::{LaunchConfigUiLocation, PaletteSource};
 use crate::settings_view::SettingsSection;
@@ -24,7 +26,11 @@ use crate::terminal::TerminalView;
 use crate::terminal::shell::ShellType;
 use crate::user_config::WarpConfig;
 use crate::view_components::DismissibleToast;
-use crate::warpium::project_toolbar::{ProjectToolbarEvent, ProjectToolbarView, personal_path};
+use crate::warpium::project_toolbar::{
+    ProjectLocation, ProjectToolbarEvent, ProjectToolbarView, personal_path,
+};
+use crate::warpium::project_toolbar_editor::{ProjectToolbarEditor, ProjectToolbarEditorEvent};
+use crate::warpium::project_toolbar_prompt::{ToolbarPromptDialog, ToolbarPromptEvent};
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::WorkspaceAction;
 use crate::workspace::util::TerminalSessionFallbackBehavior;
@@ -32,7 +38,116 @@ use crate::workspace::util::TerminalSessionFallbackBehavior;
 /// The toolbar's flex factor in the title bar, relative to each tab's 1.
 const PROJECT_TOOLBAR_FLEX: f32 = 1.;
 
+/// The project toolbar's modals, owned by the workspace so they cover the window.
+pub(super) struct ProjectToolbarOverlays {
+    editor: ViewHandle<ProjectToolbarEditor>,
+    prompt: ViewHandle<ToolbarPromptDialog>,
+}
+
 impl Workspace {
+    pub(super) fn build_project_toolbar_overlays(
+        ctx: &mut ViewContext<Self>,
+    ) -> ProjectToolbarOverlays {
+        let editor = ctx.add_typed_action_view(ProjectToolbarEditor::new);
+        ctx.subscribe_to_view(&editor, |me, _, event, ctx| match event {
+            ProjectToolbarEditorEvent::Close => {
+                me.focus_active_tab(ctx);
+                ctx.notify();
+            }
+            ProjectToolbarEditorEvent::Saved => {
+                me.project_toolbar
+                    .update(ctx, |toolbar, ctx| toolbar.reload(ctx));
+            }
+            ProjectToolbarEditorEvent::TestRun { root, button } => {
+                if me
+                    .project_toolbar
+                    .as_ref(ctx)
+                    .needs_trust_to_run(root, button, ctx)
+                {
+                    me.show_project_toolbar_error(
+                        "Project toolbar: this command comes from the project's toolbar file, \
+                         which you haven't trusted yet. Click its button on the toolbar to review \
+                         and trust it."
+                            .to_owned(),
+                        ctx,
+                    );
+                } else {
+                    me.run_project_toolbar_button(root, button, ctx)
+                }
+            }
+            ProjectToolbarEditorEvent::OpenFile { personal } => {
+                me.edit_project_toolbar_config(*personal, ctx)
+            }
+        });
+        let prompt = ctx.add_typed_action_view(|_| ToolbarPromptDialog::new());
+        ctx.subscribe_to_view(&prompt, |me, _, event, ctx| match event {
+            ToolbarPromptEvent::Close => {
+                me.focus_active_tab(ctx);
+                ctx.notify();
+            }
+            ToolbarPromptEvent::Run {
+                root,
+                button,
+                values,
+            } => {
+                me.focus_active_tab(ctx);
+                if let ButtonAction::Command(command) = &button.action {
+                    me.run_project_toolbar_command_with_prompts(
+                        root,
+                        command,
+                        button.display_label(),
+                        values,
+                        ctx,
+                    );
+                }
+                ctx.notify();
+            }
+        });
+        ProjectToolbarOverlays { editor, prompt }
+    }
+
+    /// Adds the toolbar editor or the command prompt, when open, over the window.
+    pub(super) fn add_project_toolbar_overlays(&self, stack: &mut Stack, app: &AppContext) {
+        let overlays = &self.project_toolbar_overlays;
+        if overlays.editor.as_ref(app).is_open() {
+            stack.add_child(ChildView::new(&overlays.editor).finish());
+        }
+        if overlays.prompt.as_ref(app).is_open() {
+            stack.add_child(ChildView::new(&overlays.prompt).finish());
+        }
+    }
+
+    /// Opens the toolbar editor for the active tab's project ("Customize project toolbar").
+    pub(super) fn customize_project_toolbar(&mut self, ctx: &mut ViewContext<Self>) {
+        self.update_project_toolbar_context(true, ctx);
+        match self
+            .project_toolbar
+            .as_ref(ctx)
+            .detected_project_root()
+            .map(Path::to_path_buf)
+        {
+            Some(root) => self.open_project_toolbar_editor(root, None, false, ctx),
+            None => self.show_project_toolbar_error(
+                "No project found for this tab. Open a folder inside a git repository, or pin a \
+                 Project Explorer root."
+                    .to_owned(),
+                ctx,
+            ),
+        }
+    }
+
+    fn open_project_toolbar_editor(
+        &mut self,
+        root: PathBuf,
+        select: Option<String>,
+        add: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let editor = self.project_toolbar_overlays.editor.clone();
+        editor.update(ctx, |editor, ctx| editor.open(root, select, add, ctx));
+        ctx.notify();
+    }
+
     pub(super) fn build_project_toolbar_view(
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<ProjectToolbarView> {
@@ -62,20 +177,54 @@ impl Workspace {
 
     /// Points the toolbar at the active tab's project.
     pub(super) fn refresh_project_toolbar(&mut self, ctx: &mut ViewContext<Self>) {
-        let (pinned_root, cwd) = self.project_toolbar_inputs(ctx);
+        self.update_project_toolbar_context(false, ctx);
+    }
+
+    /// Like [`Self::refresh_project_toolbar`], but `force` detects the project again even when
+    /// the tab's inputs are unchanged (a `.git` or `.warpium` may have been created since).
+    fn update_project_toolbar_context(&mut self, force: bool, ctx: &mut ViewContext<Self>) {
+        // Title and focus events can arrive while a tab is closing and the index is out of range.
+        let Some((pinned_root, location)) = self.project_toolbar_inputs(ctx) else {
+            return;
+        };
         self.project_toolbar.update(ctx, |toolbar, ctx| {
-            toolbar.set_context(pinned_root, cwd, ctx);
+            toolbar.set_context(pinned_root, location, force, ctx);
         });
     }
 
-    /// The active tab's pinned Project Explorer root and its local session's working directory.
-    fn project_toolbar_inputs(&self, ctx: &AppContext) -> (Option<PathBuf>, Option<PathBuf>) {
-        let pane_group = self.active_tab_pane_group().as_ref(ctx);
+    /// The active tab's pinned Project Explorer root and where it is working: the folder of the
+    /// focused editor's file, else the working directory of the tab's active (most recently
+    /// focused) session if it is local.
+    fn project_toolbar_inputs(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<(Option<PathBuf>, ProjectLocation)> {
+        let pane_group = self.get_pane_group_view(self.active_tab_index)?.as_ref(ctx);
         let pinned_root = pane_group.pinned_explorer_root().cloned();
-        let cwd = pane_group
-            .active_session_view(ctx)
-            .and_then(|view| view.as_ref(ctx).active_session_path_if_local(ctx));
-        (pinned_root, cwd)
+        let focused = pane_group.focused_pane_id(ctx);
+        let editor_file = pane_group
+            .code_pane_by_id(focused)
+            .and_then(|pane| pane.file_view(ctx).as_ref(ctx).local_path(ctx))
+            .or_else(|| {
+                pane_group
+                    .downcast_pane_by_id::<FilePane>(focused)
+                    .and_then(|pane| pane.file_view(ctx).as_ref(ctx).local_path())
+            });
+        if let Some(dir) = editor_file
+            .as_deref()
+            .and_then(Path::parent)
+            .filter(|dir| !dir.as_os_str().is_empty())
+        {
+            return Some((pinned_root, ProjectLocation::Directory(dir.to_path_buf())));
+        }
+        let location = match pane_group.active_session_view(ctx) {
+            Some(view) => match view.as_ref(ctx).active_session_path_if_local(ctx) {
+                Some(cwd) => ProjectLocation::Directory(cwd),
+                None => ProjectLocation::NoProject,
+            },
+            None => ProjectLocation::Unknown,
+        };
+        Some((pinned_root, location))
     }
 
     fn handle_project_toolbar_event(
@@ -93,8 +242,13 @@ impl Workspace {
             ProjectToolbarEvent::EditConfig { personal } => {
                 self.edit_project_toolbar_config(*personal, ctx)
             }
-            ProjectToolbarEvent::OpenFile(path) => {
-                self.add_tab_for_code_file(path.clone(), None, ctx)
+            ProjectToolbarEvent::OpenFile { path, location } => {
+                // The editor's columns start at 0.
+                let line_and_column = location.map(|location| LineAndColumnArg {
+                    line_num: location.line,
+                    column_num: Some(location.column.saturating_sub(1)),
+                });
+                self.add_tab_for_code_file(path.clone(), line_and_column, ctx)
             }
             ProjectToolbarEvent::MenuClosed => self.focus_active_tab(ctx),
             ProjectToolbarEvent::ContentChanged => ctx.notify(),
@@ -103,6 +257,9 @@ impl Workspace {
             }
             ProjectToolbarEvent::OpenLogcat => {
                 self.open_android_logcat(None, true, ctx);
+            }
+            ProjectToolbarEvent::Customize { root, select, add } => {
+                self.open_project_toolbar_editor(root.clone(), select.clone(), *add, ctx)
             }
         }
     }
@@ -114,6 +271,13 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         match &button.action {
+            ButtonAction::Command(command) if !prompt_labels(&command.command).is_empty() => {
+                let prompt = self.project_toolbar_overlays.prompt.clone();
+                prompt.update(ctx, |prompt, ctx| {
+                    prompt.open(root.to_path_buf(), button.clone(), &command.command, ctx)
+                });
+                ctx.notify();
+            }
             ButtonAction::Command(command) => {
                 self.run_project_toolbar_command(root, command, button.display_label(), ctx)
             }
@@ -149,6 +313,72 @@ impl Workspace {
         title: &str,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.run_project_toolbar_command_with_prompts(root, command, title, &BTreeMap::new(), ctx);
+    }
+
+    /// What the command variables stand for right now: the focused editor's file and selection
+    /// (or the focused terminal's selection) and the active session's directory.
+    fn project_toolbar_variable_values(
+        &self,
+        root: &Path,
+        prompts: &BTreeMap<String, String>,
+        ctx: &AppContext,
+    ) -> VariableValues {
+        let pane_group = self.active_tab_pane_group().as_ref(ctx);
+        let focused = pane_group.focused_pane_id(ctx);
+        let code_view = pane_group
+            .code_pane_by_id(focused)
+            .map(|pane| pane.file_view(ctx));
+        let file = code_view
+            .as_ref()
+            .and_then(|view| view.as_ref(ctx).local_path(ctx))
+            .or_else(|| {
+                pane_group
+                    .downcast_pane_by_id::<FilePane>(focused)
+                    .and_then(|pane| pane.file_view(ctx).as_ref(ctx).local_path())
+            });
+        let selection = code_view
+            .as_ref()
+            .and_then(|view| view.as_ref(ctx).selected_text(ctx))
+            .or_else(|| {
+                pane_group
+                    .focused_session_view(ctx)
+                    .and_then(|session| session.as_ref(ctx).selected_text(ctx))
+            });
+        let cwd = pane_group
+            .active_session_view(ctx)
+            .and_then(|session| session.as_ref(ctx).active_session_path_if_local(ctx));
+        VariableValues {
+            project_root: root.to_path_buf(),
+            file,
+            selection,
+            cwd,
+            prompts: prompts.clone(),
+        }
+    }
+
+    /// Like [`Self::run_project_toolbar_command`], with the answers to the command's
+    /// `${prompt:…}` variables. Variables are expanded and quoted for the shell that runs it.
+    fn run_project_toolbar_command_with_prompts(
+        &mut self,
+        root: &Path,
+        command: &CommandAction,
+        title: &str,
+        prompts: &BTreeMap<String, String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let values = has_variables(&command.command)
+            .then(|| self.project_toolbar_variable_values(root, prompts, ctx));
+        let expand = |shell: ShellFamily| match &values {
+            Some(values) => expand_variables(&command.command, values, shell)
+                .map_err(|err| format!("Project toolbar: {err}")),
+            None => Ok(command.command.clone()),
+        };
+        // Report a missing value before anything opens; the shell only changes the quoting.
+        if let Err(message) = expand(ShellFamily::Posix) {
+            self.show_project_toolbar_error(message, ctx);
+            return;
+        }
         let cwd = resolve_cwd(root, command.cwd.as_deref());
         if !cwd.is_dir() {
             self.show_project_toolbar_error(
@@ -167,23 +397,26 @@ impl Workspace {
             .collect::<HashMap<_, _>>();
         let target = match command.target {
             CommandTarget::Current => {
-                if let Some(session) = self.idle_local_session(ctx) {
+                if let Some(session) = self.session_for_current_target(root, ctx) {
                     let (shell, session_cwd) = session.read(ctx, |view, ctx| {
                         (
                             view.active_session_shell_type(ctx),
                             view.active_session_path_if_local(ctx),
                         )
                     });
-                    let shell = match shell {
-                        Some(ShellType::Fish) => ShellFamily::Fish,
-                        Some(ShellType::PowerShell) => ShellFamily::PowerShell,
-                        Some(ShellType::Bash | ShellType::Zsh) | None => ShellFamily::Posix,
-                    };
+                    let shell = shell.map_or(ShellFamily::Posix, shell_family);
                     let already_there = session_cwd
                         .map(|session_cwd| dunce::canonicalize(&session_cwd).unwrap_or(session_cwd))
                         .is_some_and(|session_cwd| session_cwd == cwd);
+                    let expanded = match expand(shell) {
+                        Ok(expanded) => expanded,
+                        Err(message) => {
+                            self.show_project_toolbar_error(message, ctx);
+                            return;
+                        }
+                    };
                     let line = shell_line(
-                        &command.command,
+                        &expanded,
                         (!already_there).then_some(cwd.as_path()),
                         &command.env,
                         shell,
@@ -193,7 +426,7 @@ impl Workspace {
                     });
                     return;
                 }
-                // A busy or remote session can't take the command; run it in a new tab instead.
+                // No session can take the command here; run it in a new tab instead.
                 CommandTarget::NewTab
             }
             target @ (CommandTarget::NewTab
@@ -230,24 +463,51 @@ impl Workspace {
                 session
             }
         };
+        // A new session's shell isn't known until it starts; the login shell is the best guess.
+        let shell = match session.as_ref(ctx).active_session_shell_type(ctx) {
+            Some(shell) => shell_family(shell),
+            None => std::env::var("SHELL")
+                .map(|shell| ShellFamily::from_program(&shell))
+                .unwrap_or(ShellFamily::Posix),
+        };
+        let expanded = match expand(shell) {
+            Ok(expanded) => expanded,
+            Err(message) => {
+                self.show_project_toolbar_error(message, ctx);
+                return;
+            }
+        };
         session.update(ctx, |view, ctx| {
-            view.execute_command_or_set_pending(&command.command, ctx)
+            view.execute_command_or_set_pending(&expanded, ctx)
         });
     }
 
-    /// The active session, if it is local, not running a command and has nothing typed in its
-    /// input (which running the command would replace).
-    fn idle_local_session(&self, ctx: &AppContext) -> Option<ViewHandle<TerminalView>> {
-        self.active_tab_pane_group()
-            .as_ref(ctx)
-            .active_session_view(ctx)
-            .filter(|session| {
-                let view = session.as_ref(ctx);
-                let is_executing = view.model.lock().block_list().active_block().is_executing();
-                view.active_session_is_local(ctx).unwrap_or(false)
-                    && !is_executing
-                    && view.input().as_ref(ctx).buffer_text(ctx).trim().is_empty()
-            })
+    /// The session a `current` command runs in: the focused session, or when another kind of pane
+    /// (such as an editor) is focused, the tab's most recently focused session if its working
+    /// directory is inside the project at `root`. Either way the session has to be local, not
+    /// running a command and have nothing typed in its input (which the command would replace).
+    fn session_for_current_target(
+        &self,
+        root: &Path,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<TerminalView>> {
+        let pane_group = self.active_tab_pane_group().as_ref(ctx);
+        let session = match pane_group.focused_session_view(ctx) {
+            Some(session) => session,
+            None => pane_group.active_session_view(ctx).filter(|session| {
+                session
+                    .as_ref(ctx)
+                    .active_session_path_if_local(ctx)
+                    .map(|cwd| dunce::canonicalize(&cwd).unwrap_or(cwd))
+                    .is_some_and(|cwd| cwd.starts_with(root))
+            })?,
+        };
+        let view = session.as_ref(ctx);
+        let is_executing = view.model.lock().block_list().active_block().is_executing();
+        let is_idle = view.active_session_is_local(ctx).unwrap_or(false)
+            && !is_executing
+            && view.input().as_ref(ctx).buffer_text(ctx).trim().is_empty();
+        is_idle.then_some(session)
     }
 
     /// Runs a saved workflow by name: the project's `.warp/workflows` first, then the user's
@@ -340,12 +600,13 @@ impl Workspace {
         personal: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        let (pinned_root, cwd) = self.project_toolbar_inputs(ctx);
-        let canonical = |path: PathBuf| dunce::canonicalize(&path).unwrap_or(path);
-        let Some(project) = detect_project(
-            pinned_root.map(canonical).as_deref(),
-            cwd.map(canonical).as_deref(),
-        ) else {
+        self.update_project_toolbar_context(true, ctx);
+        let Some(root) = self
+            .project_toolbar
+            .as_ref(ctx)
+            .detected_project_root()
+            .map(Path::to_path_buf)
+        else {
             self.show_project_toolbar_error(
                 "No project found for this tab. Open a folder inside a git repository, or pin a \
                  Project Explorer root."
@@ -355,7 +616,7 @@ impl Workspace {
             return;
         };
         let (path, template) = if personal {
-            let Some(path) = personal_path(&project.root) else {
+            let Some(path) = personal_path(&root) else {
                 self.show_project_toolbar_error(
                     "Couldn't find the home directory for personal toolbar overrides.".to_owned(),
                     ctx,
@@ -364,7 +625,7 @@ impl Workspace {
             };
             (path, PERSONAL_TEMPLATE)
         } else {
-            (team_config_path(&project.root), TEAM_TEMPLATE)
+            (team_config_path(&root), TEAM_TEMPLATE)
         };
         if !path.exists() {
             let created = path
@@ -393,6 +654,15 @@ impl Workspace {
         self.toast_stack.update(ctx, |toast_stack, ctx| {
             toast_stack.add_ephemeral_toast(DismissibleToast::error(message), ctx)
         });
+    }
+}
+
+/// The quoting rules of a session's shell.
+fn shell_family(shell: ShellType) -> ShellFamily {
+    match shell {
+        ShellType::Fish => ShellFamily::Fish,
+        ShellType::PowerShell => ShellFamily::PowerShell,
+        ShellType::Bash | ShellType::Zsh => ShellFamily::Posix,
     }
 }
 

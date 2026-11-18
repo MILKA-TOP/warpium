@@ -193,6 +193,50 @@ fn no_buttons_needs_no_overflow_menu() {
 }
 
 #[test]
+fn overflow_only_buttons_are_listed_after_the_ones_that_do_not_fit() {
+    let buttons = buttons(
+        "[[button]]\nid = \"a\"\ncommand = \"a\"\n[[button]]\nid = \"more\"\ncommand = \"m\"\noverflow = true\n[[button]]\nid = \"b\"\ncommand = \"b\"\n[[button]]\nid = \"run\"\ncommand = \"r\"\nrun_config = true\n",
+    );
+
+    let inline: Vec<&str> = inline_buttons(&buttons)
+        .iter()
+        .map(|button| button.id.as_str())
+        .collect();
+    let menu: Vec<&str> = overflow_menu_buttons(&buttons, 1)
+        .iter()
+        .map(|button| button.id.as_str())
+        .collect();
+
+    assert_eq!(inline, vec!["a", "b"]);
+    assert_eq!(menu, vec!["b", "more"]);
+}
+
+#[test]
+fn always_overflow_keeps_the_menu_button_and_its_room() {
+    assert_eq!(
+        fit_inline_buttons_with_overflow(&[26., 26.], 26., 0., 100., true),
+        InlineFit {
+            visible: 2,
+            overflow: true
+        }
+    );
+    assert_eq!(
+        fit_inline_buttons_with_overflow(&[26., 26.], 26., 0., 60., true),
+        InlineFit {
+            visible: 1,
+            overflow: true
+        }
+    );
+    assert_eq!(
+        fit_inline_buttons_with_overflow(&[], 26., 0., 60., true),
+        InlineFit {
+            visible: 0,
+            overflow: true
+        }
+    );
+}
+
+#[test]
 fn android_app_run_config_is_keyed_by_gradle_path() {
     let item = android_app_run_config(":wear:app", "app");
 

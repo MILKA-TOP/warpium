@@ -80,6 +80,29 @@ pub fn toolbar_buttons(buttons: &[ToolbarButton]) -> Vec<&ToolbarButton> {
     buttons.iter().filter(|button| !button.run_config).collect()
 }
 
+/// The toolbar buttons that are shown inline while they fit, in order.
+pub fn inline_buttons(buttons: &[ToolbarButton]) -> Vec<&ToolbarButton> {
+    toolbar_buttons(buttons)
+        .into_iter()
+        .filter(|button| !button.overflow_only)
+        .collect()
+}
+
+/// The overflow menu's buttons: the inline buttons past the first `visible`, then those marked
+/// `overflow = true`.
+pub fn overflow_menu_buttons(buttons: &[ToolbarButton], visible: usize) -> Vec<&ToolbarButton> {
+    let mut menu = inline_buttons(buttons)
+        .into_iter()
+        .skip(visible)
+        .collect::<Vec<_>>();
+    menu.extend(
+        toolbar_buttons(buttons)
+            .into_iter()
+            .filter(|button| button.overflow_only),
+    );
+    menu
+}
+
 /// How the toolbar buttons fit in the space the title bar leaves for the toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InlineFit {
@@ -99,13 +122,32 @@ pub fn fit_inline_buttons(
     trailing_width: f32,
     available: f32,
 ) -> InlineFit {
+    fit_inline_buttons_with_overflow(
+        button_widths,
+        overflow_width,
+        trailing_width,
+        available,
+        false,
+    )
+}
+
+/// Like [`fit_inline_buttons`], but with `always_overflow` the overflow menu button is shown
+/// even when every button fits (it lists buttons marked `overflow = true`).
+pub fn fit_inline_buttons_with_overflow(
+    button_widths: &[f32],
+    overflow_width: f32,
+    trailing_width: f32,
+    available: f32,
+    always_overflow: bool,
+) -> InlineFit {
     // Layout widths are fractional; don't collapse a button over rounding noise.
     const TOLERANCE: f32 = 0.5;
-    let all = button_widths.iter().sum::<f32>() + trailing_width;
+    let reserved = if always_overflow { overflow_width } else { 0. };
+    let all = button_widths.iter().sum::<f32>() + trailing_width + reserved;
     if button_widths.is_empty() || all <= available + TOLERANCE {
         return InlineFit {
             visible: button_widths.len(),
-            overflow: false,
+            overflow: always_overflow,
         };
     }
     let budget = available - trailing_width - overflow_width + TOLERANCE;

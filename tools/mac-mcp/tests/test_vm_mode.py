@@ -121,6 +121,16 @@ def test_click_dialog_activates_and_uses_window_points(vfp, tmp_path):
     assert r["target_frontmost"] is True
 
 
+def test_vm_cmd_click_on_screen_moves_first_and_holds_modifiers(vfp, tmp_path):
+    ui = _ui(vfp, tmp_path, vm=True)
+    ui.click(600, 450, target="screen", modifiers=["cmd", "alt"])
+    assert vfp.events == [
+        ("mouse", "move", 600, 450, "left", 0, ("alt", "cmd")),
+        ("mouse", "down", 600, 450, "left", 1, ("alt", "cmd")),
+        ("mouse", "up", 600, 450, "left", 1, ("alt", "cmd")),
+    ]
+
+
 def test_click_dialog_when_activation_is_ignored(vfp, tmp_path):
     vfp.activate = lambda pid: vfp.activated.append(pid)  # stays WARP frontmost
     ui = _ui(vfp, tmp_path, vm=True)
