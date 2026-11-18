@@ -457,7 +457,7 @@ there are about 40 times slower than on a local disk, which inflates rescan and 
 Phase A of running Android apps from Warpium: devices, AVDs, running an app module and a native
 Logcat pane. The emulator
 runs in its own window; embedding it in a pane (and mirroring physical devices) is phase B, see
-[docs/warpium/research/android-emulator-embedding.md](docs/warpium/research/android-emulator-embedding.md).
+[docs/warpium/research/embedded-emulator.md](docs/warpium/research/embedded-emulator.md).
 Fork-only code lives in `crates/warpium_android` (protoc-free, unit-tested with
 `cargo test -p warpium_android` against a scripted fake adb server and binary logcat fixtures),
 `app/src/warpium/android.rs` (`AndroidModel`: SDK, device list, selection, AVDs),
