@@ -927,10 +927,10 @@ pub struct PaneGroup {
     /// Pane with an open agent-assisted environment modal (rendered at tab level).
     pane_with_open_agent_assisted_environment_modal: Option<PaneId>,
 
-    /// Directory the user explicitly opened this tab in (e.g. from the Project Explorer's "Open
-    /// in new tab"). It is shown as the explorer root instead of the enclosing repository root
-    /// while the tab's paths stay inside it.
-    pinned_explorer_root: Option<PathBuf>,
+    /// Warpium: the tab's project root. While locked, the Project Explorer, project toolbar, code
+    /// index, global search and code review use its folders instead of following the tab's
+    /// terminals (see `warpium_project_root`).
+    project_root: warpium_project_root::ProjectRoot,
     /// If the left panel is open for this pane group
     pub left_panel_open: bool,
     /// If the right panel is open for this pane group
@@ -3229,7 +3229,7 @@ impl PaneGroup {
             pane_with_open_auth_secret_delete_confirmation_dialog: None,
             pane_with_open_agent_assisted_environment_modal: None,
             right_panel_open: false,
-            pinned_explorer_root: None,
+            project_root: Default::default(),
             left_panel_open: false,
             is_right_panel_maximized: false,
             pending_ambient_agent_conversation_restorations: HashMap::new(),
@@ -4348,12 +4348,14 @@ impl PaneGroup {
         }
     }
 
-    pub fn pinned_explorer_root(&self) -> Option<&PathBuf> {
-        self.pinned_explorer_root.as_ref()
+    /// Warpium: the tab's project root, the single source of truth for which folders make up
+    /// the tab's project.
+    pub fn project_root(&self) -> &warpium_project_root::ProjectRoot {
+        &self.project_root
     }
 
-    pub fn set_pinned_explorer_root(&mut self, directory: PathBuf) {
-        self.pinned_explorer_root = Some(directory);
+    pub fn set_project_root(&mut self, project_root: warpium_project_root::ProjectRoot) {
+        self.project_root = project_root;
     }
 
     pub fn set_left_panel_open(&mut self, is_open: bool, ctx: &mut ViewContext<Self>) {

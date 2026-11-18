@@ -84,9 +84,9 @@ pub struct TabSnapshot {
     pub group_id: Option<TabGroupId>,
     /// True when this tab is pinned to the front of the tab list.
     pub pinned: bool,
-    /// Directory shown as this tab's Project Explorer root instead of the enclosing repository
-    /// root (see `PaneGroup::pinned_explorer_root`).
-    pub pinned_explorer_root: Option<PathBuf>,
+    /// Warpium: the tab's project root, following its terminals or locked to folders (see
+    /// `PaneGroup::project_root`).
+    pub project_root: warpium_project_root::ProjectRoot,
 }
 
 impl TabSnapshot {

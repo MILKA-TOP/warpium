@@ -15610,6 +15610,7 @@ dependencies = [
  "warp_web_event_bus",
  "warpium_android",
  "warpium_bottom_panel",
+ "warpium_project_root",
  "warpium_project_toolbar",
  "warpium_self_update",
  "warpium_upstream_check",
@@ -16410,6 +16411,13 @@ dependencies = [
 [[package]]
 name = "warpium_bottom_panel"
 version = "0.1.0"
+
+[[package]]
+name = "warpium_project_root"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "warpium_project_toolbar"
