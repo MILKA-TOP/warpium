@@ -93,6 +93,7 @@ warpium_self_update = { path = "crates/warpium_self_update" }
 warpium_upstream_check = { path = "crates/warpium_upstream_check" }
 code_index = { path = "crates/code_index" }
 warpium_android = { path = "crates/warpium_android" }
+warpium_agent_mcp = { path = "crates/warpium_agent_mcp" }
 warp_core = { path = "crates/warp_core" }
 warp_editor = { path = "crates/editor" }
 warp_errors = { path = "crates/warp_errors" }

@@ -11,7 +11,6 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use code_index::SearchScope;
 use futures::channel::oneshot;
 use warp_core::r#async::debounce;
 use warp_core::ui::appearance::Appearance;
@@ -1353,12 +1352,10 @@ fn format_entry(entry: &LogEntry) -> String {
 /// Files of the classes a frame names, most specific class first.
 fn class_files_for_frame(frame: &StackFrame, index: &code_index::CodeIndex) -> Vec<PathBuf> {
     for name in frame.lookup_names() {
-        let simple = name.rsplit('.').next().unwrap_or(&name);
         let files: Vec<PathBuf> = index
-            .search(simple, SearchScope::Types, 50)
+            .types_named(&name)
             .into_iter()
-            .filter(|result| result.symbol.qualified_name() == name)
-            .map(|result| index.abs_path(&result.symbol.rel_path))
+            .map(|symbol| index.abs_path(&symbol.rel_path))
             .collect();
         if !files.is_empty() {
             return files;

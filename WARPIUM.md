@@ -466,7 +466,8 @@ claude mcp add code-index -- "$PWD/target/release/warpium-code-index" mcp --root
 target/release/warpium-code-index search --root /path/to/project --types UVM
 ```
 
-Not done yet: shipping the binary in `Warpium.app` and registering it in Warpium's MCP settings.
+The binary ships in `Warpium.app/Contents/MacOS/` and "Install MCP servers for AI agents" registers
+it with Claude Code, Codex, Kimi Code or arc (see [MCP servers for coding agents](#mcp-servers-for-coding-agents)).
 
 ### Benchmark (phase 0)
 
@@ -601,6 +602,83 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
   (both open the pane's device menu) and "Enable/Disable Android tools (devices, logcat, run)",
   which toggles `warpium.android` (default on, OSS channel only).
 
+## MCP servers for coding agents
+
+Warpium ships two stdio MCP servers next to its executable (`Warpium.app/Contents/MacOS/`, built by
+`script/macos/bundle` for the `oss` channel and checked by the macOS CI job): `warpium-code-index`
+(above) and `warpium-logcat`, which lets an agent read the device logs of the app it is fixing.
+
+### `warpium-logcat`
+
+Crate `crates/warpium_logcat_mcp` (protoc-free; `cargo test -p warpium_logcat_mcp`), reusing
+`warpium_android`'s adb client, `LogBuffer` and stack-frame parsing and `code_index` for frames.
+
+```text
+warpium-logcat mcp [--root DIR] [--adb PATH]
+```
+
+`--root` is the Android project (stack-frame resolution, SDK lookup through `local.properties`);
+without it the current directory is used when it is a Gradle build. `ANDROID_SERIAL` picks the
+default device, `ANDROID_ADB_SERVER_PORT` the adb server.
+
+- **Capture.** Started lazily per device on the first call that needs it: a background logcat
+  stream into a 100k-entry in-memory ring (`LogBuffer`), seeded with the device's recent backlog,
+  so `since` queries work. Reconnects don't repeat the replayed backlog. Package scoping tracks
+  which process owned each pid over which stretch of the stream (ActivityManager start/death
+  lines, `ps` for an app already running), so it follows restarts and leaves out a reused pid.
+  A call runs to completion before the next request is read, so `wait_for_log` holds the server
+  for up to its timeout.
+- **Tools.** `list_devices` (serial, kind, state, model, API); `get_logs` (device, package,
+  `min_level`, `tag` with `-Tag` excludes, `text` or `regex`, `since` as `2m`/`90s`/a timestamp/
+  `mark`, `limit` default 200, at most 2000; newest last, with a `truncated` flag); `get_crashes`
+  (FATAL EXCEPTION, ANR and native crash blocks with their stack traces, project frames resolved to
+  `path:line` through the code index); `wait_for_log` (blocks up to `timeout_s`, at most 120 s,
+  for a matching line that arrives after the call, or since `since`; returns it with context);
+  `clear_logs`, which only sets a mark (`since: "mark"` and the default of later calls), never
+  `logcat -c`.
+- **Privacy.** Log queries need `package` unless `all_packages: true` is passed; messages and
+  output are capped (8 KiB per line, 200 KiB per result); nothing is written to disk.
+
+### Warp's agent: `warpium.logcat_mcp`
+
+Setting `warpium.logcat_mcp` (default off, OSS channel only; Settings → Features → Warpium, or
+"Enable/Disable Logcat MCP server for Warp's agent" in the palette). While on, `app/src/warpium/agent_mcp.rs`
+keeps a `warpium-logcat` entry in Warp's global MCP config (`~/.warp-oss/.mcp.json`) pointing at
+the bundled binary with `--root` of the project toolbar's project at the time it was toggled
+(kept when no project is open); turning it off removes the entry. Other servers in the file are
+never touched.
+
+### Installing into other agents
+
+"Install MCP servers for AI agents (Logcat, code index)" (palette, or **Install** next to the
+setting) writes both servers, user-triggered only; "Uninstall …" removes them. The logic is
+generic over a list of `{name, command, args}` servers in `crates/warpium_agent_mcp`
+(`cargo test -p warpium_agent_mcp`):
+
+- **arc project** (the project root has `.arc/`): only `<root>/.arc/private/mcp.json`
+  (`{"mcpServers": …}`), arc's git-ignored private layer, where machine-specific absolute paths
+  belong (arc warns about literal values in committed layers). arc reads it when it starts an
+  agent, so agents launched through `arc` pick the servers up on their next run; harness folders
+  (`.claude/`, `.kimi-code/`, Codex config) are left to arc.
+- **Otherwise**, each agent found (CLI on `PATH` or the usual install dirs, or its config dir):
+  Claude Code in the project's local scope (`projects.<root>.mcpServers` in `~/.claude.json`, via
+  `claude mcp add/remove --scope local` when the CLI is found), user scope without a project;
+  Codex `[mcp_servers.<name>]` in `$CODEX_HOME/config.toml` (default `~/.codex`, edited with
+  `toml_edit` so comments stay); Kimi Code `mcpServers` in `$KIMI_CODE_HOME/mcp.json` (default
+  `~/.kimi-code`, legacy `~/.kimi` when only that exists). Codex and Kimi configs are shared by all
+  projects, so their entries have no `--root`; the servers then work on the directory the agent
+  runs in.
+- Writes are idempotent (unchanged entries aren't rewritten), keep foreign entries and the file's
+  permissions, go through a temp file and rename, and leave unreadable configs alone with an
+  error. A toast lists where the servers were installed or removed.
+
+Manual route (e.g. a dev build without bundled binaries):
+
+```bash
+cargo build --release -p warpium_logcat_mcp -p code_index
+claude mcp add --scope local warpium-logcat -- "$PWD/target/release/warpium-logcat" mcp --root /path/to/project
+```
+
 ## Versioning
 
 A Warpium version is the upstream Warp release it is based on plus a fork counter as one
@@ -697,16 +775,26 @@ gated to `warpdotdev` and don't run here. Don't change whether workflows are ena
 - **Jobs:** a cheap `ubuntu-latest` preflight computes the version, the artifact name and the
   upstream base commit (`WARPIUM_UPSTREAM_BASE`, see
   [Upstream Warp update notification](#upstream-warp-update-notification)), then
-  the macOS job builds on `macos-15-intel` and cross-compiles arm64 with `--selfsign`
-  (about 1.5 h). It checks the plist version and the app icon in the built bundle.
+  the macOS job builds on `macos-15-intel` and cross-compiles arm64 with `--selfsign`.
+  It checks the plist version and the app icon in the built bundle.
+- **Profiles:** pull requests build a **debug** app (`script/bundle --debug`, Cargo `dev`
+  profile, no debuginfo): much faster than release, good enough for functional checks in the
+  test VM, but not for performance measurements, and `debug_assertions` are on (overflow
+  checks and `debug_assert!` can panic where a release build wouldn't). Master pushes build
+  **release** (ThinLTO, about 1.5 h) and **debug** in parallel; tags, releases and manual runs
+  build release only (a manual run can pick debug). Each profile has its own Rust cache, saved
+  only by master runs, so PR builds restore master's warm debug cache. Measure performance on
+  a master or release build.
 - **Dogfood features:** branch and PR builds add the cargo features in the bundle step's
   `DOGFOOD_FEATURES` (currently `warpium_bottom_panel`) so features in development can be tested
   from the artifact; release builds leave them out.
 - **Cross-compile caveat:** the Intel runner can't run the arm64 binary that generates
   `settings_schema.json`, so CI builds lack the bundled `modify-settings` agent skill. Local
   builds on Apple silicon include it.
-- **Artifacts:** `Warpium-<version>-<sha8>-macos-arm64` for branch and PR builds,
-  `Warpium-<version>-macos-arm64` for tags; each contains `Warpium-<version>-arm64.dmg`.
+- **Artifacts:** `Warpium-<version>-<sha8>-macos-arm64` for branch builds,
+  `Warpium-<version>-macos-arm64` for tags, with `-debug` appended for debug builds (so PR
+  artifacts end in `-debug`); each contains `Warpium-<version>-arm64.dmg`. The mac-mcp
+  `install_artifact` tool picks the release artifact of a master run unless told otherwise.
 - **Releases:** the `release` job runs for a `workflow_call` from Warpium Release (see
   [Releasing](#releasing)) or a pushed tag with the extra fork component
   (`v*.*.*.*.*.*.*_*.*`), so mirrored upstream tags can't publish a release. Preflight fails if

@@ -24,6 +24,13 @@ impl Workspace {
             .map(Path::to_path_buf)
     }
 
+    /// Points Warpium's MCP servers at the current project before registering or installing them.
+    pub(super) fn update_agent_mcp_project(&self, ctx: &mut ViewContext<Self>) {
+        let root = self.android_project_root(ctx);
+        crate::warpium::agent_mcp::AgentMcpModel::handle(ctx)
+            .update(ctx, |model, ctx| model.set_project_root(root, ctx));
+    }
+
     /// Opens the Logcat pane below the active pane, or shows the window's existing one, and
     /// optionally opens one of its menus. `focus` moves the focus to it.
     pub(super) fn open_android_logcat(

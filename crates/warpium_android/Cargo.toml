@@ -7,6 +7,10 @@ description = "Warpium: Android SDK discovery, an adb client over the adb server
 publish.workspace = true
 license.workspace = true
 
+[features]
+# Exposes the scripted fake adb server to other crates' tests.
+test-support = []
+
 [dependencies]
 chrono.workspace = true
 command.workspace = true

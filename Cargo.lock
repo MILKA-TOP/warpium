@@ -15608,6 +15608,7 @@ dependencies = [
  "warp_terminal",
  "warp_util",
  "warp_web_event_bus",
+ "warpium_agent_mcp",
  "warpium_android",
  "warpium_bottom_panel",
  "warpium_project_root",
@@ -16395,6 +16396,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "warpium_agent_mcp"
+version = "0.1.0"
+dependencies = [
+ "command",
+ "serde_json",
+ "tempfile",
+ "toml_edit 0.25.6+spec-1.1.0",
+]
+
+[[package]]
 name = "warpium_android"
 version = "0.1.0"
 dependencies = [
@@ -16411,6 +16422,20 @@ dependencies = [
 [[package]]
 name = "warpium_bottom_panel"
 version = "0.1.0"
+
+[[package]]
+name = "warpium_logcat_mcp"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "code_index",
+ "instant",
+ "log",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "warpium_android",
+]
 
 [[package]]
 name = "warpium_project_root"

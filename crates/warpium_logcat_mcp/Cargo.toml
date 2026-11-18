@@ -1,0 +1,25 @@
+[package]
+name = "warpium_logcat_mcp"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: an MCP server that lets coding agents read an Android app's device logs and crashes"
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "warpium-logcat"
+path = "src/bin/warpium_logcat.rs"
+
+[dependencies]
+chrono.workspace = true
+code_index.workspace = true
+instant.workspace = true
+log.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+warpium_android.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+warpium_android = { workspace = true, features = ["test-support"] }
