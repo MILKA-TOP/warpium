@@ -21,7 +21,11 @@ should stay free of this material.
 - To build, run and screenshot the app on the owner's real Mac, use the `warpium-mac` MCP
   server when it is connected (its tools are `mcp__warpium-mac__*`). It runs Warpium inside an
   isolated Tart macOS VM so testing never touches the owner's desktop. Its source is
-  `tools/mac-mcp/` (on the `claude/mac-mcp` branch until that is merged).
+  `tools/mac-mcp/` (on the `claude/mac-mcp` branch until that is merged). That VM is now
+  `muhtar-test`, the only VM on the owner's Mac, owned by lipt-mocker's `tools/mac-mcp`; the
+  Warpium server runs in it on 17654 next to the Muhtar server on 17655 (shared VM mode, see
+  `tools/mac-mcp/README.md`, "Using the Muhtar VM"). Don't test Warpium and Muhtar UI there
+  at the same time, and use CI artifacts rather than in-guest builds (disk).
 
 ## What is still shared with upstream's OSS build
 

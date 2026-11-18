@@ -11,12 +11,47 @@
 #
 # Re-running is safe: finished steps are detected and skipped. Settings: see
 # vm/common.sh (WARPIUM_VM_CPU, WARPIUM_VM_MEMORY_MB, WARPIUM_VM_IMAGE, ...).
+#
+# Shared VM mode (WARPIUM_VM_HOST=muhtar, saved for later runs; README "Using
+# the Muhtar VM"): steps 1-3 are skipped. The VM must exist and run (its owner's
+# scripts create and start it); this only checks that the owner's SSH key logs
+# in and runs vm/provision.sh. It never creates, clones or resizes a VM.
 source "$(dirname "$0")/common.sh"
 
 require_macos_arm64
 mkdir -p "$CONF_DIR" "$STATE_DIR"
 chmod 700 "$CONF_DIR"
+save_shared_mode # WARPIUM_VM_HOST / WARPIUM_VM_SHARED: saved for later runs, or removed
 vm_net_mode >/dev/null # validates WARPIUM_VM_NET early
+
+# --- shared VM mode ------------------------------------------------------------
+# The VM belongs to another project (README "Using the Muhtar VM"): never install
+# Tart, clone, resize, start or harden it, and never create a Warpium VM or golden
+# copy. Only check that its key logs in, then install the Warpium server.
+if [ "$SHARED_VM" = 1 ]; then
+  require_tart
+  step "Shared VM mode: using $VM_NAME (owned by $OWNER_SCRIPTS)"
+  vm_exists "$VM_NAME" || die "shared VM $VM_NAME does not exist; create it with $OWNER_SCRIPTS (setup.sh) first. This script never creates or clones a VM in shared mode"
+  require_key
+  require_vm_running
+  IP="$(vm_ip 60)" || die "no IP for $VM_NAME; see $VM_LOG and 'tart list'"
+  ok "$VM_NAME is at $IP"
+  check_vm_route "$IP"
+  step "Checking key-based SSH with $SSH_KEY"
+  wait_for_key_ssh "$IP" 15 ||
+    die "key SSH to $GUEST_USER@$IP with $SSH_KEY (known hosts $KNOWN_HOSTS, alias $HOST_KEY_ALIAS) fails; check that $OWNER_SCRIPTS set the VM up (its setup.sh) and that the VM is fully booted
+$(ssh_unreachable_hint)"
+  ok "key login works (the VM's SSH hardening is the owner's; not changed here)"
+  "$VM_DIR/provision.sh"
+  cat <<EOF
+
+${_B}Setup finished (shared VM $VM_NAME).${_N} Next steps (README "Using the Muhtar VM"):
+  1. Forward 127.0.0.1:$MCP_PORT:  vm/start.sh   (later: start the VM with $OWNER_SCRIPTS first)
+  2. Connect the container (only if it has no warpium-mac entry yet):  vm/print-client-config.sh
+No golden copy: vm/snapshot.sh and vm/reset.sh refuse in shared mode.
+EOF
+  exit 0
+fi
 # Picks the guest image and rejects hosts older than macOS 15 before
 # anything is installed.
 IMAGE="${WARPIUM_VM_IMAGE:-$(default_image)}"

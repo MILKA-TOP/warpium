@@ -12,13 +12,20 @@
 #
 # WARPIUM_VM_REUSE_HOST_TOKEN=1 copies the host's bearer token
 # (~/.config/warpium-mac-mcp/token) into the guest, so an existing
-# `claude mcp add warpium-mac ...` keeps working unchanged.
+# `claude mcp add warpium-mac ...` keeps working unchanged. In shared VM mode
+# (vm/common.sh) that is the default when the host token exists; set it to 0 to
+# keep the guest's own token.
+#
+# Shared VM mode touches only the Warpium files in the guest (~/warpium-mac-mcp,
+# ~/.config/warpium-mac-mcp, the dev.milka.warpium-mac-mcp.vm agent and the
+# server on its own port): the other project's server, shares and settings stay
+# as they are. Homebrew packages are only added (uv, git, gh), never removed.
 source "$(dirname "$0")/common.sh"
 
 require_macos_arm64
 require_tart
 require_key
-vm_running "$VM_NAME" || die "VM $VM_NAME is not running; run vm/start.sh (or vm/setup.sh)"
+require_vm_running
 IP="$(vm_ip 60)" || die "no IP for $VM_NAME; see $VM_LOG"
 wait_for_key_ssh "$IP" 30 || die "key SSH to $GUEST_USER@$IP fails; run vm/setup.sh"
 
@@ -52,7 +59,16 @@ rsync -a --delete \
   die "rsync failed"
 ok "copied"
 
-if [ "${WARPIUM_VM_REUSE_HOST_TOKEN:-0}" = "1" ]; then
+# Shared VM mode reuses the host token by default when there is one, so the
+# container's existing warpium-mac entry keeps working after the move.
+REUSE_TOKEN="${WARPIUM_VM_REUSE_HOST_TOKEN:-}"
+if [ -z "$REUSE_TOKEN" ]; then
+  REUSE_TOKEN=0
+  if [ "$SHARED_VM" = 1 ] && [ -f "$CONF_DIR/token" ]; then
+    REUSE_TOKEN=1
+  fi
+fi
+if [ "$REUSE_TOKEN" = "1" ]; then
   step "Copying the host's bearer token into the guest"
   [ -f "$CONF_DIR/token" ] || die "no host token at $CONF_DIR/token"
   guest_ssh "$IP" 'umask 077; mkdir -p ~/.config/warpium-mac-mcp && chmod 700 ~/.config/warpium-mac-mcp && cat > ~/.config/warpium-mac-mcp/token' \

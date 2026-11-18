@@ -26,6 +26,110 @@ print what they do. They need an Apple Silicon Mac, uv (`brew install uv`) and T
 **Status: written and syntax/shellcheck-tested, but not yet run on a real Mac.** Report the
 output of the failing step if something breaks.
 
+### Using the Muhtar VM (current setup: one VM for both projects)
+
+The owner's Mac runs **exactly one VM: `muhtar-test`**, the Muhtar test VM from lipt-mocker's
+`tools/mac-mcp` (the port of this tool for the Muhtar Compose Desktop app). The Warpium server
+runs inside it next to the Muhtar server: Muhtar on 17655, Warpium on **17654**, so the
+container's existing `warpium-mac` entry (`http://host.docker.internal:17654/mcp`, token from
+`~/.config/warpium-mac-mcp/token` on the host) keeps working. There is no `warpium-test` and
+no `warpium-test-golden` any more: each VM costs tens of GB on the Mac.
+
+In this *shared VM mode* lipt-mocker's scripts own the VM (create, start, stop, reset,
+snapshot, permissions, network). **Not yet run on a real Mac** (checked with `bash -n` and a
+Linux smoke test of the settings only). Warpium's scripts only install the Warpium server in it and
+open or close the 17654 forward; they never create, clone, start, stop or snapshot a VM:
+
+| Script | Shared VM mode |
+|---|---|
+| `setup.sh` | no Tart install, clone, resize or hardening: checks that Muhtar's key (`~/.config/muhtar-mac-mcp/vm_ed25519`, known hosts `vm_known_hosts`, alias `muhtar-test`) logs in, then runs `provision.sh`, and saves the mode in `~/.config/warpium-mac-mcp/vm/shared_vm` |
+| `provision.sh` | installs only the Warpium files (`~/warpium-mac-mcp`, `~/.config/warpium-mac-mcp`, agent `dev.milka.warpium-mac-mcp.vm`) plus uv/git/gh; copies the host token by default |
+| `start.sh` | requires the VM to run (prints lipt-mocker's start command otherwise), restarts the Warpium agent if it doesn't answer, opens the 17654 forward |
+| `stop.sh` | closes the 17654 forward only; the VM keeps running |
+| `reset.sh`, `snapshot.sh`, `grant-permissions.sh`, `fix-subnet.sh` | refuse, pointing at lipt-mocker's scripts |
+
+Run on the Mac, in this order. The lipt-mocker checkout needs the change that stops its
+`vm/provision.sh` from deleting the Warpium server (branch `chore/mac-mcp-coexist-warpium`,
+or a later commit that contains it): without it, the next Muhtar `provision.sh` or `setup.sh`
+removes the Warpium server again.
+
+```sh
+# 0. Leftovers: only muhtar-test should remain
+tart list
+tart delete warpium-test-golden          # only if it is still listed
+tart delete muhtar-test-golden           # only if it is still listed (see "No golden copies")
+tart delete warpium-test                 # only if it is still listed
+df -h ~                                  # real free space (APFS clones share blocks)
+
+# 1. lipt-mocker: the VM and the Muhtar server (its own shares and network flags)
+cd ~/path/to/lipt-mocker
+git checkout chore/mac-mcp-coexist-warpium
+cd tools/mac-mcp
+vm/start.sh                              # starts muhtar-test + Muhtar forward 17655
+
+# 2. Warpium: install the server into muhtar-test (once; the mode is saved)
+cd ~/src/warpium-mcp
+git fetch origin && git checkout claude/mac-mcp-muhtar-vm   # until it is merged
+cd tools/mac-mcp
+WARPIUM_VM_HOST=muhtar vm/setup.sh       # checks the Muhtar key, provisions, saves shared mode
+vm/start.sh                              # Warpium forward 127.0.0.1:17654
+vm/gh-token.sh                           # once per VM: read-only gh token for install_artifact
+```
+
+Daily use afterwards (no environment variables: the saved mode applies):
+
+```sh
+cd ~/path/to/lipt-mocker/tools/mac-mcp && vm/start.sh   # VM first
+cd ~/src/warpium-mcp/tools/mac-mcp && vm/start.sh       # then the Warpium forward
+cd ~/src/warpium-mcp/tools/mac-mcp && vm/stop.sh        # Warpium forward only
+cd ~/path/to/lipt-mocker/tools/mac-mcp && vm/stop.sh    # shuts the VM down
+```
+
+After a `git pull` that changes this tool: `vm/provision.sh` (VM running). After
+`muhtar-test` is recreated (see "No golden copies" below), run `vm/setup.sh` again. To go
+back to a Warpium-owned VM:
+`WARPIUM_VM_SHARED=0 vm/setup.sh` (deletes the saved mode, then creates `warpium-test`: ~50 GB).
+
+Notes:
+
+- **Disk.** `muhtar-test` is a 50 GB sparse image (~25-30 GB used at first, more with Gradle
+  caches). The Warpium part adds a few hundred MB in the guest: its venv, gh, **one** installed
+  `Warpium.app` (replaced on each install) and **one** cached `.dmg` (`install_artifact`
+  deletes earlier downloads first). Use CI artifacts only in this VM: the `build` tool would
+  install a Rust toolchain and a `target/` of tens of GB in the guest. `du` on
+  `~/.tart/vms/*` counts shared blocks once per clone, so trust `df -h ~`; the image download
+  cache is in `~/.tart/cache` (`tart prune --entries=caches` empties it).
+- **No golden copies.** `warpium-test-golden` and `muhtar-test-golden` (~30 GB each on the
+  owner's Mac) are deleted, and nothing here depends on them. So there is no quick reset:
+  lipt-mocker's `vm/reset.sh` refuses without its golden copy, and its `setup.sh` no longer
+  finds `warpium-test-golden` to clone. Recovery when `muhtar-test` breaks: in lipt-mocker,
+  `vm/stop.sh; tart delete muhtar-test; vm/setup.sh` (clones the vanilla image: ~24 GB
+  download, new SSH host key, which its setup.sh re-pins in the shared known hosts file), then
+  its `vm/grant-permissions.sh` (Terminal: Screen Recording + Accessibility), then here
+  `vm/setup.sh` and `vm/gh-token.sh` again. **Don't run `vm/snapshot.sh` routinely** in
+  lipt-mocker: it creates a second VM that grows to ~30 GB as the two drift apart.
+- **CPU/RAM.** Muhtar's defaults (4 vCPU, 8 GiB) fit one test session at a time. Both servers
+  idle cost little; a Warpium app, a Muhtar JVM and a Gradle build at once may not fit in
+  8 GiB. Raise it with lipt-mocker: `vm/stop.sh`, then `MUHTAR_VM_MEMORY_MB=12288 vm/setup.sh`.
+- **Permissions.** Both servers are started the same way: a launchd agent in the auto-login
+  GUI session opens their `serve.command` in **Terminal.app**, so both use Terminal's Screen
+  Recording and Accessibility grants (`muhtar-test` came from the old Warpium golden VM, which
+  had them). `provision.sh` prints the Warpium server's own permission record; if one is
+  missing, use lipt-mocker's `vm/grant-permissions.sh`.
+- **One screen, one user.** Both servers drive the same guest display as the same `admin`
+  user. Don't run Warpium and Muhtar UI tests at the same time (focus, screenshots and clicks
+  would interfere). Muhtar's proxy can change the guest's system proxy, which Warpium's
+  network then uses. Code run by either agent (Warpium artifacts, Gradle build scripts) can
+  read both projects' files in the guest, including both bearer tokens, the guest's gh token
+  and Muhtar's Nexus credentials: the VM is a boundary towards your Mac, not between the two
+  projects.
+- **Other VM owners.** `WARPIUM_VM_SHARED=1` with `WARPIUM_VM_NAME`, `WARPIUM_VM_SSH_KEY`,
+  `WARPIUM_VM_KNOWN_HOSTS` (and optionally `WARPIUM_VM_HOST_KEY_ALIAS`,
+  `WARPIUM_VM_OWNER_STATE_DIR`, `WARPIUM_VM_OWNER_START`) works for any VM; see `vm/common.sh`.
+
+The rest of this section describes the Warpium-owned VM (`warpium-test`), which is not used
+on the owner's Mac any more.
+
 ### Cost
 
 | | Default | Override |
