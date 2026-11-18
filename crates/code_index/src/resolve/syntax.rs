@@ -702,7 +702,9 @@ pub(crate) fn supertypes<'tree>(language: Language, class: Node<'tree>) -> Vec<N
             .filter_map(|specifier| {
                 named_children(specifier).find_map(|child| match child.kind() {
                     "user_type" => Some(child),
-                    "constructor_invocation" => child_of_kind(child, "user_type"),
+                    "constructor_invocation" | "explicit_delegation" => {
+                        child_of_kind(child, "user_type")
+                    }
                     _ => None,
                 })
             })

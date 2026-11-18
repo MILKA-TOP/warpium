@@ -2267,6 +2267,11 @@ impl LocalCodeEditorView {
                     CodeNavigationKind::Definition,
                 ))
                 .into_item(),
+            MenuItemFields::new("Go to implementation")
+                .with_on_select_action(LocalCodeEditorAction::CodeIndexNavigate(
+                    CodeNavigationKind::Implementations,
+                ))
+                .into_item(),
             MenuItemFields::new("Find usages")
                 .with_on_select_action(LocalCodeEditorAction::CodeIndexNavigate(
                     CodeNavigationKind::Usages,

@@ -9,6 +9,7 @@
 mod cache;
 mod extract;
 pub mod fuzzy;
+mod hierarchy;
 mod index;
 mod interner;
 mod layout;
@@ -27,6 +28,7 @@ use instant::Instant;
 
 pub use cache::{default_snapshot_path, snapshot_path_in};
 pub use fuzzy::MatchTier;
+pub use hierarchy::ImplementationsResult;
 pub use index::{
     CodeIndex, IndexStats, PendingUpdate, SearchResult, SearchScope, SymbolInfo, UpdateStats,
     default_threads, prepare_changes, refresh_in_batches,

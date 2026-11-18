@@ -9,7 +9,7 @@
 //! cold full index, snapshot save, warm start (snapshot load, and load + rescan), query latency
 //! (p50/p95/max over a fixed query list plus names sampled from the index), Go to Definition on
 //! references sampled from the corpus, Find Usages of sampled declarations, and incremental update
-//! after an edit. `--name` labels the output instead of the root path (use it for private
+//! after an edit, and Go to Implementation on the same declarations. `--name` labels the output instead of the root path (use it for private
 //! projects so their paths stay out of logs).
 
 use std::path::{Path, PathBuf};
@@ -176,8 +176,9 @@ fn run(root: &Path, cache: &Path, label: &str, threads: usize) {
     let stats = index.stats();
     let peak_after_cold = peak_rss();
     println!(
-        "files {}  symbols {}  strings {}  heap≈{:.1} MB",
+        "files {}  lines {}  symbols {}  strings {}  heap≈{:.1} MB",
         stats.files,
+        source_lines(&index),
         stats.symbols,
         stats.strings,
         mb(stats.heap_bytes as u64)
@@ -258,6 +259,9 @@ fn run(root: &Path, cache: &Path, label: &str, threads: usize) {
 
     let mut latencies = Vec::new();
     let mut usage_counts = Vec::new();
+    let mut via_counts = Vec::new();
+    let mut implementation_latencies = Vec::new();
+    let mut implementation_counts = Vec::new();
     for target in usage_targets(&index) {
         let Ok(text) = std::fs::read_to_string(index.abs_path(&target.rel_path)) else {
             continue;
@@ -270,9 +274,19 @@ fn run(root: &Path, cache: &Path, label: &str, threads: usize) {
         let started = Instant::now();
         let result = index.find_usages(&file, target.name_pos, USAGES_LIMIT, threads);
         latencies.push(started.elapsed());
-        usage_counts.push(result.map_or(0, |result| result.usages.len()));
+        usage_counts.push(result.as_ref().map_or(0, |result| result.usages.len()));
+        via_counts.push(result.map_or(0, |result| {
+            result.usages.iter().filter(|usage| usage.via).count()
+        }));
+
+        let started = Instant::now();
+        let result = index.find_implementations(&file, target.name_pos);
+        implementation_latencies.push(started.elapsed());
+        implementation_counts.push(result.map_or(0, |result| result.implementations.len()));
     }
     usage_counts.sort_unstable();
+    via_counts.sort_unstable();
+    implementation_counts.sort_unstable();
     println!(
         "usages               {}  ({} declarations, median {} usages, max {})",
         percentiles(&mut latencies),
@@ -282,6 +296,17 @@ fn run(root: &Path, cache: &Path, label: &str, threads: usize) {
             .copied()
             .unwrap_or(0),
         usage_counts.last().copied().unwrap_or(0)
+    );
+    println!(
+        "  of which via overrides: median {}, max {}",
+        median(&via_counts),
+        via_counts.last().copied().unwrap_or(0)
+    );
+    println!(
+        "implementations      {}  (median {}, max {})",
+        percentiles(&mut implementation_latencies),
+        median(&implementation_counts),
+        implementation_counts.last().copied().unwrap_or(0)
     );
 
     let mut updates = Vec::new();
@@ -392,6 +417,20 @@ fn usage_targets(index: &CodeIndex) -> Vec<code_index::SymbolInfo> {
         targets.extend(found.into_iter().step_by(step).take(USAGE_TARGETS));
     }
     targets
+}
+
+fn median(sorted: &[usize]) -> usize {
+    sorted.get(sorted.len() / 2).copied().unwrap_or(0)
+}
+
+/// Lines of indexed source, read outside any timing.
+fn source_lines(index: &CodeIndex) -> usize {
+    index
+        .stamps()
+        .into_keys()
+        .filter_map(|rel_path| std::fs::read(index.abs_path(&rel_path)).ok())
+        .map(|bytes| bytes.iter().filter(|byte| **byte == b'\n').count())
+        .sum()
 }
 
 fn percent(part: usize, whole: usize) -> f64 {

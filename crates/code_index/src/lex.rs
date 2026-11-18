@@ -14,10 +14,10 @@ enum Mode {
 
 /// Calls `found(identifier, byte_offset)` for every identifier in code, in source order.
 /// Kotlin backtick identifiers are reported without the backticks.
-pub(crate) fn for_each_identifier(
-    source: &str,
+pub(crate) fn for_each_identifier<'s>(
+    source: &'s str,
     language: Language,
-    mut found: impl FnMut(&str, usize),
+    mut found: impl FnMut(&'s str, usize),
 ) {
     let bytes = source.as_bytes();
     let templates = language == Language::Kotlin;

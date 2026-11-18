@@ -2,9 +2,9 @@ use arborium_tree_sitter::Node;
 
 use super::{
     RawFile, RawImport, RawSymbol, child_of_kind, children, compact_text, join_container,
-    named_children, position, text,
+    named_children, position, push_supertypes, text,
 };
-use crate::model::{SymbolKind, Visibility, flags};
+use crate::model::{Language, SymbolKind, Visibility, flags};
 
 pub(super) fn extract(root: Node, source: &[u8], file: &mut RawFile) {
     for child in named_children(root) {
@@ -32,7 +32,7 @@ pub(super) fn extract(root: Node, source: &[u8], file: &mut RawFile) {
             _ => {}
         }
     }
-    visit_members(root, "", false, source, &mut file.symbols);
+    visit_members(root, "", false, source, file);
 }
 
 fn type_kind(kind: &str) -> Option<SymbolKind> {
@@ -53,7 +53,7 @@ fn visit_members(
     container: &str,
     in_interface: bool,
     source: &[u8],
-    out: &mut Vec<RawSymbol>,
+    out: &mut RawFile,
 ) {
     // Interface members are implicitly public; everything else defaults to package-private.
     let default_visibility = if in_interface {
@@ -70,7 +70,7 @@ fn visit_members(
         match node_kind {
             "method_declaration" | "annotation_type_element_declaration" => {
                 if let Some(name) = node.child_by_field_name("name") {
-                    out.push(symbol(
+                    out.symbols.push(symbol(
                         node,
                         name,
                         SymbolKind::Function,
@@ -82,7 +82,7 @@ fn visit_members(
             }
             "constructor_declaration" | "compact_constructor_declaration" => {
                 if let Some(name) = node.child_by_field_name("name") {
-                    out.push(symbol(
+                    out.symbols.push(symbol(
                         node,
                         name,
                         SymbolKind::Constructor,
@@ -98,7 +98,7 @@ fn visit_members(
                         continue;
                     }
                     if let Some(name) = declarator.child_by_field_name("name") {
-                        out.push(symbol(
+                        out.symbols.push(symbol(
                             node,
                             name,
                             SymbolKind::Property,
@@ -111,7 +111,7 @@ fn visit_members(
             }
             "enum_constant" => {
                 if let Some(name) = node.child_by_field_name("name") {
-                    out.push(symbol(
+                    out.symbols.push(symbol(
                         node,
                         name,
                         SymbolKind::EnumEntry,
@@ -135,21 +135,28 @@ fn visit_type(
     container: &str,
     default_visibility: Visibility,
     source: &[u8],
-    out: &mut Vec<RawSymbol>,
+    out: &mut RawFile,
 ) {
     let Some(name) = node.child_by_field_name("name") else {
         return;
     };
     let symbol = symbol(node, name, kind, default_visibility, container, source);
     let inner = join_container(container, &symbol.name);
-    out.push(symbol);
+    push_supertypes(
+        Language::Java,
+        node,
+        out.symbols.len(),
+        source,
+        &mut out.supertypes,
+    );
+    out.symbols.push(symbol);
 
     if kind == SymbolKind::Record
         && let Some(parameters) = node.child_by_field_name("parameters")
     {
         for parameter in named_children(parameters) {
             if let Some(param_name) = parameter.child_by_field_name("name") {
-                out.push(self::symbol(
+                out.symbols.push(self::symbol(
                     parameter,
                     param_name,
                     SymbolKind::Property,
@@ -174,7 +181,7 @@ fn symbol(
     container: &str,
     source: &[u8],
 ) -> RawSymbol {
-    let (visibility, symbol_flags) = modifiers(node, default_visibility);
+    let (visibility, symbol_flags) = modifiers(node, default_visibility, source);
     RawSymbol {
         name: text(name, source).to_owned(),
         kind,
@@ -188,7 +195,7 @@ fn symbol(
     }
 }
 
-fn modifiers(node: Node, default_visibility: Visibility) -> (Visibility, u8) {
+fn modifiers(node: Node, default_visibility: Visibility, source: &[u8]) -> (Visibility, u8) {
     let mut visibility = default_visibility;
     let mut symbol_flags = 0;
     if let Some(modifiers) = child_of_kind(node, "modifiers") {
@@ -198,6 +205,13 @@ fn modifiers(node: Node, default_visibility: Visibility) -> (Visibility, u8) {
                 "protected" => visibility = Visibility::Protected,
                 "private" => visibility = Visibility::Private,
                 "static" => symbol_flags |= flags::STATIC,
+                "marker_annotation"
+                    if modifier
+                        .child_by_field_name("name")
+                        .is_some_and(|name| text(name, source) == "Override") =>
+                {
+                    symbol_flags |= flags::OVERRIDE;
+                }
                 _ => {}
             }
         }

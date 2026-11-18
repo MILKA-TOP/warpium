@@ -1,5 +1,5 @@
-//! Go to Definition and Find Usages requests from a Kotlin or Java editor, answered by the code
-//! index (see `code_index`).
+//! Go to Definition, Go to Implementation and Find Usages requests from a Kotlin or Java
+//! editor, answered by the code index (see `code_index`).
 
 #[cfg(not(target_family = "wasm"))]
 use std::path::Path;
@@ -13,6 +13,8 @@ pub(crate) const CODE_NAVIGATION_CONTEXT_FLAG: &str = "WarpiumCodeNavigation";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CodeNavigationKind {
     Definition,
+    /// Subtypes of a type, overrides of a member, `actual`s of an `expect` declaration.
+    Implementations,
     Usages,
 }
 
