@@ -4472,6 +4472,7 @@ impl PaneGroup {
             | IPaneType::GetStarted
             | IPaneType::NetworkLog
             | IPaneType::WarpiumLogcat
+            | IPaneType::WarpiumDevices
             | IPaneType::DeferredPlaceholder => TypedPane::Other,
             #[cfg(test)]
             IPaneType::Dummy => TypedPane::Other,

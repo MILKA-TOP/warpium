@@ -9,14 +9,20 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Poll},
+    time::Duration,
 };
 
 use bytes::Bytes;
-use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
+use tokio::{
+    net::TcpListener,
+    sync::{oneshot, watch},
+    task::JoinHandle,
+};
 use tokio_stream::{Stream, StreamExt, wrappers::TcpListenerStream};
 use tonic::{Request, Response, Status, Streaming, codegen::BoxStream, transport::Server};
 
 use crate::{
+    discovery::{GrpcToken, RunningEmulator},
     geometry::{DisplayRotation, DisplaySize},
     proto::{
         Image, ImageFormat, InputEvent, KeyboardEvent, PhysicalModelValue, Rotation, VmRunState,
@@ -38,6 +44,8 @@ pub struct FakeEmulatorConfig {
     pub rotation: DisplayRotation,
     /// Frames each `streamScreenshot` call sends before it idles (as on a static screen).
     pub frames_per_stream: u32,
+    /// Pause between frames, like a guest rendering at a fixed rate; `None` sends them at once.
+    pub frame_interval: Option<Duration>,
 }
 
 impl Default for FakeEmulatorConfig {
@@ -50,6 +58,7 @@ impl Default for FakeEmulatorConfig {
             },
             rotation: DisplayRotation::Portrait,
             frames_per_stream: 3,
+            frame_interval: None,
         }
     }
 }
@@ -70,6 +79,9 @@ struct FakeState {
     config: FakeEmulatorConfig,
     recorded: Mutex<Recorded>,
     active_screenshot_streams: AtomicUsize,
+    /// Set when the fake stops, so open streams fail the way a dying emulator's connection does
+    /// (the server's graceful shutdown would otherwise wait for them forever).
+    stopped: watch::Sender<bool>,
 }
 
 impl FakeState {
@@ -96,6 +108,7 @@ impl FakeEmulator {
             config,
             recorded: Mutex::default(),
             active_screenshot_streams: AtomicUsize::new(0),
+            stopped: watch::Sender::new(false),
         });
         let auth_state = state.clone();
         let service = EmulatorControllerServer::with_interceptor(
@@ -164,6 +177,7 @@ impl FakeEmulator {
     }
 
     async fn stop_server(&mut self) {
+        self.state.stopped.send_replace(true);
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -174,8 +188,69 @@ impl FakeEmulator {
     }
 }
 
+/// A [`FakeEmulator`] serving from a thread of its own, for callers without a tokio runtime (such
+/// as the app's debug commands). Dropping it stops the server.
+pub struct FakeEmulatorThread {
+    entry: RunningEmulator,
+    shutdown: Option<oneshot::Sender<()>>,
+}
+
+impl FakeEmulatorThread {
+    /// Starts a fake that discovery would list as `emulator-<console_port>`.
+    pub fn spawn(config: FakeEmulatorConfig, console_port: u16) -> std::io::Result<Self> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let token = config.token.clone();
+        let (port_tx, port_rx) = std::sync::mpsc::channel();
+        let (shutdown, shutdown_rx) = oneshot::channel::<()>();
+        std::thread::Builder::new()
+            .name(format!("warpium-fake-emulator-{console_port}"))
+            .spawn(move || {
+                runtime.block_on(async move {
+                    let fake = FakeEmulator::start(config).await;
+                    let _ = port_tx.send(fake.grpc_port());
+                    let _ = shutdown_rx.await;
+                    fake.stop().await;
+                });
+            })?;
+        let grpc_port = port_rx
+            .recv()
+            .map_err(|_| std::io::Error::other("the fake emulator failed to start"))?;
+        Ok(Self {
+            entry: RunningEmulator {
+                pid: std::process::id(),
+                console_port,
+                adb_port: None,
+                grpc_port,
+                grpc_token: token.map(GrpcToken::new),
+                grpc_uses_tls: false,
+                avd_name: Some(format!("Fake_AVD_{console_port}")),
+                avd_dir: None,
+                emulator_version: None,
+                command_line: Some("emulator -avd Fake_AVD".to_owned()),
+            },
+            shutdown: Some(shutdown),
+        })
+    }
+
+    /// How discovery would describe this fake.
+    pub fn entry(&self) -> &RunningEmulator {
+        &self.entry
+    }
+}
+
+impl Drop for FakeEmulatorThread {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+    }
+}
+
 impl Drop for FakeEmulator {
     fn drop(&mut self) {
+        self.state.stopped.send_replace(true);
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -270,12 +345,38 @@ fn fake_frame(width: u32, height: u32, rotation: DisplayRotation, seq: u32) -> I
 struct CountedStream {
     inner: BoxStream<Image>,
     state: Arc<FakeState>,
+    stopped: Pin<Box<dyn Future<Output = ()> + Send>>,
+    ended: bool,
+}
+
+impl CountedStream {
+    fn new(inner: BoxStream<Image>, state: Arc<FakeState>) -> Self {
+        state
+            .active_screenshot_streams
+            .fetch_add(1, Ordering::SeqCst);
+        let mut stopped = state.stopped.subscribe();
+        Self {
+            inner,
+            state,
+            stopped: Box::pin(async move {
+                let _ = stopped.wait_for(|stopped| *stopped).await;
+            }),
+            ended: false,
+        }
+    }
 }
 
 impl Stream for CountedStream {
     type Item = Result<Image, Status>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.ended {
+            return Poll::Ready(None);
+        }
+        if self.stopped.as_mut().poll(cx).is_ready() {
+            self.ended = true;
+            return Poll::Ready(Some(Err(Status::unavailable("the emulator exited"))));
+        }
         self.inner.as_mut().poll_next(cx)
     }
 }
@@ -359,15 +460,18 @@ impl EmulatorController for FakeService {
         let (width, height) =
             fake_frame_size(config.display, config.rotation, format.width, format.height);
         let rotation = config.rotation;
+        let frame_interval = config.frame_interval;
         let frames = tokio_stream::iter(1..=config.frames_per_stream)
-            .map(move |seq| Ok(fake_frame(width, height, rotation, seq)))
+            .then(move |seq| async move {
+                if let Some(interval) = frame_interval.filter(|_| seq > 1) {
+                    tokio::time::sleep(interval).await;
+                }
+                Ok(fake_frame(width, height, rotation, seq))
+            })
             .chain(tokio_stream::pending());
-        self.state
-            .active_screenshot_streams
-            .fetch_add(1, Ordering::SeqCst);
-        Ok(Response::new(Box::pin(CountedStream {
-            inner: Box::pin(frames),
-            state: self.state.clone(),
-        })))
+        Ok(Response::new(Box::pin(CountedStream::new(
+            Box::pin(frames),
+            self.state.clone(),
+        ))))
     }
 }
