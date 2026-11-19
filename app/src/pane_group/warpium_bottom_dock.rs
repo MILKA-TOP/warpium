@@ -137,7 +137,7 @@ type ChipFingerprint = (PaneId, warpium_bottom_panel::SubTabStatus, bool);
 
 /// The bottom panel of one tab.
 pub(super) struct WarpiumBottomDock {
-    model: BottomDock<PaneId>,
+    pub(super) model: BottomDock<PaneId>,
     height: ResizableStateHandle,
     chip_states: HashMap<PaneId, ChipStates>,
     buttons: DockButtons,

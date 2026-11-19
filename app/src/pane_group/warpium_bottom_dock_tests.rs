@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use settings::Setting as _;
 use warpium_bottom_panel::{DockOrigin, EntryKind, PanelSnapshot};
 use warpui::{App, AppContext, EntityId, SingletonEntity as _, ViewContext};
 
