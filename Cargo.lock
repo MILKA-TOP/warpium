@@ -16508,6 +16508,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "warpium_git"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "command",
+ "instant",
+ "log",
+ "tempfile",
+]
+
+[[package]]
 name = "warpium_logcat_mcp"
 version = "0.1.0"
 dependencies = [

@@ -96,6 +96,7 @@ warpium_android = { path = "crates/warpium_android" }
 warpium_emulator = { path = "crates/warpium_emulator" }
 warpium_agent_mcp = { path = "crates/warpium_agent_mcp" }
 warpium_search_everywhere = { path = "crates/warpium_search_everywhere" }
+warpium_git = { path = "crates/warpium_git" }
 warp_core = { path = "crates/warp_core" }
 warp_editor = { path = "crates/editor" }
 warp_errors = { path = "crates/warp_errors" }
