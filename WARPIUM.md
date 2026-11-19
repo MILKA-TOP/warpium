@@ -436,7 +436,11 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   member (at most 200, looked up for at most 4 targets) and of `expect`/`actual` counterparts are
   listed too, after the others under a **Via implementations/overrides** heading: a mention in a
   resolved file counts there when it resolves to an override or counterpart, elsewhere when the
-  file never names the class of the declaration itself. Mentions that are indexed declarations of
+  file never names the class of the declaration itself. A file that names both (say `Repo` and
+  its implementation `DbRepo`) is resolved, so `DbRepo().load()`, or `db.load()` after
+  `val db = DbRepo()`, counts as via while `repo.load()` with `repo: Repo` stays direct. A receiver
+  whose type isn't written nearby (`makeRepo().load()`, chained calls) resolves by name and is
+  listed as a direct usage, since there is no type inference. Mentions that are indexed declarations of
   the name (an override, an overload) are dropped before deciding to parse a file, so files that
   only implement an interface are never parsed. At most 400 files are parsed per query and files over 128 KB never
   are (parsing is most of the cost, about 1 ms per 7 KB); past that, mentions in files naming the
@@ -456,8 +460,13 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   21 bytes per string beyond its text), and the tables are shrunk to fit after a build, rescan or
   load: on 100k-symbol corpora the index holds about 20 MB of heap and a warm process about 36 MB
   of RSS.
-  Go to Definition and Find Usages index the project holding the file (its git repository, else
-  the outermost directory with Gradle settings) when the current project doesn't.
+  Go to Definition and Find Usages index the project holding the file when the current project
+  doesn't (`code_index::project_root_for_file`). Inside one of the tab's locked
+  [project root](#tab-project-root) folders (the deepest holding the file), the choice never leaves
+  that folder: the outermost directory with Gradle settings between the file and the folder, else
+  the nearest git repository there, else the locked folder itself (a plain folder of Kotlin files
+  without git or build files works). Elsewhere: the outermost directory with Gradle settings
+  inside the file's git repository (anywhere, outside one), else the repository.
 - **Snapshot.** `<user cache dir>/dev.milka.Warpium/code-index/<hash of the root>/index.bin`
   (`~/Library/Caches/…` on macOS): a versioned binary format (`FORMAT_VERSION`) with a deduplicated
   string table. Nothing is written inside the project. On open, the snapshot is loaded (the palette

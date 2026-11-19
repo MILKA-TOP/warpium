@@ -300,8 +300,17 @@ impl<'a> Search<'a> {
                 Scan::Resolve
             } else if is_member {
                 if others.is_empty() {
-                    // A unique name: receivers whose type the file never names still reach it.
-                    Scan::All { exact: sees_target }
+                    if file.size <= MAX_RESOLVED_FILE_BYTES && self.mentions_both_hierarchies(file)
+                    {
+                        // Naming both the declaration's class and an overriding subtype's, the
+                        // file may call either; only resolving tells `DbRepo().load()` (via the
+                        // override) from `repo.load()` on the interface.
+                        Scan::Resolve
+                    } else {
+                        // A unique name: receivers whose type the file never names still reach
+                        // it.
+                        Scan::All { exact: sees_target }
+                    }
                 } else if self.mentions_target_class(file) {
                     Scan::Resolve
                 } else {
@@ -353,6 +362,21 @@ impl<'a> Search<'a> {
     /// [`Self::mentions_target_class`] for the query's own targets only.
     fn mentions_primary_class(&self, file: &FileData) -> bool {
         self.mentions_class_of(file, &self.target_classes[..self.primary])
+    }
+
+    /// Whether `file` names the class of one of the query's own targets and that of one of
+    /// [`UsagesResult::via`] (an overriding subtype; `expect`/`actual` counterparts share the
+    /// name, so they don't count).
+    fn mentions_both_hierarchies(&self, file: &FileData) -> bool {
+        let (primary, via) = self.target_classes.split_at(self.primary);
+        let distinct_via: Vec<Option<Sym>> = via
+            .iter()
+            .filter(|class| class.is_some() && !primary.contains(class))
+            .copied()
+            .collect();
+        !distinct_via.is_empty()
+            && self.mentions_class_of(file, primary)
+            && self.mentions_class_of(file, &distinct_via)
     }
 
     fn mentions_class_of(&self, file: &FileData, classes: &[Option<Sym>]) -> bool {
@@ -520,7 +544,12 @@ impl<'a> Search<'a> {
                             return None;
                         }
                         // What the mention resolves to decides over its `expect`/`actual`
-                        // counterparts, and the query's own targets over overrides.
+                        // counterparts, and the query's own targets over overrides. A receiver
+                        // resolves to an override only when its type is written nearby (a
+                        // constructor call, a typed or constructed local, parameter or property);
+                        // otherwise (`makeRepo().load()`, chained calls) the mention resolves by
+                        // name, where the query's own declaration wins, so it is listed as a
+                        // direct usage: there is no type inference to do better.
                         let (target, hit) = result
                             .definitions
                             .iter()

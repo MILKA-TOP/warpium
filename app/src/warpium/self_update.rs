@@ -28,7 +28,6 @@ use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::keymap::EditableBinding;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, Entity, ModelContext, ModelSpawner, SingletonEntity};
-use warpui_extras::user_preferences::UserPreferences as _;
 
 use super::sync_settings::{
     UPDATE_CHECK_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent,
