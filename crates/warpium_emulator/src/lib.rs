@@ -4,6 +4,8 @@
 //! - [`discovery`] finds running emulators, their gRPC port and token, and their adb serial.
 //! - [`client`] streams frames and sends input, buttons and rotation.
 //! - [`frame_slot`] hands only the latest frame to the renderer.
+//! - [`session`] runs one emulator connection on its own thread; [`viewer`] decides when a pane
+//!   needs frames.
 //! - [`geometry`] maps pointer positions to display coordinates; [`keys`] names device buttons.
 //!
 //! The protobuf code in [`proto`] is generated ahead of time, so building this crate needs
@@ -16,11 +18,15 @@ pub mod frame_slot;
 pub mod geometry;
 pub mod keys;
 pub mod proto;
+pub mod session;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+pub mod viewer;
 
 pub use client::{ClientError, EmulatorClient, FrameStream, InputSender};
 pub use discovery::{GrpcToken, RunningEmulator};
 pub use frame_slot::{Frame, FrameSlot};
 pub use geometry::DisplayRotation;
 pub use keys::DeviceButton;
+pub use session::{Session, SessionError, SessionEvent, SessionOptions};
+pub use viewer::{StreamRequest, Viewer, ViewerStatus};
