@@ -1,0 +1,35 @@
+[package]
+name = "warpium_emulator"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: discovery of running Android emulators and a client for their gRPC control endpoint (frames, input, rotation)"
+publish.workspace = true
+license.workspace = true
+
+[features]
+# Exposes the in-process fake emulator gRPC server to other crates' tests.
+test-support = ["tonic/router", "tonic/server", "tokio/net", "tokio-stream/net"]
+
+[dependencies]
+bytes.workspace = true
+dirs.workspace = true
+log.workspace = true
+prost.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio-stream = "0.1.17"
+tonic = { version = "0.14.8", default-features = false, features = ["channel", "codegen"] }
+tonic-prost = "0.14.8"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
+tokio-stream = { version = "0.1.17", features = ["net"] }
+tonic = { version = "0.14.8", default-features = false, features = ["router", "server"] }

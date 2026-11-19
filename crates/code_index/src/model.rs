@@ -179,6 +179,8 @@ pub mod flags {
     pub const SEALED: u8 = 1 << 4;
     /// Kotlin `const val`.
     pub const CONST: u8 = 1 << 5;
+    /// Kotlin `override` member, or a Java method annotated `@Override`.
+    pub const OVERRIDE: u8 = 1 << 6;
 }
 
 /// A position in a file: zero-based line and character column.
@@ -224,6 +226,19 @@ pub struct Import {
     pub is_static: bool,
 }
 
+/// A supertype a class, interface or object declares, as written (`Base`, `Outer.Base`,
+/// `com.example.Base`), with type arguments left out. Recorded for Go to Implementation and for
+/// finding the overrides of a member.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Supertype {
+    /// Index of the declaring type in [`FileData::symbols`].
+    pub symbol: u32,
+    /// The last segment of the written name.
+    pub name: Sym,
+    /// What was written before the last segment (`Outer`, `com.example`), usually empty.
+    pub qualifier: Sym,
+}
+
 /// The declarations and header of one parsed source file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileData {
@@ -239,6 +254,8 @@ pub struct FileData {
     pub package: Sym,
     pub imports: Vec<Import>,
     pub symbols: Vec<Symbol>,
+    /// Declared supertypes of the file's types, in symbol order.
+    pub supertypes: Vec<Supertype>,
     /// Every distinct identifier used in the file's code, sorted, for finding usage candidates.
     pub identifiers: Vec<Sym>,
     /// Modification time in nanoseconds since the Unix epoch, for change detection.

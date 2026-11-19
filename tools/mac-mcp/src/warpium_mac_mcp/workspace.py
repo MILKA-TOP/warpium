@@ -316,6 +316,8 @@ class Workspace:
     # gh run download: progress log interval and stall timeout (seconds).
     download_tick_s = 15.0
     download_stall_s = 300.0
+    # Attempts per install_artifact when gh run download fails (not on stalls).
+    download_attempts = 3
 
     def __init__(
         self,
@@ -470,13 +472,14 @@ class Workspace:
             log(f"run {run_id}: {info}; artifact {name}")
             return {"run": info, "artifact": name}
 
-        def download(log: Callable[[str], None]) -> None:
+        def download_once(log: Callable[[str], None]) -> None:
             argv = ["gh", "run", "download", run_id, "--repo", REPO_SLUG]
             argv += ["--name", chosen["name"], "--dir", str(dl_dir)]
             log("$ " + " ".join(argv))
-            if gh_tmp.exists():
-                shutil.rmtree(gh_tmp)
-            gh_tmp.mkdir(parents=True)
+            for d in (gh_tmp, dl_dir):
+                if d.exists():
+                    shutil.rmtree(d)
+                d.mkdir(parents=True)
             env = gh_env()
             env["TMPDIR"] = str(gh_tmp)
             progress = DownloadProgress(gh_tmp, dl_dir, log, stall_s)
@@ -490,6 +493,20 @@ class Workspace:
             progress.log_total()
             if r.returncode != 0:
                 raise WorkspaceError(f"gh run download failed ({r.returncode})")
+
+        def download(log: Callable[[str], None]) -> None:
+            # A slow link to GitHub's artifact storage drops long downloads
+            # ("connection reset by peer"); gh can't resume, so start over a
+            # few times. Stalls and cancels are not retried.
+            attempts = self.download_attempts
+            for attempt in range(1, attempts + 1):
+                try:
+                    download_once(log)
+                    return
+                except WorkspaceError as e:
+                    if "stalled" in str(e) or attempt == attempts:
+                        raise
+                    log(f"download attempt {attempt}/{attempts} failed ({e}); retrying")
 
         def mount_and_copy(log: Callable[[str], None]) -> dict:
             dmgs = sorted(p for p in dl_dir.rglob("*.dmg") if not p.is_symlink())

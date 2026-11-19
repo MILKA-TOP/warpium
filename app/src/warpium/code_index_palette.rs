@@ -56,9 +56,9 @@ impl AsyncDataSource for CodeSymbolDataSource {
         let text = query.text.clone();
         async move {
             let Some(handle) = handle else {
-                return Ok(vec![QueryResult::from(StatusItem {
-                    message: "Open a project folder to use Go to Class and Go to Symbol".to_owned(),
-                })]);
+                return Ok(vec![QueryResult::from(StatusItem::footer(
+                    "Open a project folder to use Go to Class and Go to Symbol".to_owned(),
+                ))]);
             };
             // Runs on a background executor; the read lock is shared with other searches and
             // only waits for a batch being applied.
@@ -83,9 +83,9 @@ impl AsyncDataSource for CodeSymbolDataSource {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                items.push(QueryResult::from(StatusItem {
-                    message: format!("Indexing {project}… results may be incomplete"),
-                }));
+                items.push(QueryResult::from(StatusItem::footer(format!(
+                    "Indexing {project}… results may be incomplete"
+                ))));
             }
             Ok(items)
         }
@@ -115,61 +115,87 @@ impl AsyncDataSource for CodeNavigationDataSource {
         let filter = query.text.trim().to_lowercase();
         async move {
             let Some(results) = results else {
-                return Ok(vec![QueryResult::from(StatusItem {
-                    message: "Use Go to Definition or Find Usages in a Kotlin or Java file"
-                        .to_owned(),
-                })]);
+                return Ok(vec![QueryResult::from(StatusItem::footer(
+                    "Use Go to Definition or Find Usages in a Kotlin or Java file".to_owned(),
+                ))]);
             };
             let count = results.items.len();
-            let mut items: Vec<QueryResult<CommandPaletteItemAction>> = results
-                .items
-                .iter()
-                .enumerate()
-                .filter(|(_, item)| filter.is_empty() || matches_filter(item, &filter))
-                .map(|(rank, item)| {
-                    // The mixer sorts by score, so the score keeps the index's order.
-                    let score = (count - rank) as f64;
-                    match item {
-                        NavigationItem::Definition(definition) => {
-                            QueryResult::from(SymbolSearchItem {
+            let mut items: Vec<QueryResult<CommandPaletteItemAction>> =
+                visible_items(&results.items, &filter)
+                    .into_iter()
+                    .map(|(rank, item)| {
+                        // The mixer sorts by score, so the score keeps the index's order.
+                        let score = (count - rank) as f64;
+                        match item {
+                            NavigationItem::Definition(definition) => {
+                                QueryResult::from(SymbolSearchItem {
+                                    root: results.root.clone(),
+                                    symbol: definition.symbol.clone(),
+                                    score,
+                                    matched_indices: Vec::new(),
+                                })
+                            }
+                            NavigationItem::Implementation(symbol) => {
+                                QueryResult::from(SymbolSearchItem {
+                                    root: results.root.clone(),
+                                    symbol: symbol.clone(),
+                                    score,
+                                    matched_indices: Vec::new(),
+                                })
+                            }
+                            NavigationItem::Usage(usage) => QueryResult::from(UsageSearchItem {
                                 root: results.root.clone(),
-                                symbol: definition.symbol.clone(),
+                                usage: usage.clone(),
                                 score,
-                                matched_indices: Vec::new(),
-                            })
+                            }),
+                            NavigationItem::Group(heading) => QueryResult::from(StatusItem {
+                                message: heading.clone(),
+                                score,
+                            }),
                         }
-                        NavigationItem::Usage(usage) => QueryResult::from(UsageSearchItem {
-                            root: results.root.clone(),
-                            usage: usage.clone(),
-                            score,
-                        }),
-                    }
-                })
-                .collect();
-            items.push(QueryResult::from(StatusItem {
-                message: results.summary.clone(),
-            }));
+                    })
+                    .collect();
+            items.push(QueryResult::from(StatusItem::footer(
+                results.summary.clone(),
+            )));
             Ok(items)
         }
         .boxed()
     }
 }
 
-/// Whether the lowercase `filter` occurs in the item's path, line or name.
+/// The items the lowercase `filter` keeps, with their rank in `items`. A heading whose rows were
+/// all filtered out goes too (headings only ever head the last group).
+fn visible_items<'a>(
+    items: &'a [NavigationItem],
+    filter: &str,
+) -> Vec<(usize, &'a NavigationItem)> {
+    let mut kept: Vec<(usize, &NavigationItem)> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| filter.is_empty() || matches_filter(item, filter))
+        .collect();
+    if matches!(kept.last(), Some((_, NavigationItem::Group(_)))) {
+        kept.pop();
+    }
+    kept
+}
+
+/// Whether the lowercase `filter` occurs in the item's path, line or name. Headings stay; the
+/// data source drops one left without rows.
 fn matches_filter(item: &NavigationItem, filter: &str) -> bool {
+    let symbol_matches = |symbol: &SymbolInfo| {
+        symbol.rel_path.to_lowercase().contains(filter)
+            || symbol.qualified_name().to_lowercase().contains(filter)
+    };
     match item {
-        NavigationItem::Definition(definition) => {
-            definition.symbol.rel_path.to_lowercase().contains(filter)
-                || definition
-                    .symbol
-                    .qualified_name()
-                    .to_lowercase()
-                    .contains(filter)
-        }
+        NavigationItem::Definition(definition) => symbol_matches(&definition.symbol),
+        NavigationItem::Implementation(symbol) => symbol_matches(symbol),
         NavigationItem::Usage(usage) => {
             usage.rel_path.to_lowercase().contains(filter)
                 || usage.line_text.to_lowercase().contains(filter)
         }
+        NavigationItem::Group(_) => true,
     }
 }
 
@@ -443,10 +469,22 @@ fn kind_name(kind: SymbolKind) -> &'static str {
     }
 }
 
-/// A disabled row explaining why results are missing or incomplete.
+/// A disabled row: why results are missing or incomplete (at the bottom), or a heading over a
+/// group of rows (placed by its score).
 #[derive(Debug)]
 struct StatusItem {
     message: String,
+    score: f64,
+}
+
+impl StatusItem {
+    /// A message below every result, whose scores are positive.
+    fn footer(message: String) -> Self {
+        Self {
+            message,
+            score: -1.,
+        }
+    }
 }
 
 impl SearchItem for StatusItem {
@@ -484,8 +522,7 @@ impl SearchItem for StatusItem {
     }
 
     fn score(&self) -> OrderedFloat<f64> {
-        // Below every symbol, whose scores are positive.
-        OrderedFloat(-1.)
+        OrderedFloat(self.score)
     }
 
     fn accept_result(&self) -> CommandPaletteItemAction {

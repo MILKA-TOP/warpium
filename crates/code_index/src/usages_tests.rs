@@ -44,6 +44,15 @@ fn found(result: &UsagesResult) -> Vec<(&str, u32, bool)> {
         .collect()
 }
 
+/// `(path, zero-based line, via)` of each usage.
+fn found_via(result: &UsagesResult) -> Vec<(&str, u32, bool)> {
+    result
+        .usages
+        .iter()
+        .map(|usage| (usage.rel_path.as_str(), usage.position.line, usage.via))
+        .collect()
+}
+
 const VIEW_MODEL: &str =
     "feature/news/src/commonMain/kotlin/com/example/feature/news/NewsViewModel.kt";
 const REPOSITORY: &str = "core/data/src/commonMain/kotlin/com/example/data/NewsRepository.kt";
@@ -51,8 +60,11 @@ const RESOURCE: &str = "core/model/src/commonMain/kotlin/com/example/model/NewsR
 const FAKE: &str =
     "core/data-test/src/commonMain/kotlin/com/example/data/test/FakeNewsRepository.kt";
 
+const VIEW_MODEL_TEST: &str =
+    "feature/news/src/commonTest/kotlin/com/example/feature/news/NewsViewModelTest.kt";
+
 #[test]
-fn interface_method_usages_leave_out_overrides_other_receivers_comments_and_strings() {
+fn interface_method_usages_leave_out_override_declarations_comments_and_strings() {
     let index = CodeIndex::build(fixture("nav-kmp"), 1);
 
     let result = usages_at(
@@ -63,8 +75,75 @@ fn interface_method_usages_leave_out_overrides_other_receivers_comments_and_stri
         "getNewsResources",
     );
 
-    assert_eq!(found(&result), vec![(VIEW_MODEL, 10, true)]);
+    assert_eq!(
+        found(&result),
+        vec![(VIEW_MODEL, 10, true), (VIEW_MODEL_TEST, 7, true)]
+    );
     assert!(result.complete);
+}
+
+#[test]
+fn interface_method_usages_list_calls_on_implementations_last_as_via() {
+    let index = CodeIndex::build(fixture("nav-kmp"), 1);
+
+    let result = usages_at(
+        &index,
+        REPOSITORY,
+        Language::Kotlin,
+        "fun getNewsResources",
+        "getNewsResources",
+    );
+
+    assert_eq!(
+        found_via(&result),
+        vec![(VIEW_MODEL, 10, false), (VIEW_MODEL_TEST, 7, true)]
+    );
+    assert_eq!(
+        result
+            .via
+            .iter()
+            .map(|symbol| symbol.container.as_str())
+            .collect::<Vec<_>>(),
+        vec!["OfflineFirstNewsRepository", "FakeNewsRepository"]
+    );
+}
+
+#[test]
+fn member_usages_through_subtypes_resolve_to_the_override_they_call() {
+    let index = CodeIndex::build(fixture("hierarchy"), 1);
+
+    let result = usages_at(
+        &index,
+        "shapes/src/main/kotlin/com/acme/shapes/Shape.kt",
+        Language::Kotlin,
+        "fun area",
+        "area",
+    );
+
+    let render = "app/src/main/kotlin/com/acme/app/Render.kt";
+    assert_eq!(
+        found_via(&result),
+        vec![(render, 6, false), (render, 8, true), (render, 10, true)]
+    );
+}
+
+#[test]
+fn usages_of_an_override_do_not_include_its_siblings() {
+    let index = CodeIndex::build(fixture("hierarchy"), 1);
+
+    let result = usages_at(
+        &index,
+        "shapes/src/main/kotlin/com/acme/shapes/Circle.kt",
+        Language::Kotlin,
+        "fun area",
+        "area",
+    );
+
+    assert_eq!(
+        found_via(&result),
+        vec![("app/src/main/kotlin/com/acme/app/Render.kt", 8, false)]
+    );
+    assert!(result.via.is_empty());
 }
 
 #[test]
@@ -122,18 +201,19 @@ fn expect_function_usages_include_calls_resolved_to_actuals() {
     );
 
     assert_eq!(
-        found(&result),
+        found_via(&result),
         vec![
+            (VIEW_MODEL, 3, false),
+            (VIEW_MODEL, 13, false),
             (
                 "core/data/src/androidMain/kotlin/com/example/data/Platform.android.kt",
                 4,
                 true
             ),
-            (VIEW_MODEL, 3, true),
-            (VIEW_MODEL, 13, true),
         ]
     );
-    assert_eq!(result.targets.len(), 3);
+    assert_eq!(result.targets.len(), 1);
+    assert_eq!(result.via.len(), 2);
 }
 
 #[test]

@@ -373,7 +373,7 @@ placement) and `app/src/workspace/view/warpium_project_header.rs` (the explorer 
   terminal inside a container whose working directory maps into the project counts as inside it;
   locking from the Projects list.
 
-## Kotlin/Java code index (Go to Class / Symbol / Definition, Find Usages)
+## Kotlin/Java code index (Go to Class / Symbol / Definition / Implementation, Find Usages)
 
 An in-process declaration index for Kotlin and Java projects, KMP and plain JVM alike: phases 0
 to 2 of [the research report](docs/warpium/research/kotlin-navigation-and-toolchain.md). No
@@ -388,7 +388,8 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   objects, companion objects, enums and entries, annotations, records, type aliases, functions
   (with extension receivers), properties (including `val`/`var` constructor parameters),
   constructors and nested types, with package, file, span, visibility, `expect`/`actual`, the
-  file's imports and the set of identifiers its code uses (outside comments and strings, for Find
+  file's imports, the supertypes each class, interface and object declares (for Go to
+  Implementation) and the set of identifiers its code uses (outside comments and strings, for Find
   Usages). Local declarations inside function bodies are left out. The module and source set
   (`commonMain`, `iosMain`, `main`, `test`, …) come from the path, so test and generated code can
   rank lower and `expect` declarations link to their `actual`s by qualified name. Modules named as
@@ -409,6 +410,14 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   name, Go to Definition shows its usages instead, as in the JetBrains IDEs. The bindings only
   apply where the editor's keymap context has `WarpiumCodeNavigation` (navigable file, setting on),
   and cmd-click is only offered when no language server serves the file.
+- **Go to Implementation** (`alt-cmd-B`, as in the JetBrains keymap, or the context menu; editable;
+  `crates/code_index/src/hierarchy.rs`): the project types that extend or implement a type, also
+  indirectly; the members overriding a function or property (Kotlin members need `override`; Java
+  methods only the name, since `@Override` is optional, so overloads count too); the `actual`s of an
+  `expect` declaration. A supertype as written counts when it is qualified to the type's name or
+  the file sees the type (same file or package, import, star import), or when no other type has
+  the name. Nothing is precomputed: a query scans the per-file supertype lists once per inheritance
+  level (well under a millisecond on 100k-symbol projects).
 - **Definition resolution** (`crates/code_index/src/resolve`). The current file is parsed; names
   resolve through local variables and parameters, enclosing classes (with companion objects and
   their declared supertypes), the file, explicit imports (aliases too), the package, star imports
@@ -423,7 +432,13 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   import, star import); a member counts in files that name its class (a receiver type or supertype
   has to be written down for exact resolution). Files that also see or declare another declaration
   with the name are parsed and each mention resolved; otherwise every mention counts. Usages only
-  matched by name are marked `≈`. At most 400 files are parsed per query and files over 128 KB never
+  matched by name are marked `≈`. As in the JetBrains IDEs, usages of the members overriding a
+  member (at most 200, looked up for at most 4 targets) and of `expect`/`actual` counterparts are
+  listed too, after the others under a **Via implementations/overrides** heading: a mention in a
+  resolved file counts there when it resolves to an override or counterpart, elsewhere when the
+  file never names the class of the declaration itself. Mentions that are indexed declarations of
+  the name (an override, an overload) are dropped before deciding to parse a file, so files that
+  only implement an interface are never parsed. At most 400 files are parsed per query and files over 128 KB never
   are (parsing is most of the cost, about 1 ms per 7 KB); past that, mentions in files naming the
   class count as approximate.
 - **Project root.** When a Go to palette opens: the tab's locked [project root](#tab-project-root)
@@ -437,6 +452,10 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   cores, at most 8) that exists only for the build, parsing in batches of 512 files. The palette
   searches on a background executor under a shared read lock. Saves are reparsed off the main
   thread from `repo_metadata` watcher events.
+  Names, packages and paths are interned into one string buffer with a hash table of ids (about
+  21 bytes per string beyond its text), and the tables are shrunk to fit after a build, rescan or
+  load: on 100k-symbol corpora the index holds about 20 MB of heap and a warm process about 36 MB
+  of RSS.
   Go to Definition and Find Usages index the project holding the file (its git repository, else
   the outermost directory with Gradle settings) when the current project doesn't.
 - **Snapshot.** `<user cache dir>/dev.milka.Warpium/code-index/<hash of the root>/index.bin`
@@ -451,8 +470,9 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
 ### MCP server for agents
 
 `warpium-code-index` serves the index over MCP (stdio) as a candidate replacement for `ast-index`.
-Tools: `find_class`, `find_symbol` (optional `kind`), `file_outline`, `find_definition` and
-`find_usages`. The last two take `path`, a 1-based `line`, and either a 1-based `column` or the
+Tools: `find_class`, `find_symbol` (optional `kind`), `file_outline`, `find_definition`,
+`find_usages` (overrides' usages follow under "Via implementations/overrides") and
+`find_implementations`. The last three take `path`, a 1-based `line`, and either a 1-based `column` or the
 identifier's `name` on that line (agents usually know the name, not the column). Results are compact
 text lines with kind, name, package, `file:line` and source set, with `expect`/`actual` counterparts
 listed under each hit; usages are `path:line:column` plus the line, `≈` when only the name
@@ -478,7 +498,8 @@ snapshot size, warm start (load, and load plus rescan), p50/p95/max latency of ~
 Go to Symbol queries (a fixed list plus names sampled from the corpus), Go to Definition latency on
 ~550 references sampled from the corpus (names after a dot and capitalized names; the share
 resolved is low where most references are to libraries, which aren't indexed), Find Usages latency
-for 50 sampled classes and functions, update time after editing a file, and peak RSS. A separate process measures the warm start, so its peak RSS is what the index
+for 50 sampled classes and functions (with how many came through overrides), Go to Implementation
+latency on the same declarations, update time after editing a file, lines of source, and peak RSS. A separate process measures the warm start, so its peak RSS is what the index
 keeps resident.
 
 ```bash
@@ -498,7 +519,7 @@ there are about 40 times slower than on a local disk, which inflates rescan and 
 Phase A of running Android apps from Warpium: devices, AVDs, running an app module and a native
 Logcat pane. The emulator
 runs in its own window; embedding it in a pane (and mirroring physical devices) is phase B, see
-[docs/warpium/research/android-emulator-embedding.md](docs/warpium/research/android-emulator-embedding.md).
+[docs/warpium/research/embedded-emulator.md](docs/warpium/research/embedded-emulator.md).
 Fork-only code lives in `crates/warpium_android` (protoc-free, unit-tested with
 `cargo test -p warpium_android` against a scripted fake adb server and binary logcat fixtures),
 `app/src/warpium/android.rs` (`AndroidModel`: SDK, device list, selection, AVDs),
@@ -601,6 +622,22 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
 - **Command palette:** "Open Logcat", "Select Android device", "Launch Android Virtual Device (AVD)"
   (both open the pane's device menu) and "Enable/Disable Android tools (devices, logcat, run)",
   which toggles `warpium.android` (default on, OSS channel only).
+
+## Embedded Android emulator (in progress)
+
+Roadmap item 13 phase B: showing a running emulator inside a pane through its built-in gRPC
+endpoint. The design and the PR plan are in
+[docs/warpium/research/embedded-emulator.md](docs/warpium/research/embedded-emulator.md). Not wired
+into the app yet.
+
+`crates/warpium_emulator` (protoc-free; `cargo test -p warpium_emulator`) discovers running
+emulators from their `pid_<pid>.ini` files, talks to them with `tonic` (frames, input, buttons,
+rotation, keepalive) and holds the frame mailbox and pointer mapping. Its tests run against an
+in-process fake emulator (`test_support`, also behind the `test-support` feature). The protobuf
+code in `src/proto/generated.rs` is committed: after updating the vendored
+`proto/emulator_controller.proto`, run `script/warpium/gen-emulator-proto`, which compiles it with
+`protox` from a separate generator workspace (`crates/warpium_emulator/codegen`), so neither
+`protoc` nor a build script is needed.
 
 ## MCP servers for coding agents
 

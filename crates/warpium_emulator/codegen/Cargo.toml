@@ -1,0 +1,15 @@
+[package]
+name = "warpium_emulator_codegen"
+version = "0.1.0"
+edition = "2024"
+description = "Generates warpium_emulator's committed gRPC code without protoc. Run via script/warpium/gen-emulator-proto."
+publish = false
+license = "AGPL-3.0-only"
+
+# A standalone workspace keeps the generator's dependencies (protox, tonic-prost-build) out of the
+# main Cargo.lock and the app build.
+[workspace]
+
+[dependencies]
+protox = "0.10.0"
+tonic-prost-build = { version = "=0.14.8", default-features = false }

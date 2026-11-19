@@ -1,5 +1,10 @@
 # Android emulator in a pane and device mirroring (phase B)
 
+> Superseded by [embedded-emulator.md](embedded-emulator.md) (2026-11-18, with sources). That
+> note corrects this one: Android Studio streams RGB888 frames over gRPC (not MMAP), the
+> emulator must not be started with `-grpc <port>` (it then listens on all interfaces), and the
+> gRPC token comes from the `pid_<pid>.ini` discovery file.
+
 Design notes, 2026-11-15. Phase A (`crates/warpium_android`, the Logcat pane) runs the emulator
 in its own window. This note is what phase B needs to show the emulator, and physical devices,
 inside a Warpium pane. Nothing here is built yet.

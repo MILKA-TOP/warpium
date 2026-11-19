@@ -86,7 +86,8 @@ fn lists_the_tools() {
             "find_symbol",
             "file_outline",
             "find_definition",
-            "find_usages"
+            "find_usages",
+            "find_implementations"
         ]
     );
 }
@@ -200,10 +201,15 @@ fn find_usages_lists_usages_with_their_lines() {
     assert!(!is_error, "{text}");
     assert_eq!(
         text,
-        "1 usage of com.example.data.NewsRepository.getNewsResources \
+        "2 usages of com.example.data.NewsRepository.getNewsResources \
          (core/data/src/commonMain/kotlin/com/example/data/NewsRepository.kt:6):\n\
          feature/news/src/commonMain/kotlin/com/example/feature/news/NewsViewModel.kt:11:36  \
-         val items = newsRepository.getNewsResources()"
+         val items = newsRepository.getNewsResources()\n\
+         Via implementations/overrides \
+         (core/data/src/commonMain/kotlin/com/example/data/NewsRepository.kt:10, \
+         core/data-test/src/commonMain/kotlin/com/example/data/test/FakeNewsRepository.kt:7):\n\
+         feature/news/src/commonTest/kotlin/com/example/feature/news/NewsViewModelTest.kt:8:20  \
+         repository.getNewsResources()"
     );
 }
 
