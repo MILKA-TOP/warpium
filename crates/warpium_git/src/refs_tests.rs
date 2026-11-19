@@ -48,12 +48,12 @@ fn empty_decorations() {
 #[test]
 fn branch_list_groups_local_before_remote() {
     let labels = parse_branch_list(
-        "refs/remotes/origin/main\nrefs/heads/main\nrefs/remotes/origin/HEAD\nrefs/heads/dev\n",
+        " refs/remotes/origin/main\n*refs/heads/main\n refs/remotes/origin/HEAD\n refs/heads/dev\n",
     );
     assert_eq!(
         labels,
         vec![
-            label("main", RefKind::LocalBranch, false),
+            label("main", RefKind::LocalBranch, true),
             label("dev", RefKind::LocalBranch, false),
             label("origin/main", RefKind::RemoteBranch, false),
         ]

@@ -85,7 +85,7 @@ pub fn branch_list_args() -> Vec<String> {
     [
         "for-each-ref",
         "--sort=-committerdate",
-        "--format=%(refname)",
+        "--format=%(HEAD)%(refname)",
         "refs/heads",
         "refs/remotes",
     ]
@@ -94,17 +94,21 @@ pub fn branch_list_args() -> Vec<String> {
 }
 
 /// Branch names from [`branch_list_args`]' output: local branches, then remote ones, each group
-/// most recently committed first.
+/// most recently committed first. The checked-out branch has `is_head`.
 pub fn parse_branch_list(output: &str) -> Vec<RefLabel> {
     let mut labels: Vec<RefLabel> = output
         .lines()
         .filter(|line| !line.is_empty())
         .map(|line| {
-            let (name, kind) = classify(line.trim());
+            let (is_head, refname) = match line.strip_prefix('*') {
+                Some(refname) => (true, refname),
+                None => (false, line.trim_start()),
+            };
+            let (name, kind) = classify(refname.trim());
             RefLabel {
                 name,
                 kind,
-                is_head: false,
+                is_head,
             }
         })
         .filter(|label| !(label.kind == RefKind::RemoteBranch && label.name.ends_with("/HEAD")))

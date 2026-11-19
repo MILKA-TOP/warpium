@@ -898,18 +898,28 @@ pane), `app/src/pane_group/pane/warpium_git_log_pane.rs`, `app/src/workspace/vie
 `app/src/code/editor/warpium_blame_column.rs`. OSS channel only; git runs as `git` from `PATH`
 (`GIT_OPTIONAL_LOCKS=0`, never prompting), always off the main thread.
 
-- **Git Log pane.** "Show Git Log" in the palette opens it below the active pane (one per window,
-  reused; not persisted) for the active tab's repository: its locked project root, else the
-  project toolbar's project, else the active session's directory. Rows: graph, ref labels
-  (HEAD's branch, local, remote, tags), subject, author, date, short hash. `git log --date-order`
-  is streamed: a background thread parses it and lays out the graph, and stops reading at the
-  visible end plus 1,500 rows (pages of 5,000), so huge repositories open as fast as small ones.
-  Filters: branch (HEAD, all, any branch), author, message (case-insensitive) or a commit hash
-  (starts the log at that commit), and a file (history). Author and message filters list
-  commits without the graph. Up/Down/PageUp/PageDown move the selection, `cmd-c` copies its hash.
-- **Details.** The right side shows the selected commit's hash, author, committer, refs, full
-  message and changed files against its first parent; clicking a file shows its diff there (Esc
-  or the back arrow returns), with a button that opens the working tree file.
+- **Git Log pane.** Laid out like IDEA's Log tab: branches on the left (HEAD, all branches, local,
+  remote; a click shows that branch's log), the commit list in the middle with the filter bar
+  above it (Text or hash, Branch, User, Paths, Refresh), the selected commit's changed files (a
+  directory tree, names colored by change) above its details on the right. "Show Git Log" in the
+  palette opens it below the active pane (one per window, reused; not persisted) for the active
+  tab's repository: its locked project root, else the project toolbar's project, else the active
+  session's directory. Columns: graph with ref labels and subject, author, date. `git log
+  --date-order` is streamed: a background thread parses it and lays out the graph, and stops
+  reading at the visible end plus 1,500 rows (pages of 5,000), so huge repositories open as fast
+  as small ones. Author and text filters list commits without the graph; a text that names a
+  commit starts the log there. Up/Down/PageUp/PageDown move the selection, `cmd-c` copies its
+  hash. `app/src/warpium/git_log_panels.rs` renders the side panels, diff viewer and prompts.
+- **Commit context menu** (IDEA's order): Copy Revision Number, Cherry-Pick, Checkout Revision
+  (confirmed), Reset Current Branch to Here… (Soft, Mixed, Hard, Keep), Revert Commit, New
+  Branch…, New Tag… (name prompt, checked like `git check-ref-format`), Go to Child/Parent Commit.
+  Actions run in the background, report in a toast and reload the log
+  (`warpium_git::actions`).
+- **Diff viewer.** Clicking a changed file replaces the pane with its diff against the commit's
+  first parent: Side-by-side viewer (Before/After columns with revision and path captions) or
+  Unified viewer, Previous/Next Difference, a button opening the working tree file, back arrow or
+  Esc to return. The comparison with IDEA, element by element, and the next steps are in the
+  research doc.
 - **Change markers.** File editor panes compare the buffer with the file in `HEAD` (a staged new
   file: all added; untracked: nothing) using Warp's code review diff machinery: gutter slivers,
   click to expand the change inline with **Rollback**, Previous and Next, a revert button on hover.

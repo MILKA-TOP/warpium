@@ -1,5 +1,6 @@
-//! Warpium's Git Log pane: the commits of the tab's repository with their graph, filters,
-//! a commit's details and changed files, and a file's diff in that commit.
+//! Warpium's Git Log pane, laid out like the Log tab of JetBrains IDEs' Git tool window: branches
+//! on the left, the commits with their graph in the middle (filter bar above), the selected
+//! commit's changed files and details on the right, and a Before/After diff viewer.
 //!
 //! `git log` runs on a background thread (`warpium_git::spawn_log`) that parses its output and
 //! lays out the graph as it reads, and only reads as far as the list has been scrolled (plus a
@@ -15,9 +16,10 @@ use std::time::Duration;
 use warp_core::r#async::debounce;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
+use warpium_git::actions::{CommitAction, ResetMode, ref_name_error};
 use warpium_git::diff::{
-    DiffLine, DiffLineKind, FileChange, changed_files_args, file_diff_args, parse_name_status,
-    parse_unified_diff,
+    DiffLine, FileChange, SideBySideRow, changed_files_args, file_diff_args, parse_name_status,
+    parse_unified_diff, side_by_side,
 };
 use warpium_git::format::{local_date_time, truncate_chars};
 use warpium_git::log::{LogQuery, Revisions};
@@ -25,18 +27,18 @@ use warpium_git::oid::looks_like_hex_id;
 use warpium_git::process::{relative_to_repo, repo_toplevel, run_git};
 use warpium_git::refs::{RefKind, RefLabel, branch_list_args, parse_branch_list};
 use warpium_git::show::{CommitDetails, details_args, parse_details};
+use warpium_git::tree::{TreeRow, file_tree};
 use warpium_git::{LogEvent, LogRow, LogStream, Oid, spawn_log};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
-    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, EventHandler,
-    Expanded, Fill, Flex, Hoverable, MouseStateHandle, OffsetPositioning, Padding, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, ScrollStateHandle, Scrollable, ScrollableElement,
+    Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DispatchEventResult, EventHandler, Expanded, Fill, Flex,
+    Hoverable, MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, SavePosition, ScrollStateHandle, Scrollable, ScrollableElement,
     ScrollbarWidth, Shrinkable, Stack, Text, UniformList, UniformListState,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
-use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent as _;
 use warpui::{
@@ -74,9 +76,9 @@ const LANE_WIDTH: f32 = 14.;
 const CONTROL_HEIGHT: f32 = 24.;
 const AUTHOR_WIDTH: f32 = 140.;
 const DATE_WIDTH: f32 = 116.;
-const HASH_WIDTH: f32 = 72.;
 const MENU_WIDTH: f32 = 300.;
 const DETAILS_PADDING: f32 = 10.;
+const BRANCHES_WIDTH: f32 = 200.;
 
 pub(crate) fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -159,6 +161,47 @@ pub(crate) enum GitLogAction {
     CloseDiff,
     OpenWorkingFile(String),
     FocusEditor(FilterField),
+    /// Selects the row and opens its context menu.
+    OpenCommitMenu(usize),
+    CommitMenu(CommitMenuItem),
+    ConfirmPending,
+    CancelPending,
+    /// Resets the current branch to the pending reset's commit.
+    ConfirmReset(ResetMode),
+    ToggleDiffMode,
+    /// Scrolls the diff to the next (`true`) or previous difference.
+    JumpToDifference(bool),
+}
+
+/// The commit context menu's entries, as in JetBrains IDEs' Log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CommitMenuItem {
+    CopyRevision,
+    CherryPick,
+    Checkout,
+    Reset,
+    Revert,
+    NewBranch,
+    NewTag,
+    GoToChild,
+    GoToParent,
+}
+
+/// An action waiting for confirmation or a name.
+enum PendingAction {
+    Confirm {
+        action: CommitAction,
+        oid: Oid,
+        title: String,
+        message: String,
+    },
+    Name {
+        tag: bool,
+        oid: Oid,
+        error: Option<String>,
+    },
+    /// Reset Current Branch to Here, waiting for a mode.
+    Reset { oid: Oid },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,17 +237,27 @@ enum DetailsState {
 struct LoadedDetails {
     details: CommitDetails,
     files: Result<Vec<FileChange>, String>,
+    /// The changed files as a directory tree.
+    tree: Vec<TreeRow>,
     file_mouse_states: Vec<MouseStateHandle>,
 }
 
 enum DiffContent {
     Loading,
-    Loaded(Rc<Vec<DiffLine>>),
+    Loaded {
+        lines: Rc<Vec<DiffLine>>,
+        side_by_side: Rc<Vec<SideBySideRow>>,
+    },
     Failed(String),
 }
 
 struct FileDiff {
+    /// The difference the Previous/Next buttons last jumped to.
+    current_difference: Option<usize>,
     change: FileChange,
+    /// The commit (after) and its first parent (before).
+    oid: Oid,
+    parent: Option<Oid>,
     content: DiffContent,
     list_state: UniformListState,
     scroll_state: ScrollStateHandle,
@@ -218,6 +271,15 @@ struct MouseStates {
     copy_hash: MouseStateHandle,
     back: MouseStateHandle,
     open_file: MouseStateHandle,
+    side_by_side: MouseStateHandle,
+    unified: MouseStateHandle,
+    head_branch: MouseStateHandle,
+    all_branches: MouseStateHandle,
+    confirm: MouseStateHandle,
+    cancel: MouseStateHandle,
+    reset_modes: [MouseStateHandle; 4],
+    previous_difference: MouseStateHandle,
+    next_difference: MouseStateHandle,
 }
 
 pub(crate) struct GitLogView {
@@ -250,6 +312,17 @@ pub(crate) struct GitLogView {
     visible: Range<usize>,
     visible_tx: async_channel::Sender<Range<usize>>,
     details_scroll: ClippedScrollStateHandle,
+    files_scroll: ClippedScrollStateHandle,
+    branches_scroll: ClippedScrollStateHandle,
+    branch_mouse_states: Vec<MouseStateHandle>,
+    commit_menu: ViewHandle<Menu<GitLogAction>>,
+    commit_menu_open: bool,
+    pending: Option<PendingAction>,
+    name_editor: ViewHandle<EditorView>,
+    /// Before/After columns rather than one unified column.
+    diff_side_by_side: bool,
+    /// Saved position of the selected row, where its context menu opens.
+    row_position_id: String,
     row_mouse_states: Vec<MouseStateHandle>,
     lane_colors: Rc<[warpui::color::ColorU]>,
     handle: WeakViewHandle<Self>,
@@ -261,8 +334,8 @@ pub(crate) struct GitLogView {
 impl GitLogView {
     pub(crate) fn new(ctx: &mut ViewContext<Self>) -> Self {
         let pane_configuration = ctx.add_model(|_| PaneConfiguration::new(HEADER_TEXT));
-        let author_editor = Self::create_filter_editor("Author", ctx);
-        let text_editor = Self::create_filter_editor("Message or commit hash", ctx);
+        let author_editor = Self::create_filter_editor("User", ctx);
+        let text_editor = Self::create_filter_editor("Text or hash", ctx);
         let (filter_change_tx, filter_change_rx) = async_channel::unbounded();
         for editor in [&author_editor, &text_editor] {
             ctx.subscribe_to_view(editor, |me, _, event, _| match event {
@@ -292,6 +365,26 @@ impl GitLogView {
                 ctx.notify();
             }
             MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
+        });
+
+        let commit_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .with_width(MENU_WIDTH)
+                .with_drop_shadow()
+                .prevent_interaction_with_other_elements()
+        });
+        ctx.subscribe_to_view(&commit_menu, |me, _, event, ctx| match event {
+            MenuEvent::Close { .. } => {
+                me.commit_menu_open = false;
+                ctx.notify();
+            }
+            MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
+        });
+        let name_editor = Self::create_filter_editor("Name", ctx);
+        ctx.subscribe_to_view(&name_editor, |me, _, event, ctx| match event {
+            EditorEvent::Enter => me.handle_action(&GitLogAction::ConfirmPending, ctx),
+            EditorEvent::Escape => me.handle_action(&GitLogAction::CancelPending, ctx),
+            _ => {}
         });
 
         let (visible_tx, visible_rx) = async_channel::unbounded();
@@ -335,6 +428,15 @@ impl GitLogView {
             visible: 0..0,
             visible_tx,
             details_scroll: ClippedScrollStateHandle::default(),
+            files_scroll: ClippedScrollStateHandle::default(),
+            branches_scroll: ClippedScrollStateHandle::default(),
+            branch_mouse_states: Vec::new(),
+            commit_menu,
+            commit_menu_open: false,
+            pending: None,
+            name_editor,
+            diff_side_by_side: true,
+            row_position_id: format!("git_log_selected_row_{}", ctx.view_id()),
             row_mouse_states: Vec::new(),
             lane_colors: colors,
             handle: ctx.handle(),
@@ -584,7 +686,12 @@ impl GitLogView {
             async move { receiver.await.ok() },
             |me, result, ctx| match result {
                 Some(Ok(branches)) => {
+                    me.branch_mouse_states = branches
+                        .iter()
+                        .map(|_| MouseStateHandle::default())
+                        .collect();
                     me.branches = branches;
+                    ctx.notify();
                     if me.menu_open {
                         me.refresh_menu(ctx);
                     }
@@ -727,8 +834,10 @@ impl GitLogView {
                 me.details = match result {
                     Some((Ok(details), files)) => {
                         let count = files.as_ref().map(Vec::len).unwrap_or(0);
+                        let tree = files.as_deref().map(file_tree).unwrap_or_default();
                         DetailsState::Loaded(Box::new(LoadedDetails {
                             details,
+                            tree,
                             files,
                             file_mouse_states: (0..count)
                                 .map(|_| MouseStateHandle::default())
@@ -762,7 +871,10 @@ impl GitLogView {
         let oid = loaded.details.oid;
         let first_parent = loaded.details.parents.first().copied();
         self.diff = Some(FileDiff {
+            current_difference: None,
             change: change.clone(),
+            oid,
+            parent: first_parent,
             content: DiffContent::Loading,
             list_state: UniformListState::new(),
             scroll_state: ScrollStateHandle::default(),
@@ -773,7 +885,8 @@ impl GitLogView {
                 .map(|output| {
                     let mut lines = parse_unified_diff(&String::from_utf8_lossy(&output));
                     lines.truncate(MAX_DIFF_LINES);
-                    lines
+                    let rows = side_by_side(&lines);
+                    (lines, rows)
                 })
                 .map_err(|err| err.to_string())
         });
@@ -784,7 +897,10 @@ impl GitLogView {
                     return;
                 };
                 diff.content = match result {
-                    Some(Ok(lines)) => DiffContent::Loaded(Rc::new(lines)),
+                    Some(Ok((lines, rows))) => DiffContent::Loaded {
+                        lines: Rc::new(lines),
+                        side_by_side: Rc::new(rows),
+                    },
                     Some(Err(err)) => DiffContent::Failed(err),
                     None => DiffContent::Failed("git didn't answer".to_owned()),
                 };
@@ -829,9 +945,9 @@ impl GitLogView {
 
     fn branch_label(&self) -> String {
         match self.branch_choice() {
-            BranchChoice::Head => "HEAD".to_owned(),
-            BranchChoice::All => "All branches".to_owned(),
-            BranchChoice::Branch(branch) => branch,
+            BranchChoice::Head => "Branch: HEAD".to_owned(),
+            BranchChoice::All => "Branch: All".to_owned(),
+            BranchChoice::Branch(branch) => format!("Branch: {branch}"),
         }
     }
 
@@ -842,10 +958,239 @@ impl GitLogView {
     }
 
     fn show_toast(&self, message: String, ctx: &mut ViewContext<Self>) {
+        self.show_toast_with(DismissibleToast::error(message), ctx);
+    }
+
+    fn show_toast_with(
+        &self,
+        toast: DismissibleToast<WorkspaceAction>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |stack, ctx| {
-            stack.add_ephemeral_toast(DismissibleToast::error(message), window_id, ctx);
+            stack.add_ephemeral_toast(toast, window_id, ctx);
         });
+    }
+
+    fn open_commit_menu(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        self.select_row(index, ctx);
+        let Some(row) = self.rows.get(index) else {
+            return;
+        };
+        let item = |label: &str, item: CommitMenuItem| {
+            MenuItem::Item(
+                MenuItemFields::new(label.to_owned())
+                    .with_on_select_action(GitLogAction::CommitMenu(item)),
+            )
+        };
+        let mut items = vec![
+            item("Copy Revision Number", CommitMenuItem::CopyRevision),
+            MenuItem::Separator,
+            item("Cherry-Pick", CommitMenuItem::CherryPick),
+            item("Checkout Revision", CommitMenuItem::Checkout),
+            item("Reset Current Branch to Here…", CommitMenuItem::Reset),
+            item("Revert Commit", CommitMenuItem::Revert),
+            MenuItem::Separator,
+            item("New Branch…", CommitMenuItem::NewBranch),
+            item("New Tag…", CommitMenuItem::NewTag),
+        ];
+        let has_child = self.child_of(index).is_some();
+        let has_parent = !row.commit.parents.is_empty();
+        if has_child || has_parent {
+            items.push(MenuItem::Separator);
+        }
+        if has_child {
+            items.push(item("Go to Child Commit", CommitMenuItem::GoToChild));
+        }
+        if has_parent {
+            items.push(item("Go to Parent Commit", CommitMenuItem::GoToParent));
+        }
+        self.commit_menu
+            .update(ctx, |menu, ctx| menu.set_items(items, ctx));
+        self.commit_menu_open = true;
+        ctx.focus(&self.commit_menu);
+        ctx.notify();
+    }
+
+    /// The nearest loaded row above `index` whose parents include that row's commit.
+    fn child_of(&self, index: usize) -> Option<usize> {
+        let oid = self.rows.get(index)?.commit.oid;
+        self.rows[..index]
+            .iter()
+            .rposition(|row| row.commit.parents.contains(&oid))
+    }
+
+    fn handle_commit_menu_item(&mut self, item: &CommitMenuItem, ctx: &mut ViewContext<Self>) {
+        self.commit_menu_open = false;
+        let Some(row) = self.selected.and_then(|index| self.rows.get(index)) else {
+            return;
+        };
+        let oid = row.commit.oid;
+        let short = oid.short();
+        let parent = row.commit.parents.first().copied();
+        match item {
+            CommitMenuItem::CopyRevision => self.handle_action(&GitLogAction::CopyHash, ctx),
+            CommitMenuItem::CherryPick => {
+                self.run_commit_action(CommitAction::CherryPick, oid, ctx)
+            }
+            CommitMenuItem::Revert => self.run_commit_action(CommitAction::Revert, oid, ctx),
+            CommitMenuItem::Checkout => {
+                self.pending = Some(PendingAction::Confirm {
+                    action: CommitAction::Checkout,
+                    oid,
+                    title: format!("Check out {short}?"),
+                    message: "HEAD will be detached at this commit. Local changes are kept \
+                              unless they conflict."
+                        .to_owned(),
+                });
+            }
+            CommitMenuItem::Reset => {
+                self.pending = Some(PendingAction::Reset { oid });
+            }
+            CommitMenuItem::NewBranch | CommitMenuItem::NewTag => {
+                self.pending = Some(PendingAction::Name {
+                    tag: matches!(item, CommitMenuItem::NewTag),
+                    oid,
+                    error: None,
+                });
+                self.name_editor
+                    .update(ctx, |editor, ctx| editor.set_buffer_text("", ctx));
+                ctx.focus(&self.name_editor);
+            }
+            CommitMenuItem::GoToChild => {
+                if let Some(child) = self.selected.and_then(|index| self.child_of(index)) {
+                    self.select_row(child, ctx);
+                    self.list_state.scroll_to(child);
+                }
+            }
+            CommitMenuItem::GoToParent => {
+                if let Some(parent) = parent {
+                    let hex = parent.to_hex();
+                    if !self.select_commit_if_loaded(&hex, ctx) {
+                        self.pending_select = Some(hex);
+                        self.request_more_if_needed();
+                    }
+                }
+            }
+        }
+        ctx.notify();
+    }
+
+    /// Scrolls the diff to the next or previous change (a hunk header).
+    fn jump_to_difference(&mut self, next: bool, ctx: &mut ViewContext<Self>) {
+        let side_by_side = self.diff_side_by_side;
+        let Some(diff) = &mut self.diff else {
+            return;
+        };
+        let DiffContent::Loaded {
+            lines,
+            side_by_side: rows,
+        } = &diff.content
+        else {
+            return;
+        };
+        let starts: Vec<usize> = if side_by_side {
+            rows.iter()
+                .enumerate()
+                .filter(|(_, row)| {
+                    matches!(
+                        row,
+                        SideBySideRow::Banner {
+                            kind: warpium_git::diff::DiffLineKind::Hunk,
+                            ..
+                        }
+                    )
+                })
+                .map(|(index, _)| index)
+                .collect()
+        } else {
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(_, line)| line.kind == warpium_git::diff::DiffLineKind::Hunk)
+                .map(|(index, _)| index)
+                .collect()
+        };
+        if starts.is_empty() {
+            return;
+        }
+        let target = match (diff.current_difference, next) {
+            (None, true) => 0,
+            (None, false) => starts.len() - 1,
+            (Some(current), true) => (current + 1).min(starts.len() - 1),
+            (Some(current), false) => current.saturating_sub(1),
+        };
+        diff.current_difference = Some(target);
+        diff.list_state.scroll_to(starts[target]);
+        ctx.notify();
+    }
+
+    fn confirm_pending(&mut self, ctx: &mut ViewContext<Self>) {
+        match self.pending.take() {
+            Some(PendingAction::Confirm { action, oid, .. }) => {
+                self.run_commit_action(action, oid, ctx)
+            }
+            Some(PendingAction::Reset { oid }) => {
+                // Enter picks Mixed, IDEA's default mode.
+                self.run_commit_action(CommitAction::Reset(ResetMode::Mixed), oid, ctx)
+            }
+            Some(PendingAction::Name { tag, oid, .. }) => {
+                let name = self
+                    .name_editor
+                    .as_ref(ctx)
+                    .buffer_text(ctx)
+                    .trim()
+                    .to_owned();
+                if let Some(error) = ref_name_error(&name) {
+                    self.pending = Some(PendingAction::Name {
+                        tag,
+                        oid,
+                        error: Some(error.to_owned()),
+                    });
+                    ctx.notify();
+                    return;
+                }
+                let action = if tag {
+                    CommitAction::NewTag(name)
+                } else {
+                    CommitAction::NewBranch(name)
+                };
+                self.run_commit_action(action, oid, ctx);
+            }
+            None => {}
+        }
+        ctx.focus_self();
+        ctx.notify();
+    }
+
+    /// Runs a commit action in the background, reports the result and reloads the log.
+    fn run_commit_action(&mut self, action: CommitAction, oid: Oid, ctx: &mut ViewContext<Self>) {
+        let Some(repo) = self.repo.clone() else {
+            return;
+        };
+        let args = action.args(&oid);
+        let receiver = run_in_background("git-commit-action", move || run_git(&repo, &args));
+        ctx.spawn(
+            async move { receiver.await.ok() },
+            move |me, result, ctx| match result {
+                Some(Ok(_)) => {
+                    me.show_toast_with(
+                        DismissibleToast::success(action.done_message(&oid.short())),
+                        ctx,
+                    );
+                    me.load_branches(ctx);
+                    me.pending_select = Some(oid.to_hex());
+                    me.restart(ctx);
+                }
+                Some(Err(err)) => {
+                    log::info!("[Git log] A commit action failed: {err}");
+                    me.show_toast(err.to_string(), ctx);
+                    me.load_branches(ctx);
+                    me.restart(ctx);
+                }
+                None => {}
+            },
+        );
     }
 
     fn status_message(&self) -> Option<(String, bool)> {
@@ -878,20 +1223,21 @@ impl GitLogView {
         .build()
         .on_click(|ctx, _, _| ctx.dispatch_typed_action(GitLogAction::ToggleBranchMenu))
         .finish();
+        // JetBrains' order: the text or hash search, then the Branch, User and Paths filters.
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(branch_chip)
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    self.render_filter_input(&self.author_editor, FilterField::Author, appearance),
-                )
-                .finish(),
-            )
             .with_child(
                 Shrinkable::new(
                     2.,
                     self.render_filter_input(&self.text_editor, FilterField::Text, appearance),
+                )
+                .finish(),
+            )
+            .with_child(Container::new(branch_chip).with_margin_left(6.).finish())
+            .with_child(
+                Shrinkable::new(
+                    1.,
+                    self.render_filter_input(&self.author_editor, FilterField::Author, appearance),
                 )
                 .finish(),
             );
@@ -919,7 +1265,7 @@ impl GitLogView {
     fn render_path_chip(&self, path: &str, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let label = Text::new_inline(
-            format!("History of {path}"),
+            format!("Paths: {path}"),
             appearance.ui_font_family(),
             FONT_SIZE,
         )
@@ -1052,7 +1398,6 @@ impl GitLogView {
         let font = appearance.ui_font_family();
         let main_color = theme.main_text_color(theme.background()).into_solid();
         let sub_color = theme.sub_text_color(theme.background()).into_solid();
-        let hint_color = theme.hint_text_color(theme.background()).into_solid();
         let commit = &row.commit;
         let is_head = commit.refs.iter().any(|label| label.is_head);
         let graph_width = self.graph_lanes.max(1) as f32 * LANE_WIDTH + 4.;
@@ -1118,7 +1463,6 @@ impl GitLogView {
                 DATE_WIDTH,
                 sub_color,
             ))
-            .with_child(fixed_column(commit.oid.short(), HASH_WIDTH, hint_color))
             .finish();
         let selected = self.selected == Some(index);
         let selected_fill = theme.surface_2();
@@ -1128,7 +1472,7 @@ impl GitLogView {
             .get(index)
             .cloned()
             .unwrap_or_default();
-        Hoverable::new(mouse_state, move |state| {
+        let row = Hoverable::new(mouse_state, move |state| {
             let mut container = Container::new(
                 ConstrainedBox::new(content)
                     .with_height(ROW_HEIGHT)
@@ -1144,244 +1488,15 @@ impl GitLogView {
             container.finish()
         })
         .on_click(move |ctx, _, _| ctx.dispatch_typed_action(GitLogAction::SelectRow(index)))
-        .finish()
-    }
-
-    fn render_details_panel(&self, appearance: &Appearance) -> Box<dyn Element> {
-        if let Some(diff) = &self.diff {
-            return self.render_diff(diff, appearance);
+        .on_right_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(GitLogAction::OpenCommitMenu(index))
+        })
+        .finish();
+        if selected {
+            SavePosition::new(row, &self.row_position_id).finish()
+        } else {
+            row
         }
-        let theme = appearance.theme();
-        let font = appearance.ui_font_family();
-        let sub_color = theme.sub_text_color(theme.background()).into_solid();
-        let main_color = theme.main_text_color(theme.background()).into_solid();
-        let message = |text: String, color| {
-            Container::new(Text::new(text, font, FONT_SIZE).with_color(color).finish())
-                .with_uniform_padding(DETAILS_PADDING)
-                .finish()
-        };
-        let loaded = match &self.details {
-            DetailsState::None => {
-                return message("Select a commit to see its details.".to_owned(), sub_color);
-            }
-            DetailsState::Loading => return message("Loading…".to_owned(), sub_color),
-            DetailsState::Failed(err) => return message(err.clone(), theme.ui_error_color()),
-            DetailsState::Loaded(loaded) => loaded,
-        };
-        let details = &loaded.details;
-        let mut column = Flex::column();
-
-        let copy = {
-            let ui_builder = appearance.ui_builder().clone();
-            icon_button(
-                appearance,
-                Icon::Copy,
-                false,
-                self.mouse_states.copy_hash.clone(),
-            )
-            .with_tooltip(move || {
-                ui_builder
-                    .tool_tip("Copy commit hash".to_owned())
-                    .build()
-                    .finish()
-            })
-            .build()
-            .on_click(|ctx, _, _| ctx.dispatch_typed_action(GitLogAction::CopyHash))
-            .finish()
-        };
-        column.add_child(
-            Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(
-                    Shrinkable::new(
-                        1.,
-                        Text::new_inline(
-                            details.oid.to_hex(),
-                            appearance.monospace_font_family(),
-                            FONT_SIZE,
-                        )
-                        .with_color(sub_color)
-                        .with_clip(ClipConfig::end())
-                        .finish(),
-                    )
-                    .finish(),
-                )
-                .with_child(copy)
-                .finish(),
-        );
-        let mut author_line = format!(
-            "{} <{}> · {}",
-            details.author_name,
-            details.author_email,
-            local_date_time(details.author_time)
-        );
-        if details.committer_name != details.author_name
-            || details.committer_email != details.author_email
-        {
-            author_line.push_str(&format!(
-                "\nCommitted by {} · {}",
-                details.committer_name,
-                local_date_time(details.committer_time)
-            ));
-        }
-        column.add_child(
-            Container::new(
-                Text::new(author_line, font, FONT_SIZE)
-                    .with_color(sub_color)
-                    .finish(),
-            )
-            .with_margin_top(4.)
-            .finish(),
-        );
-        if !details.refs.is_empty() {
-            let mut refs = Flex::row();
-            for label in &details.refs {
-                refs.add_child(render_ref_label(label, appearance));
-            }
-            column.add_child(Container::new(refs.finish()).with_margin_top(6.).finish());
-        }
-        column.add_child(
-            Container::new(
-                Text::new(details.message.clone(), font, FONT_SIZE)
-                    .with_color(main_color)
-                    .finish(),
-            )
-            .with_margin_top(10.)
-            .finish(),
-        );
-        match &loaded.files {
-            Ok(files) => {
-                column.add_child(
-                    Container::new(
-                        Text::new_inline(
-                            format!(
-                                "{} changed file{}",
-                                files.len(),
-                                if files.len() == 1 { "" } else { "s" }
-                            ),
-                            font,
-                            FONT_SIZE,
-                        )
-                        .with_color(sub_color)
-                        .with_style(Properties::default().weight(Weight::Bold))
-                        .finish(),
-                    )
-                    .with_margin_top(14.)
-                    .with_margin_bottom(4.)
-                    .finish(),
-                );
-                for (index, change) in files.iter().enumerate() {
-                    let mouse_state = loaded
-                        .file_mouse_states
-                        .get(index)
-                        .cloned()
-                        .unwrap_or_default();
-                    column.add_child(render_file_row(index, change, mouse_state, appearance));
-                }
-            }
-            Err(err) => column.add_child(
-                Container::new(
-                    Text::new(format!("Couldn't list the files: {err}"), font, FONT_SIZE)
-                        .with_color(theme.ui_error_color())
-                        .finish(),
-                )
-                .with_margin_top(14.)
-                .finish(),
-            ),
-        }
-        ClippedScrollable::vertical(
-            self.details_scroll.clone(),
-            Container::new(column.finish())
-                .with_uniform_padding(DETAILS_PADDING)
-                .finish(),
-            ScrollbarWidth::Auto,
-            theme.nonactive_ui_detail().into(),
-            theme.active_ui_detail().into(),
-            Fill::None,
-        )
-        .with_overlayed_scrollbar()
-        .finish()
-    }
-
-    fn render_diff(&self, diff: &FileDiff, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let font = appearance.ui_font_family();
-        let back = self.tool_button(
-            Icon::ArrowLeft,
-            "Back to the commit (Esc)",
-            self.mouse_states.back.clone(),
-            GitLogAction::CloseDiff,
-            appearance,
-        );
-        let mut header = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(back)
-            .with_child(
-                Shrinkable::new(
-                    1.,
-                    Container::new(
-                        Text::new_inline(diff_title(&diff.change), font, FONT_SIZE)
-                            .with_color(theme.main_text_color(theme.background()).into_solid())
-                            .with_clip(ClipConfig::start())
-                            .finish(),
-                    )
-                    .with_padding_left(6.)
-                    .finish(),
-                )
-                .finish(),
-            );
-        let working_file_exists = self
-            .repo
-            .as_ref()
-            .is_some_and(|repo| repo.join(&diff.change.path).is_file());
-        if working_file_exists {
-            header.add_child(self.tool_button(
-                Icon::LinkExternal,
-                "Open the file in the editor",
-                self.mouse_states.open_file.clone(),
-                GitLogAction::OpenWorkingFile(diff.change.path.clone()),
-                appearance,
-            ));
-        }
-        let header = Container::new(header.finish())
-            .with_horizontal_padding(6.)
-            .with_vertical_padding(2.)
-            .with_border(Border::bottom(1.).with_border_fill(theme.outline()))
-            .finish();
-        let body: Box<dyn Element> = match &diff.content {
-            DiffContent::Loading => self.render_status("Loading…", false, appearance),
-            DiffContent::Failed(err) => self.render_status(err, true, appearance),
-            DiffContent::Loaded(lines) if lines.is_empty() => {
-                self.render_status("No textual changes.", false, appearance)
-            }
-            DiffContent::Loaded(lines) => {
-                let count = lines.len();
-                let lines = lines.clone();
-                let build_items = move |range: Range<usize>, app: &AppContext| {
-                    let appearance = Appearance::as_ref(app);
-                    range
-                        .filter_map(|index| lines.get(index))
-                        .map(|line| render_diff_line(line, appearance))
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                };
-                Scrollable::vertical(
-                    diff.scroll_state.clone(),
-                    UniformList::new(diff.list_state.clone(), count, build_items)
-                        .finish_scrollable(),
-                    ScrollbarWidth::Auto,
-                    theme.nonactive_ui_detail().into(),
-                    theme.active_ui_detail().into(),
-                    Fill::None,
-                )
-                .with_overlayed_scrollbar()
-                .finish()
-            }
-        };
-        Flex::column()
-            .with_child(header)
-            .with_child(Expanded::new(1., body).finish())
-            .finish()
     }
 }
 
@@ -1390,129 +1505,6 @@ fn diff_title(change: &FileChange) -> String {
         Some(old) => format!("{old} → {}", change.path),
         None => change.path.clone(),
     }
-}
-
-fn render_file_row(
-    index: usize,
-    change: &FileChange,
-    mouse_state: MouseStateHandle,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let font = appearance.ui_font_family();
-    let letter = change.kind.letter();
-    let letter_color = match letter {
-        'A' => theme.ansi_fg_green(),
-        'D' => theme.ansi_fg_red(),
-        'R' | 'C' => theme.ansi_fg_magenta(),
-        _ => theme.ansi_fg_blue(),
-    };
-    let row = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(
-            ConstrainedBox::new(
-                Text::new_inline(
-                    letter.to_string(),
-                    appearance.monospace_font_family(),
-                    FONT_SIZE,
-                )
-                .with_color(letter_color)
-                .with_style(Properties::default().weight(Weight::Bold))
-                .finish(),
-            )
-            .with_width(18.)
-            .finish(),
-        )
-        .with_child(
-            Shrinkable::new(
-                1.,
-                Text::new_inline(diff_title(change), font, FONT_SIZE)
-                    .with_color(theme.main_text_color(theme.background()).into_solid())
-                    .with_clip(ClipConfig::start())
-                    .finish(),
-            )
-            .finish(),
-        )
-        .finish();
-    let hover_fill = theme.surface_1();
-    Hoverable::new(mouse_state, move |state| {
-        let mut container =
-            Container::new(ConstrainedBox::new(row).with_height(ROW_HEIGHT).finish())
-                .with_horizontal_padding(4.)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
-        if state.is_hovered() {
-            container = container.with_background(hover_fill);
-        }
-        container.finish()
-    })
-    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(GitLogAction::OpenFileDiff(index)))
-    .with_cursor(Cursor::PointingHand)
-    .finish()
-}
-
-fn render_diff_line(line: &DiffLine, appearance: &Appearance) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let font = appearance.monospace_font_family();
-    let font_size = appearance.monospace_font_size();
-    let line_height = (font_size * appearance.line_height_ratio()).ceil();
-    let hint = theme.hint_text_color(theme.background()).into_solid();
-    let main = theme.main_text_color(theme.background()).into_solid();
-    let with_alpha = |mut color: warpui::color::ColorU| {
-        color.a = 48;
-        color
-    };
-    let (text_color, background) = match line.kind {
-        DiffLineKind::Added => (main, Some(with_alpha(theme.ansi_fg_green()))),
-        DiffLineKind::Removed => (main, Some(with_alpha(theme.ansi_fg_red()))),
-        DiffLineKind::Hunk => (theme.ansi_fg_cyan(), Some(with_alpha(theme.ansi_fg_blue()))),
-        DiffLineKind::Info => (hint, None),
-        DiffLineKind::Context => (main, None),
-    };
-    let number = |number: Option<u32>| {
-        ConstrainedBox::new(
-            Text::new_inline(
-                number.map(|n| format!("{n:>5}")).unwrap_or_default(),
-                font,
-                font_size,
-            )
-            .with_color(hint)
-            .finish(),
-        )
-        .with_width(font_size * 3.6)
-        .finish()
-    };
-    let prefix = match line.kind {
-        DiffLineKind::Added => "+",
-        DiffLineKind::Removed => "-",
-        DiffLineKind::Context | DiffLineKind::Hunk | DiffLineKind::Info => " ",
-    };
-    let row = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(number(line.old_line))
-        .with_child(number(line.new_line))
-        .with_child(
-            Shrinkable::new(
-                1.,
-                Clipped::new(
-                    Text::new_inline(
-                        format!("{prefix}{}", line.text.replace('\t', "    ")),
-                        font,
-                        font_size,
-                    )
-                    .with_color(text_color)
-                    .finish(),
-                )
-                .finish(),
-            )
-            .finish(),
-        )
-        .finish();
-    let mut container = Container::new(ConstrainedBox::new(row).with_height(line_height).finish())
-        .with_padding_left(4.);
-    if let Some(background) = background {
-        container = container.with_background_color(background);
-    }
-    container.finish()
 }
 
 fn render_ref_label(label: &RefLabel, appearance: &Appearance) -> Box<dyn Element> {
@@ -1563,25 +1555,39 @@ impl View for GitLogView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let mut column = Flex::column().with_child(self.render_toolbar(appearance));
-        if let Some((message, is_error)) = self.status_message() {
-            column.add_child(self.render_status(&message, is_error, appearance));
-        }
-        let body = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(Expanded::new(3., self.render_list(appearance)).finish())
-            .with_child(
-                Expanded::new(
-                    2.,
-                    Container::new(self.render_details_panel(appearance))
-                        .with_border(Border::left(1.).with_border_fill(theme.outline()))
+        let body: Box<dyn Element> = match &self.diff {
+            Some(diff) => self.render_diff_viewer(diff, appearance),
+            None => {
+                let mut log = Flex::column().with_child(self.render_toolbar(appearance));
+                if let Some((message, is_error)) = self.status_message() {
+                    log.add_child(self.render_status(&message, is_error, appearance));
+                }
+                log.add_child(Expanded::new(1., self.render_list(appearance)).finish());
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                    .with_child(
+                        ConstrainedBox::new(
+                            Container::new(self.render_branches(appearance))
+                                .with_border(Border::right(1.).with_border_fill(theme.outline()))
+                                .finish(),
+                        )
+                        .with_width(BRANCHES_WIDTH)
                         .finish(),
-                )
-                .finish(),
-            )
-            .finish();
-        column.add_child(Expanded::new(1., body).finish());
-        let content = Container::new(column.finish())
+                    )
+                    .with_child(Expanded::new(3., log.finish()).finish())
+                    .with_child(
+                        Expanded::new(
+                            2.,
+                            Container::new(self.render_commit_panel(appearance))
+                                .with_border(Border::left(1.).with_border_fill(theme.outline()))
+                                .finish(),
+                        )
+                        .finish(),
+                    )
+                    .finish()
+            }
+        };
+        let content = Container::new(body)
             .with_background(theme.background())
             .finish();
 
@@ -1591,10 +1597,27 @@ impl View for GitLogView {
             stack.add_positioned_overlay_child(
                 ChildView::new(&self.menu).finish(),
                 OffsetPositioning::offset_from_parent(
-                    warpui::geometry::vector::vec2f(8., 34.),
+                    warpui::geometry::vector::vec2f(BRANCHES_WIDTH + 8., 34.),
                     ParentOffsetBounds::ParentByPosition,
                     ParentAnchor::TopLeft,
                     ChildAnchor::TopLeft,
+                ),
+            );
+        }
+        if self.commit_menu_open {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.commit_menu).finish(),
+                self.commit_menu_positioning(),
+            );
+        }
+        if let Some(pending) = &self.pending {
+            stack.add_positioned_overlay_child(
+                self.render_pending(pending, appearance),
+                OffsetPositioning::offset_from_parent(
+                    warpui::geometry::vector::vec2f(0., 40.),
+                    ParentOffsetBounds::ParentByPosition,
+                    ParentAnchor::TopMiddle,
+                    ChildAnchor::TopMiddle,
                 ),
             );
         }
@@ -1668,6 +1691,31 @@ impl TypedActionView for GitLogView {
                     });
                 }
             }
+            GitLogAction::OpenCommitMenu(index) => self.open_commit_menu(*index, ctx),
+            GitLogAction::CommitMenu(item) => self.handle_commit_menu_item(item, ctx),
+            GitLogAction::ConfirmPending => self.confirm_pending(ctx),
+            GitLogAction::ConfirmReset(mode) => {
+                if let Some(PendingAction::Reset { oid }) = self.pending.take() {
+                    self.run_commit_action(CommitAction::Reset(*mode), oid, ctx);
+                }
+                ctx.focus_self();
+                ctx.notify();
+            }
+            GitLogAction::JumpToDifference(next) => self.jump_to_difference(*next, ctx),
+            GitLogAction::CancelPending => {
+                self.pending = None;
+                ctx.focus_self();
+                ctx.notify();
+            }
+            GitLogAction::ToggleDiffMode => {
+                self.diff_side_by_side = !self.diff_side_by_side;
+                if let Some(diff) = &mut self.diff {
+                    diff.list_state = UniformListState::new();
+                    diff.scroll_state = ScrollStateHandle::default();
+                    diff.current_difference = None;
+                }
+                ctx.notify();
+            }
             GitLogAction::FocusEditor(field) => {
                 let editor = match field {
                     FilterField::Author => &self.author_editor,
@@ -1740,6 +1788,9 @@ impl BackingView for GitLogView {
         self.focus_handle = Some(focus_handle);
     }
 }
+
+#[path = "git_log_panels.rs"]
+mod panels;
 
 #[cfg(test)]
 #[path = "git_log_tests.rs"]
