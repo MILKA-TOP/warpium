@@ -28,6 +28,7 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::codebase_index_speedbump_banner::CodebaseIndexSpeedbumpBannerAction;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
+use crate::pane_group::BottomPanelPaneRequest;
 use crate::server::ids::SyncId;
 use crate::server::telemetry::{AgentModeRewindEntrypoint, PaletteSource, ToggleBlockFilterSource};
 use crate::terminal::available_shells::AvailableShell;
@@ -202,6 +203,8 @@ pub enum TerminalAction {
     ClearSelectionsWhenShellMode,
     Close,
     ToggleMaximizePane,
+    /// Warpium: moves this pane to the bottom panel or back to the layout.
+    WarpiumBottomPanel(BottomPanelPaneRequest),
     SplitRight(Option<AvailableShell>),
     SplitLeft(Option<AvailableShell>),
     SplitDown(Option<AvailableShell>),
@@ -566,6 +569,7 @@ impl fmt::Debug for TerminalAction {
             SplitDown(_) => f.write_str("SplitDown"),
             SplitUp(_) => f.write_str("SplitUp"),
             ToggleMaximizePane => f.write_str("ToggleMaximizeActivePane"),
+            WarpiumBottomPanel(request) => write!(f, "WarpiumBottomPanel({request:?})"),
             PromptContextMenu {
                 position_offset_from_prompt,
             } => write!(
