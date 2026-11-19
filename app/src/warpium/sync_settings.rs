@@ -182,7 +182,7 @@ pub(crate) const GIT_GUTTER_MARKERS_CONTEXT_FLAG: &str = "WarpiumGitGutterMarker
 /// Keymap context flag present while [`WarpiumGitSettings::inline_blame`] is on.
 pub(crate) const INLINE_BLAME_CONTEXT_FLAG: &str = "WarpiumInlineBlame";
 
-pub(crate) use git::{WarpiumGitSettings, WarpiumGitSettingsChangedEvent};
+pub(crate) use git::WarpiumGitSettings;
 
 // Its own group for the same reason as `agent` above.
 mod git {

@@ -20,6 +20,7 @@ use warpui::elements::{
 use warpui::event::DispatchedEvent;
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
+use warpui::ui_components::components::UiComponent as _;
 use warpui::{
     AfterLayoutContext, AppContext, ClipBounds, Element, Event, EventContext, LayoutContext,
     ModelHandle, PaintContext, SingletonEntity, SizeConstraint,
