@@ -65,17 +65,18 @@ impl PaneGroup {
         layout: Box<dyn Element>,
         app: &AppContext,
     ) {
-        let dock = self.render_warpium_bottom_dock(app);
-        let maximized = dock.is_some() && self.warpium_bottom_dock.model.is_maximized();
-        if !maximized {
-            column.add_child(Shrinkable::new(1., layout).finish());
-        }
-        if let Some(dock) = dock {
-            column.add_child(dock);
+        match self.render_warpium_bottom_dock(app) {
+            Some((dock, true)) => column.add_child(Shrinkable::new(1., dock).finish()),
+            Some((dock, false)) => {
+                column.add_child(Shrinkable::new(1., layout).finish());
+                column.add_child(dock);
+            }
+            None => column.add_child(Shrinkable::new(1., layout).finish()),
         }
     }
 
-    fn render_warpium_bottom_dock(&self, app: &AppContext) -> Option<Box<dyn Element>> {
+    /// The panel, and whether it takes the layout's place (maximized).
+    fn render_warpium_bottom_dock(&self, app: &AppContext) -> Option<(Box<dyn Element>, bool)> {
         let model = &self.warpium_bottom_dock.model;
         if model.is_empty() {
             return None;
@@ -103,7 +104,7 @@ impl PaneGroup {
                     .with_border(Border::top(1.).with_border_fill(theme.outline()))
                     .finish();
                 if model.is_maximized() {
-                    Shrinkable::new(1., content).finish()
+                    content
                 } else {
                     Resizable::new(self.warpium_bottom_dock.height.clone(), content)
                         .with_dragbar_side(DragBarSide::Top)
@@ -136,7 +137,8 @@ impl PaneGroup {
                 ),
             );
         }
-        Some(stack.finish())
+        let maximized = visible.is_some() && model.is_maximized();
+        Some((stack.finish(), maximized))
     }
 
     /// The row of sub-tab chips with the panel's buttons.
