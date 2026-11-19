@@ -94,7 +94,9 @@ impl PanelSnapshot {
             .filter(|_| !entries.is_empty())
             .map(|index| index.min(entries.len() - 1));
         Some(Self {
-            height: raw.height.filter(|height| height.is_finite() && *height > 0.),
+            height: raw
+                .height
+                .filter(|height| height.is_finite() && *height > 0.),
             expanded: raw.expanded,
             maximized: raw.maximized,
             active,

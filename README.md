@@ -43,6 +43,7 @@ Warpium is a lightweight IDE for AI-driven mobile development, built on [Warp](h
 
 - Only Apple silicon (arm64) Macs are supported for now.
 - A tab's Project Explorer can be locked to a project: use the pin button in the explorer header, **Open Folder as Project…** (`⌘⌥⇧O`) or **Open in new tab** on a folder. A locked explorer stays on the project wherever the tab's terminals go (another folder, a Docker container, SSH), and tells you when the terminal is outside it. Unlock to follow the terminals again.
+- Each tab has a **bottom panel** for long-running terminals and Logcat: `⌘J` shows it or collapses it to a strip of chips that show each process's state (running, ✓ or ✗ with the exit code, new output). Right-click a terminal to **Move to bottom panel**, drag its sub-tabs to reorder them, up into the layout or onto another tab, and pick **Bottom panel** as a toolbar button's target. Turn it off with `warpium.bottom_panel = false`.
 - New Warpium releases are offered in the app: a banner shows **Update now**, which downloads the release from GitHub and checks it in the background, then **Restart now** switches to it; otherwise it is installed when you quit (Warpium never restarts on its own). Apple silicon only. You can also run **Check for Warpium updates** from the command palette, or turn the checks off with `warpium.update_check = false` in `settings.toml`. Official Warp updates are never offered. Your settings are kept.
 - If Warpium can't replace itself (for example when it isn't in a folder you can write to), the banner offers the downloaded `.dmg` to install by hand.
 - Downloaded builds don't include the built-in `modify-settings` agent skill yet; builds from source do.
@@ -65,7 +66,7 @@ To build a release `.dmg` like the published ones, see the [developer guide](WAR
 
 Buttons for your project's everyday commands sit in the top-right corner of the window, like the toolbar in JetBrains IDEs, next to a run-configurations dropdown and a **Run** button. When the window gets narrow, the buttons that don't fit move into a **…** menu.
 
-- Click **+** at the end of the toolbar (or **+ Add button** in a project that has none), choose **Customize toolbar…** in the **…** menu, run **Customize project toolbar** from the command palette, or right-click a button to edit it. The editor adds, reorders, hides and deletes buttons, runs any shell command (in the current session, a new tab or a split, with a working directory and environment variables), a workflow, a launch configuration, a tab config, a URL or a built-in action, and saves each button either for the whole project or just for you. **Test run** tries a command before you save.
+- Click **+** at the end of the toolbar (or **+ Add button** in a project that has none), choose **Customize toolbar…** in the **…** menu, run **Customize project toolbar** from the command palette, or right-click a button to edit it. The editor adds, reorders, hides and deletes buttons, runs any shell command (in the current session, a new tab, a split or the bottom panel, with a working directory and environment variables), a workflow, a launch configuration, a tab config, a URL or a built-in action, and saves each button either for the whole project or just for you. **Test run** tries a command before you save.
 - Commands can use `${projectRoot}`, `${file}`, `${fileDir}`, `${selection}`, `${cwd}` and `${prompt:Label}` (asks you for a value when the button runs). Warpium quotes each value for your shell, so write them without quotes.
 - Run **Edit project toolbar** from the command palette to create `.warpium/toolbar.toml` in the project; commit it to share the buttons with your team. The file starts with commented examples.
 - Run **Edit personal toolbar overrides** to add, change or hide buttons just for yourself. These are kept in `~/.warp-oss/projects/`, never in the project.
@@ -75,7 +76,7 @@ Buttons for your project's everyday commands sit in the top-right corner of the 
 
 ## Android: run on a device, and Logcat
 
-In an Android project, the project toolbar shows a **device picker** next to the run configurations, with one run configuration per app module. Pick a connected phone (USB or Wi-Fi) or an emulator, then click **Run**: Warpium runs `./gradlew :app:installDebug` in your terminal, where you can watch the build, then starts the app on the device as soon as it is installed and opens Logcat for it.
+In an Android project, the project toolbar shows a **device picker** next to the run configurations, with one run configuration per app module. Pick a connected phone (USB or Wi-Fi) or an emulator, then click **Run**: Warpium runs `./gradlew :app:installDebug` in a bottom panel terminal, where you can watch the build, then starts the app on the device as soon as it is installed and opens Logcat for it.
 
 - Picking an emulator that isn't running starts it in its own window and selects it once it has booted. Clicking **Run** while it is still booting runs the app as soon as it is ready.
 - The first run in a project asks you to trust its Gradle build, since it runs the project's `gradlew` and build scripts.

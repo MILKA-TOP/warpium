@@ -272,7 +272,8 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
   preferences under `WarpiumProjectToolbarState`, never in the project.
 - **Running a command.** `current` types it into the active session wrapped so that `cwd` and
   `env` don't leak into that session (a subshell in POSIX shells, `pushd`/`begin` in fish, a
-  script block in PowerShell). When another kind of pane, such as an editor, is focused, the
+  script block in PowerShell). `panel` runs it in the tab's [bottom panel](#bottom-panel), reusing
+  the button's idle sub-tab. When another kind of pane, such as an editor, is focused, the
   tab's most recently focused session takes it if its working directory is inside the project. A
   busy or remote session, or no such session, falls back to a new tab. `new_tab`,
   `split_right` and `split_down` start a new session in `cwd` with `env` set.
@@ -284,42 +285,94 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
 
 A per-tab dock below the split layout for panes whose processes should keep running out of the
 way (JetBrains-style tool window, roadmap item 14; design in
-[docs/warpium/research/bottom-panel.md](docs/warpium/research/bottom-panel.md)). Gated by
-`FeatureFlag::WarpiumBottomPanel` (cargo feature `warpium_bottom_panel`, also in `DOGFOOD_FLAGS`),
-which CI builds into branch and PR artifacts only (see [CI](#ci)). Fork-only code lives in
-`crates/warpium_bottom_panel` (protoc-free, `cargo test -p warpium_bottom_panel`: sub-tab order and
-selection, restore position, layout anchor), `app/src/pane_group/warpium_bottom_dock.rs` (the
-dock in `PaneGroup`: move/restore/close, hooks, rendering, bindings) and
-`app/src/terminal/view/warpium_bottom_panel.rs` (the terminal menu items).
+[docs/warpium/research/bottom-panel.md](docs/warpium/research/bottom-panel.md)). Fork-only code
+lives in `crates/warpium_bottom_panel` (protoc-free, `cargo test -p warpium_bottom_panel`: sub-tab
+order, selection, expanded/collapsed/maximized state, reordering, origins and reuse of a command's
+sub-tab, unread output, chip status, the saved JSON, restore position, drop side and the fresh
+terminal's directory), `app/src/pane_group/warpium_bottom_dock.rs` (the dock in `PaneGroup`:
+move/restore/close, hooks, drag and drop, the sub-tab menu, bindings), `warpium_bottom_dock_render.rs`
+(the panel and its chips), `warpium_bottom_dock_persistence.rs` (snapshot and restore),
+`app/src/workspace/view/warpium_bottom_panel.rs` (window-wide actions, moving sub-tabs between
+tabs, Logcat in the panel), `app/src/warpium/bottom_panel.rs` (setting gate and workspace
+bindings), `app/src/persistence/warpium_bottom_panel.rs` (blocks of docked terminals) and
+`app/src/terminal/view/warpium_bottom_panel.rs` (menu items, chip status, output generation).
+App tests: `pane_group::tests::warpium_bottom_dock_tests` and the `*warpium*` sqlite tests.
 
+- **Setting.** `warpium.bottom_panel` (default on; `WarpiumBottomPanelSettings`, its own group in
+  `sync_settings.rs`), in Settings → Features → Warpium and as "Enable/Disable bottom panel" in the
+  palette (keymap flag `WarpiumBottomPanel`). Turning it off restores every docked pane to the
+  layout; restoring and closing keep working while it is off. The development feature flag and
+  cargo feature are gone.
 - **Lifecycle.** A docked pane leaves the layout tree but stays in `PaneGroup::pane_contents`
   without being detached, like an off-tree child agent pane, so its terminal manager and PTY keep
   running and its subscriptions (shell exit, titles) keep working. Quit and close-tab warnings
   count its running commands because they walk `pane_contents`. Closing the tab closes the dock.
-- **Commands.** `cmd-j` (Mac) toggles the panel and opens a terminal in it when it is empty;
-  palette "Move pane to bottom panel", "Restore pane to layout", "Toggle bottom panel"; terminal
-  context and pane header menus offer "Move to bottom panel" (or "Restore pane to layout" for a
-  docked pane). The panel's strip has a sub-tab per pane (click to show and focus, `x` to close),
-  "Restore pane to layout" and "Hide bottom panel" buttons, and the panel is resizable from its
-  top edge.
+  Terminal and Logcat panes can be docked.
+- **States.** Empty: nothing is drawn. Expanded: a strip of sub-tab chips over the selected pane,
+  resizable from its top edge, or maximized over the layout (the layout stays alive). Collapsed: the
+  strip only; clicking a chip expands on it. Each chip shows the kind icon, title (a toolbar
+  button's label, else the pane title), a running dot or ✓/✗ with the last exit code
+  (`TerminalView::warpium_sub_tab_status`) and an unread dot. Unread output compares
+  `TerminalView::warpium_output_generation` (bumped in `handle_terminal_wakeup`, a three-line
+  upstream edit) with the generation seen when the sub-tab was last visible. Docked panes don't
+  notify the pane group, so a 1 s timer re-renders the chips when their fingerprint changes (it
+  stops while the dock is empty).
+- **Commands.** Workspace-level (so they work with focus in the Project Explorer): `cmd-j` toggle
+  (empty → new terminal in the panel; expanded → collapse and focus the layout; collapsed →
+  expand and focus the selected sub-tab), "New terminal in bottom panel", next/previous sub-tab
+  `cmd-ctrl-]`/`cmd-ctrl-[` (`cmd-alt-[`/`]` fold code in the editor) and maximize/restore
+  `cmd-ctrl-j` (`cmd-shift-J` queues agent prompts). Pane-level: "Move pane to bottom panel",
+  "Restore pane to layout"; terminal context and pane header menus offer the same. A chip's
+  right-click menu: Restore pane to layout, Move to tab (each other tab, or a new tab), Close.
+- **Drag and drop.** Chips are draggable: onto another chip to reorder, onto a layout pane to
+  restore it on the side it was dropped, onto the tab bar to move it into that tab's panel (or a new
+  tab after the last one). A layout pane's header dragged onto the expanded panel docks it, and a
+  docked pane's header dragged onto a layout pane restores it there; both apply on drop (no live
+  preview), and the layout's last pane isn't docked by dragging.
 - **Rules.** Restoring puts the pane back next to its previous neighbor when that pane is still
   visible, else right of the layout pane focused last. `exit` in a docked terminal closes only its
   sub-tab. Closing or moving away the layout's last visible pane while the dock has panes opens a
-  fresh terminal in the layout instead of closing the tab, and so does docking the last one.
-  Splits from a docked pane split the layout pane focused last; layout navigation from a docked
-  pane returns focus to the layout; docked panes can't be dragged or dropped onto. Focusing a
-  docked pane (from the panel, session navigation or a closed neighbor) shows the panel on it.
-- **Not yet.** Docked panes aren't persisted, so they aren't restored on relaunch (next step, now
-  that the tab project root changes to `TabSnapshot` have landed). Only terminal panes can be docked; Logcat, the
-  collapsed chip strip and unread badges come later.
-- **Upstream touch points** (one-line hooks into `warpium_bottom_dock.rs`, check after upstream
-  merges): `pane_group/mod.rs` (`PaneGroupAction::WarpiumBottomPanel`, the `warpium_bottom_dock`
-  field, `close_pane`, `remove_pane_for_move`, `focus_pane`, `update_pane_history`,
-  `handle_focus_change`, `add_pane_with_options`, `handle_pane_view_event`, `handle_pane_event`,
-  `handle_action`, `keymap_context`, `render`, `reveal_and_focus_pane`), `pane_group/focus_state.rs`
-  (docked set), `pane_group/pane/mod.rs` (`PaneEvent::WarpiumBottomPanel`),
-  `terminal/view/action.rs` and `terminal/view.rs` (`TerminalAction::WarpiumBottomPanel`, menu
-  items) and `terminal/view/pane_impl.rs` (header menu).
+  fresh terminal in the layout instead of closing the tab, and so does docking the last one; it
+  starts in the tab's locked project root, else the replaced pane's directory. Splits from a docked
+  pane split the layout pane focused last; layout navigation from a docked pane returns focus to the
+  layout. Focusing a docked pane (from the panel, session navigation or a closed neighbor) shows the
+  panel on it.
+- **Moving between tabs.** `PaneGroup::take_docked_pane_for_move` (detach `Moved`, never touches the
+  layout, so the source tab survives) and `adopt_pane_into_bottom_panel` (attach off-tree), wired by
+  `BottomPanelEvent::MoveToTab`; the sub-tab keeps its title and origin.
+- **Toolbar `target = "panel"`.** Runs the command in a sub-tab with origin
+  `Command { key: "toolbar:<button id>" }` titled after the button. The next run reuses that
+  button's sub-tab when it is idle (local, nothing executing, empty input), typed in like `current`
+  (wrapped so `cwd`/`env` don't leak); otherwise a new sub-tab "Label (2)". It selects the sub-tab
+  (expanding the panel) without taking focus. With the panel off it falls back to a new tab.
+- **Android.** With the panel on, Run uses a panel sub-tab per module (`android-run:<module>`,
+  reused while idle) and Logcat opens in the active tab's panel. Logcat stays one per window
+  (`LogcatPaneManager`): one adb stream per window, and a pane per tab would duplicate it. Opening
+  it from another tab moves the window's Logcat into this tab's panel (unless that would close the
+  tab holding it as its only pane; then that tab is shown).
+- **Persistence.** `TabSnapshot::warpium_bottom_panel` (`warpium_bottom_panel::PanelSnapshot`) is
+  saved as JSON in `panels.warpium_bottom_panel` (migration
+  `2026-11-19-000000_add_warpium_bottom_panel_to_panels`): entries (terminal uuid as hex and cwd, or
+  Logcat), titles, origins, selection, expanded/maximized and height. Reading is lenient (unknown
+  entries are dropped, bad JSON drops only the panel). Docked terminals have no `terminal_panes`
+  row, so their blocks are read by uuid (`add_docked_terminal_blocks`). Restored terminals get their
+  blocks and directory back (no AI conversation or profile restore); Logcat restores only if the
+  window has none yet and the Android tools are on. Older databases restore without a panel.
+- **Not done.** Undo for closing a docked sub-tab (closing discards it right away); splits inside
+  the panel; dragging a docked pane's header onto the tab bar (use the chip instead).
+- **Upstream touch points** (one-line hooks into the fork files, check after upstream merges):
+  `pane_group/mod.rs` (`PaneGroupAction::WarpiumBottomPanel`, `Event::WarpiumBottomPanel`, the
+  `warpium_bottom_dock` field, `close_pane`, `remove_pane_for_move`, `focus_pane`,
+  `update_pane_history`, `handle_focus_change`, `add_pane_with_options`, `handle_pane_view_event`,
+  `handle_pane_event`, `handle_action`, `keymap_context`, `render`, `reveal_and_focus_pane`),
+  `pane_group/focus_state.rs` (docked set), `pane_group/pane/mod.rs` (`PaneEvent::WarpiumBottomPanel`),
+  `pane_group/pane/view/mod.rs` (`PaneDropTargetData::pane_id`), `terminal/view.rs` (output
+  generation, menu items, `TerminalAction::WarpiumBottomPanel`), `terminal/view/action.rs`,
+  `terminal/view/pane_impl.rs` (header menu), `workspace/action.rs` and `workspace/view.rs`
+  (`WorkspaceAction::WarpiumBottomPanel`, the setting toggle and keymap flag, the pane group event,
+  restore and snapshot), `app_state.rs`, `persistence/sqlite.rs` (save/read, docked blocks),
+  `crates/persistence` (model, schema), `settings_view/features_page.rs` (the setting widget),
+  `settings/init.rs` and `test_util/settings.rs` (registration).
 
 ## Tab project root
 
@@ -823,8 +876,8 @@ gated to `warpdotdev` and don't run here. Don't change whether workflows are ena
   only by master runs, so PR builds restore master's warm debug cache. Measure performance on
   a master or release build.
 - **Dogfood features:** branch and PR builds add the cargo features in the bundle step's
-  `DOGFOOD_FEATURES` (currently `warpium_bottom_panel`) so features in development can be tested
-  from the artifact; release builds leave them out.
+  `DOGFOOD_FEATURES` (none right now) so features in development can be tested from the
+  artifact; release builds leave them out.
 - **Unit tests:** `.github/workflows/warpium-tests.yml` ("Warpium Tests") runs on
   `ubuntu-latest` for the same triggers, in parallel with the macOS build: all tests of the
   fork crates (`crates/warpium_*`, `crates/code_index`) plus the `warp` crate's tests whose path

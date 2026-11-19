@@ -912,6 +912,10 @@ pub enum WorkspaceAction {
     ToggleCodeIndex,
     /// Warpium: changes the active tab's project root (lock, unlock, change or add folders).
     WarpiumProjectRoot(crate::warpium::project_root::ProjectRootAction),
+    /// Warpium: acts on the active tab's bottom panel.
+    WarpiumBottomPanel(crate::pane_group::BottomPanelAction),
+    /// Warpium: toggles the bottom panel setting.
+    ToggleWarpiumBottomPanelSetting,
     /// Warpium: opens (or focuses) the Logcat pane.
     OpenAndroidLogcat,
     /// Warpium: opens the Logcat pane's device menu.
@@ -1281,6 +1285,9 @@ impl WorkspaceAction {
             // Saved by the handler once the project root has changed (some actions wait for a
             // folder picker).
             | WarpiumProjectRoot(_)
+            // The pane group saves the app state when its panel changes.
+            | WarpiumBottomPanel(_)
+            | ToggleWarpiumBottomPanelSetting
             | OpenAndroidLogcat
             | SelectAndroidDevice
             | LaunchAndroidAvd

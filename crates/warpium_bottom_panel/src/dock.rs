@@ -256,7 +256,11 @@ impl<Id: Copy + Eq> BottomDock<Id> {
         };
         let entry = self.entries.remove(from);
         let target_index = self.index_of(target).expect("target is still docked");
-        let to = if after { target_index + 1 } else { target_index };
+        let to = if after {
+            target_index + 1
+        } else {
+            target_index
+        };
         self.entries.insert(to, entry);
         from != to
     }

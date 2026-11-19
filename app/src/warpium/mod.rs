@@ -4,6 +4,7 @@
 pub(crate) mod agent_mcp;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod android;
+pub(crate) mod bottom_panel;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod code_index;
 #[cfg(not(target_family = "wasm"))]

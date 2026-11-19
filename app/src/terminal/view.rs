@@ -2680,6 +2680,8 @@ pub struct TerminalView {
 
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
+    /// Warpium: bumped on every terminal wakeup, so the bottom panel can badge unread output.
+    warpium_output_generation: u64,
 
     sessions: ModelHandle<Sessions>,
     active_block_metadata: Option<BlockMetadata>,
@@ -4434,6 +4436,7 @@ impl TerminalView {
             osc52_clipboard_banner_suppressed,
             pane_configuration,
             focus_handle: None,
+            warpium_output_generation: 0,
             sessions,
             remote_server_shimmer_handle: ShimmeringTextStateHandle::new(),
             active_block_metadata: None,
@@ -10236,6 +10239,7 @@ impl TerminalView {
     /// This function is invoked every time there is some form of view event
     /// such as a state change or terminal wakeup to update the view context.
     fn handle_terminal_wakeup(&mut self, _: (), ctx: &mut ViewContext<Self>) {
+        self.warpium_output_generation += 1;
         // If find bar is active, we update the matches for the last/active block or the alt screen.
         if self.find_model.as_ref(ctx).is_find_bar_open() {
             self.find_model.update(ctx, |find_model, ctx| {

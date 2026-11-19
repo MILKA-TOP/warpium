@@ -325,7 +325,9 @@ fn rejects_more_than_one_action() {
 #[test]
 fn parses_the_panel_target() {
     let buttons = merge(
-        Some(&team("[[button]]\nid = \"t\"\ncommand = \"make\"\ntarget = \"panel\"\n")),
+        Some(&team(
+            "[[button]]\nid = \"t\"\ncommand = \"make\"\ntarget = \"panel\"\n",
+        )),
         None,
     )
     .unwrap();
@@ -345,7 +347,10 @@ fn parses_the_panel_target() {
 fn unknown_target_error_lists_the_panel_target() {
     let message = team_error("[[button]]\nid = \"x\"\ncommand = \"make\"\ntarget = \"dock\"\n");
 
-    assert!(message.contains("`split_down` or `panel`"), "message: {message}");
+    assert!(
+        message.contains("`split_down` or `panel`"),
+        "message: {message}"
+    );
 }
 
 #[test]

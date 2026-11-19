@@ -153,11 +153,17 @@ fn drop_side_compares_offsets_relative_to_the_pane_size() {
 
 #[test]
 fn fresh_terminal_prefers_the_locked_project_root() {
-    assert_eq!(fresh_terminal_directory(Some("/repo"), Some("/repo/app")), Some("/repo"));
+    assert_eq!(
+        fresh_terminal_directory(Some("/repo"), Some("/repo/app")),
+        Some("/repo")
+    );
 }
 
 #[test]
 fn fresh_terminal_falls_back_to_the_replaced_pane_directory() {
-    assert_eq!(fresh_terminal_directory(None, Some("/tmp/work")), Some("/tmp/work"));
+    assert_eq!(
+        fresh_terminal_directory(None, Some("/tmp/work")),
+        Some("/tmp/work")
+    );
     assert_eq!(fresh_terminal_directory::<&str>(None, None), None);
 }

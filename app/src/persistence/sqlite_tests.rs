@@ -407,6 +407,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
             group_id: None,
             pinned: false,
             project_root: Default::default(),
+            warpium_bottom_panel: None,
         }],
         active_tab_index: 0,
         team_uid: None,
@@ -630,6 +631,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                 group_id: None,
                 pinned: false,
                 project_root: Default::default(),
+                warpium_bottom_panel: None,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -710,6 +712,7 @@ fn test_sqlite_round_trips_code_pane_with_multiple_tabs() {
                 group_id: None,
                 pinned: false,
                 project_root: Default::default(),
+                warpium_bottom_panel: None,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -798,6 +801,7 @@ fn test_sqlite_round_trips_tab_groups() {
         group_id: Some(group_id),
         pinned: false,
         project_root: Default::default(),
+        warpium_bottom_panel: None,
     };
     let tab_outside_group = TabSnapshot {
         custom_title: None,
@@ -827,6 +831,7 @@ fn test_sqlite_round_trips_tab_groups() {
         group_id: None,
         pinned: false,
         project_root: Default::default(),
+        warpium_bottom_panel: None,
     };
 
     let app_state = AppState {
@@ -924,6 +929,7 @@ fn test_sqlite_round_trips_pinned_state() {
         group_id: None,
         pinned: true,
         project_root: Default::default(),
+        warpium_bottom_panel: None,
     };
     let unpinned_tab = TabSnapshot {
         custom_title: None,
@@ -953,6 +959,7 @@ fn test_sqlite_round_trips_pinned_state() {
         group_id: Some(unpinned_group_id),
         pinned: false,
         project_root: Default::default(),
+        warpium_bottom_panel: None,
     };
     let tab_in_pinned_group = TabSnapshot {
         custom_title: None,
@@ -982,6 +989,7 @@ fn test_sqlite_round_trips_pinned_state() {
         group_id: Some(pinned_group_id),
         pinned: false,
         project_root: Default::default(),
+        warpium_bottom_panel: None,
     };
 
     let app_state = AppState {
@@ -1277,4 +1285,122 @@ fn team_member_is_disabled_round_trips_through_sqlite_cache() {
         .expect("disabled member should be present");
     assert!(!active_member.is_disabled);
     assert!(disabled_member.is_disabled);
+}
+
+fn warpium_bottom_panel_app_state() -> AppState {
+    let mut window = test_terminal_window_snapshot(false);
+    window.tabs[0].warpium_bottom_panel = Some(warpium_bottom_panel::PanelSnapshot {
+        height: Some(300.),
+        expanded: false,
+        maximized: false,
+        active: Some(1),
+        entries: vec![
+            warpium_bottom_panel::EntrySnapshot {
+                kind: warpium_bottom_panel::EntryKind::Terminal {
+                    uuid: "0909".to_owned(),
+                    cwd: Some("/tmp".to_owned()),
+                },
+                title: Some("Assemble".to_owned()),
+                origin: warpium_bottom_panel::DockOrigin::Command {
+                    key: "toolbar:assemble".to_owned(),
+                },
+            },
+            warpium_bottom_panel::EntrySnapshot {
+                kind: warpium_bottom_panel::EntryKind::Logcat,
+                title: None,
+                origin: warpium_bottom_panel::DockOrigin::Logcat,
+            },
+        ],
+    });
+    AppState {
+        windows: vec![window, test_terminal_window_snapshot(true)],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    }
+}
+
+#[test]
+fn test_sqlite_round_trips_warpium_bottom_panel() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let app_state = warpium_bottom_panel_app_state();
+
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(
+        restored.windows[0].tabs[0].warpium_bottom_panel,
+        app_state.windows[0].tabs[0].warpium_bottom_panel
+    );
+    assert_eq!(restored.windows[1].tabs[0].warpium_bottom_panel, None);
+}
+
+/// A database written before the bottom panel column restores its tabs without a panel.
+#[test]
+fn test_sqlite_restores_tabs_saved_before_warpium_bottom_panel() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    save_app_state(&mut conn, &warpium_bottom_panel_app_state()).expect("app state should save");
+
+    remigrate_without(
+        &mut conn,
+        &database_path,
+        "_add_warpium_bottom_panel_to_panels",
+    );
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.windows.len(), 2);
+    assert_eq!(restored.windows[0].tabs[0].warpium_bottom_panel, None);
+}
+
+/// Unreadable panel JSON drops the panel, not the tab.
+#[test]
+fn test_sqlite_keeps_the_tab_when_the_warpium_bottom_panel_is_corrupt() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    save_app_state(&mut conn, &warpium_bottom_panel_app_state()).expect("app state should save");
+
+    conn.batch_execute("UPDATE panels SET warpium_bottom_panel = 'not json'")
+        .expect("panel should update");
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(restored.windows[0].tabs.len(), 1);
+    assert_eq!(restored.windows[0].tabs[0].warpium_bottom_panel, None);
+}
+
+/// Docked terminals have no `terminal_panes` row; their saved blocks are still restored.
+#[test]
+fn test_sqlite_restores_blocks_of_warpium_docked_terminals() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    save_app_state(&mut conn, &warpium_bottom_panel_app_state()).expect("app state should save");
+
+    super::save_block(&mut conn, vec![9, 9], &SerializedBlock::default(), true)
+        .expect("block should save");
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+
+    assert_eq!(
+        restored
+            .block_lists
+            .get(&crate::app_state::PaneUuid(vec![9, 9]))
+            .map(Vec::len),
+        Some(1)
+    );
 }

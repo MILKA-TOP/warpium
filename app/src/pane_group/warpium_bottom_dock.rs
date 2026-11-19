@@ -1,41 +1,48 @@
 //! Warpium: the bottom panel, a per-tab dock below the split layout (roadmap item 14).
 //!
 //! A docked pane leaves the layout tree but stays in `pane_contents`, so its view, terminal
-//! manager and PTY keep running, like a child agent pane that is off-tree. The dock only records
-//! which panes are docked and which one it shows. Everything that walks the layout tree (focus
-//! navigation, splits, resizing, drag and drop) is kept away from docked panes here, and every
-//! path that would empty the layout (closing or moving away its last pane) first opens a fresh
-//! terminal so the tab, and the processes in its dock, survive.
+//! manager and PTY keep running, like a child agent pane that is off-tree. The dock records which
+//! panes are docked, in which order, which one it shows and whether it is expanded or collapsed to
+//! a strip of status chips (the model is `warpium_bottom_panel::BottomDock`). Everything that walks
+//! the layout tree (focus navigation, splits, resizing, drag and drop) is kept away from docked
+//! panes here, and every path that would empty the layout (closing or moving away its last pane)
+//! first opens a fresh terminal so the tab, and the processes in its dock, survive.
 //!
-//! Docked panes are not part of the session snapshot yet, so they aren't restored on relaunch.
+//! Rendering is in `warpium_bottom_dock_render.rs`, the saved form in
+//! `warpium_bottom_dock_persistence.rs`.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
+use std::path::PathBuf;
 
 use warpium_bottom_panel::{
-    Axis, BottomDock, LayoutNode, RestoreHint, Side, layout_anchor, restore_hint,
+    Axis, BottomDock, DockOrigin, DockedPane, LayoutNode, RestoreHint, Side,
+    fresh_terminal_directory, layout_anchor, restore_hint,
 };
+use warpui::r#async::Timer;
 use warpui::elements::{
-    Border, Clipped, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide, Element, Flex,
-    Hoverable, MainAxisSize, MouseStateHandle, ParentElement, Resizable, ResizableStateHandle,
-    Shrinkable, Text, resizable_state_handle,
+    DraggableState, MouseStateHandle, ResizableStateHandle, resizable_state_handle,
 };
 use warpui::keymap::{Context, EditableBinding};
-use warpui::platform::Cursor;
-use warpui::text_layout::ClipConfig;
-use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, SingletonEntity as _, ViewContext};
+use warpui::{AppContext, SingletonEntity as _, ViewContext, ViewHandle};
 
 use super::pane::view::PaneViewEvent;
 use super::{
-    Direction, PaneConfigurationEvent, PaneData, PaneGroup, PaneGroupAction, PaneId, PaneNode,
-    SplitDirection,
+    DefaultSessionModeBehavior, DetachType, Direction, PaneConfigurationEvent, PaneData, PaneGroup,
+    PaneGroupAction, PaneId, PaneNode, SplitDirection,
 };
-use crate::appearance::Appearance;
-use crate::features::FeatureFlag;
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, SubMenu};
+use crate::pane_group::AnyPaneContent;
+use crate::terminal::TerminalView;
 use crate::terminal::session_settings::{NewSessionSource, SessionSettings};
 use crate::terminal::shared_session::IsSharedSessionCreator;
-use crate::ui_components::buttons::icon_button;
-use crate::ui_components::icons::Icon;
+use crate::warpium::sync_settings::WarpiumBottomPanelSettings;
+use crate::workspace::WorkspaceRegistry;
+
+#[path = "warpium_bottom_dock_persistence.rs"]
+mod persistence;
+#[path = "warpium_bottom_dock_render.rs"]
+mod render;
 
 /// Keymap context set while the focused pane is docked.
 const FOCUSED_PANE_DOCKED: &str = "PaneGroup_FocusedPaneDocked";
@@ -43,12 +50,9 @@ const FOCUSED_PANE_DOCKED: &str = "PaneGroup_FocusedPaneDocked";
 const FOCUSED_PANE_DOCKABLE: &str = "PaneGroup_FocusedPaneDockable";
 
 const DEFAULT_HEIGHT: f32 = 260.;
-const MIN_HEIGHT: f32 = 100.;
-/// Height the layout keeps above the panel when it is dragged up.
-const MIN_LAYOUT_HEIGHT: f32 = 160.;
-const TAB_STRIP_HEIGHT: f32 = 28.;
-const TAB_MAX_WIDTH: f32 = 200.;
-const TAB_FONT_SIZE: f32 = 12.;
+const MENU_WIDTH: f32 = 240.;
+/// How often hidden sub-tabs are checked for new output and status changes.
+const STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Moves a pane between the layout and the bottom panel, from a pane's own menus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,34 +61,112 @@ pub enum BottomPanelPaneRequest {
     RestoreToLayout,
 }
 
+/// Where a docked sub-tab moves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BottomPanelTabTarget {
+    /// The bottom panel of the tab at this index.
+    Tab(usize),
+    /// A new tab, as its only pane.
+    NewTab,
+}
+
+/// Where a dragged sub-tab chip was dropped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BottomPanelChipDrop {
+    /// On another chip: reorder.
+    Chip(PaneId),
+    /// On a pane of the layout, at this point (window coordinates): restore next to it.
+    LayoutPane { target: PaneId, x: f32, y: f32 },
+    /// On the tab bar.
+    TabBar(BottomPanelTabTarget),
+}
+
 #[derive(Debug, Clone)]
 pub enum BottomPanelAction {
-    /// Shows or hides the panel; opens a new terminal in it when it is empty.
+    /// Expands or collapses the panel; opens a new terminal in it when it is empty.
     Toggle,
-    /// Hides the panel.
-    Hide,
+    /// Collapses the panel to its strip.
+    Collapse,
+    /// Expands the panel on its selected sub-tab.
+    Expand,
     MoveFocusedPane,
     RestoreFocusedPane,
     /// Shows and focuses the sub-tab of a docked pane.
     Select(PaneId),
     Restore(PaneId),
+    Close(PaneId),
+    NewTerminal,
+    SelectNext,
+    SelectPrevious,
+    ToggleMaximized,
+    /// Opens a sub-tab's context menu.
+    OpenSubTabMenu(PaneId),
+    MoveToTab {
+        pane_id: PaneId,
+        target: BottomPanelTabTarget,
+    },
+    ChipDropped {
+        pane_id: PaneId,
+        drop: BottomPanelChipDrop,
+    },
 }
+
+/// Requests the bottom panel makes of the workspace.
+#[derive(Debug, Clone)]
+pub enum BottomPanelEvent {
+    /// Move a docked pane to another tab's panel, or to a new tab.
+    MoveToTab {
+        pane_id: PaneId,
+        target: BottomPanelTabTarget,
+    },
+}
+
+/// A docking or restore picked while dragging a pane header, applied when it is dropped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PendingDrop {
+    Dock(PaneId),
+    Restore {
+        pane_id: PaneId,
+        target: PaneId,
+        direction: Direction,
+    },
+}
+
+/// What a chip shows, compared between polls to re-render only on change.
+type ChipFingerprint = (PaneId, warpium_bottom_panel::SubTabStatus, bool);
 
 /// The bottom panel of one tab.
 pub(super) struct WarpiumBottomDock {
     model: BottomDock<PaneId>,
     height: ResizableStateHandle,
-    tab_mouse_states: HashMap<PaneId, TabMouseStates>,
-    restore_button: MouseStateHandle,
-    hide_button: MouseStateHandle,
-    /// Docked panes whose title changes re-render the tab strip.
+    chip_states: HashMap<PaneId, ChipStates>,
+    buttons: DockButtons,
+    /// Docked panes whose title changes re-render the chips.
     title_subscriptions: HashSet<PaneId>,
+    /// The sub-tab context menu, created the first time it opens.
+    menu: Option<ViewHandle<Menu<PaneGroupAction>>>,
+    /// The sub-tab whose context menu is open.
+    menu_pane: Option<PaneId>,
+    pending_drop: Option<PendingDrop>,
+    chip_fingerprints: Vec<ChipFingerprint>,
+    poll_scheduled: bool,
+    settings_subscribed: bool,
 }
 
 #[derive(Default)]
-struct TabMouseStates {
-    tab: MouseStateHandle,
+struct ChipStates {
+    chip: MouseStateHandle,
     close: MouseStateHandle,
+    drag: DraggableState,
+}
+
+#[derive(Default)]
+struct DockButtons {
+    expand: MouseStateHandle,
+    collapse: MouseStateHandle,
+    maximize: MouseStateHandle,
+    restore: MouseStateHandle,
+    new_terminal: MouseStateHandle,
 }
 
 impl Default for WarpiumBottomDock {
@@ -92,10 +174,15 @@ impl Default for WarpiumBottomDock {
         Self {
             model: BottomDock::default(),
             height: resizable_state_handle(DEFAULT_HEIGHT),
-            tab_mouse_states: HashMap::new(),
-            restore_button: MouseStateHandle::default(),
-            hide_button: MouseStateHandle::default(),
+            chip_states: HashMap::new(),
+            buttons: DockButtons::default(),
             title_subscriptions: HashSet::new(),
+            menu: None,
+            menu_pane: None,
+            pending_drop: None,
+            chip_fingerprints: Vec::new(),
+            poll_scheduled: false,
+            settings_subscribed: false,
         }
     }
 }
@@ -105,40 +192,57 @@ pub(super) fn init_bindings(app: &mut AppContext) {
 
     app.register_editable_bindings([
         EditableBinding::new(
-            "pane_group:toggle_bottom_panel",
-            "Toggle bottom panel",
-            PaneGroupAction::WarpiumBottomPanel(BottomPanelAction::Toggle),
-        )
-        .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
-        .with_enabled(|| FeatureFlag::WarpiumBottomPanel.is_enabled())
-        .with_mac_key_binding("cmd-j"),
-        EditableBinding::new(
             "pane_group:move_pane_to_bottom_panel",
             "Move pane to bottom panel",
             PaneGroupAction::WarpiumBottomPanel(BottomPanelAction::MoveFocusedPane),
         )
-        .with_context_predicate(id!("PaneGroup") & id!(FOCUSED_PANE_DOCKABLE))
-        .with_enabled(|| FeatureFlag::WarpiumBottomPanel.is_enabled()),
+        .with_context_predicate(id!("PaneGroup") & id!(FOCUSED_PANE_DOCKABLE)),
         EditableBinding::new(
             "pane_group:restore_pane_from_bottom_panel",
             "Restore pane to layout",
             PaneGroupAction::WarpiumBottomPanel(BottomPanelAction::RestoreFocusedPane),
         )
-        .with_context_predicate(id!("PaneGroup") & id!(FOCUSED_PANE_DOCKED))
-        .with_enabled(|| FeatureFlag::WarpiumBottomPanel.is_enabled()),
+        .with_context_predicate(id!("PaneGroup") & id!(FOCUSED_PANE_DOCKED)),
     ]);
 }
 
+fn is_enabled(app: &AppContext) -> bool {
+    crate::warpium::bottom_panel::is_enabled(app)
+}
+
 impl PaneGroup {
-    pub(super) fn is_pane_docked(&self, pane_id: PaneId) -> bool {
+    pub(crate) fn is_pane_docked(&self, pane_id: PaneId) -> bool {
         self.warpium_bottom_dock.model.contains(pane_id)
     }
 
-    /// Whether the pane can move to the bottom panel: a visible terminal pane of the layout that
-    /// no other mechanism (child agents, temporary swaps) manages.
-    fn is_pane_dockable(&self, pane_id: PaneId) -> bool {
-        FeatureFlag::WarpiumBottomPanel.is_enabled()
-            && pane_id.as_terminal_pane_id().is_some()
+    #[cfg(test)]
+    pub(super) fn warpium_bottom_dock_model(&self) -> &BottomDock<PaneId> {
+        &self.warpium_bottom_dock.model
+    }
+
+    /// Whether the panel is expanded and maximized, taking the layout's place.
+    pub(super) fn is_warpium_bottom_panel_maximized(&self) -> bool {
+        self.warpium_bottom_dock.model.is_maximized()
+    }
+
+    fn is_logcat_pane(&self, pane_id: PaneId) -> bool {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            self.downcast_pane_by_id::<super::LogcatPane>(pane_id)
+                .is_some()
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = pane_id;
+            false
+        }
+    }
+
+    /// Whether the pane can move to the bottom panel: a visible terminal or Logcat pane of the
+    /// layout that no other mechanism (child agents, temporary swaps) manages.
+    fn is_pane_dockable(&self, pane_id: PaneId, app: &AppContext) -> bool {
+        is_enabled(app)
+            && (pane_id.as_terminal_pane_id().is_some() || self.is_logcat_pane(pane_id))
             && self.pane_contents.contains_key(&pane_id)
             && self.panes.is_pane_in_tree(pane_id)
             && !self.panes.is_pane_hidden(&pane_id)
@@ -148,15 +252,32 @@ impl PaneGroup {
     }
 
     /// The layout pane to act on instead of a docked one: the most recently focused visible pane
-    /// of the layout other than `excluded`.
-    fn warpium_layout_anchor(&self, excluded: Option<PaneId>) -> Option<PaneId> {
-        let visible: Vec<PaneId> = self
-            .panes
-            .visible_pane_ids()
-            .into_iter()
-            .filter(|id| Some(*id) != excluded)
-            .collect();
-        layout_anchor(&self.pane_history, &visible)
+    /// of the layout.
+    fn warpium_layout_anchor(&self) -> Option<PaneId> {
+        layout_anchor(&self.pane_history, &self.panes.visible_pane_ids())
+    }
+
+    fn output_generation(&self, pane_id: PaneId, app: &AppContext) -> u64 {
+        self.terminal_view_from_pane_id(pane_id, app)
+            .map_or(0, |view| view.as_ref(app).warpium_output_generation())
+    }
+
+    /// Applies `change` to the dock model. When it changes the visible sub-tab, the output of the
+    /// one that is no longer visible counts as seen up to now.
+    fn update_dock<R>(
+        &mut self,
+        app: &AppContext,
+        change: impl FnOnce(&mut BottomDock<PaneId>) -> R,
+    ) -> R {
+        let before = self.warpium_bottom_dock.model.visible_pane();
+        let result = change(&mut self.warpium_bottom_dock.model);
+        if let Some(hidden) = before
+            && self.warpium_bottom_dock.model.visible_pane() != before
+        {
+            let generation = self.output_generation(hidden, app);
+            self.warpium_bottom_dock.model.mark_seen(hidden, generation);
+        }
+        result
     }
 
     /// Hook for adding a pane next to `base_pane_id`: a docked base is replaced by the layout
@@ -165,7 +286,7 @@ impl PaneGroup {
         if !self.is_pane_docked(base_pane_id) {
             return base_pane_id;
         }
-        self.warpium_layout_anchor(None).unwrap_or(base_pane_id)
+        self.warpium_layout_anchor().unwrap_or(base_pane_id)
     }
 
     /// Hook for `close_pane`: closes a docked pane (its shell exited or the user closed its
@@ -183,19 +304,24 @@ impl PaneGroup {
         if was_focused {
             self.focus_after_leaving_dock(ctx);
         }
-        if Some(pane_id) == self.active_session_id(ctx).map(Into::into) {
-            let new_active_session = self.choose_active_session(pane_id);
-            self.focus_state.update(ctx, |focus_state, ctx| {
-                focus_state.set_active_session(new_active_session, ctx);
-            });
-        }
+        self.reassign_active_session_from(pane_id, ctx);
         self.remove_from_pane_history(pane_id);
+        self.unsubscribe_from_docked_title(pane_id, ctx);
         // Dropping the pane's contents drops its terminal manager, which ends the PTY.
         self.discard_pane(pane_id, ctx);
         self.handle_pane_count_change(ctx);
         ctx.emit(super::Event::TerminalViewStateChanged);
         ctx.emit(super::Event::AppStateChanged);
         true
+    }
+
+    fn reassign_active_session_from(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
+        if Some(pane_id) == self.active_session_id(ctx).map(Into::into) {
+            let new_active_session = self.choose_active_session(pane_id);
+            self.focus_state.update(ctx, |focus_state, ctx| {
+                focus_state.set_active_session(new_active_session, ctx);
+            });
+        }
     }
 
     /// Hook for paths that take `pane_id` out of the layout for good (closing it, moving it to
@@ -210,7 +336,8 @@ impl PaneGroup {
             return;
         }
         if self.is_pane_docked(pane_id) {
-            // Docked panes never reach the move paths; keep the dock consistent if one does.
+            // Docked panes leave through `take_docked_pane_for_move`; keep the dock consistent if
+            // one reaches the layout's paths anyway.
             self.undock_pane(pane_id, ctx);
             return;
         }
@@ -228,8 +355,10 @@ impl PaneGroup {
     }
 
     /// Hook for `focus_pane`: focusing a docked pane shows the panel on its sub-tab.
-    pub(super) fn warpium_on_pane_focused(&mut self, pane_id: PaneId) {
-        self.warpium_bottom_dock.model.select(pane_id);
+    pub(super) fn warpium_on_pane_focused(&mut self, pane_id: PaneId, app: &AppContext) {
+        if self.is_pane_docked(pane_id) {
+            self.update_dock(app, |dock| dock.select(pane_id));
+        }
     }
 
     /// Hook for `update_pane_history`: docked panes stay out of the history, which picks the
@@ -260,23 +389,69 @@ impl PaneGroup {
         true
     }
 
-    /// Hook for pane view events: docked panes can't be dragged (they aren't in the tree), and
-    /// panes can't be dropped onto them.
-    pub(super) fn warpium_ignores_pane_view_event(
-        &self,
+    /// Hook for pane view events (pane header drags). A layout pane dragged onto the panel is
+    /// docked, a docked pane dragged onto the layout is restored there, both once dropped; docked
+    /// panes can't be dragged onto the tab bar. Returns true if it handled `event`.
+    pub(super) fn warpium_handle_pane_view_event(
+        &mut self,
         pane_id: PaneId,
         event: &PaneViewEvent,
+        ctx: &mut ViewContext<Self>,
     ) -> bool {
         match event {
-            PaneViewEvent::MovePaneWithinPaneGroup { target_id, .. } => {
-                self.is_pane_docked(pane_id) || self.is_pane_docked(*target_id)
+            PaneViewEvent::MovePaneWithinPaneGroup {
+                target_id,
+                direction,
+            } => {
+                let source_docked = self.is_pane_docked(pane_id);
+                let target_docked = self.is_pane_docked(*target_id);
+                if !source_docked && !target_docked {
+                    self.warpium_bottom_dock.pending_drop = None;
+                    return false;
+                }
+                self.warpium_bottom_dock.pending_drop = match (source_docked, target_docked) {
+                    // Only a pane whose layout keeps another pane: docking the last one would
+                    // open a fresh terminal mid-drag.
+                    (false, true)
+                        if self.is_pane_dockable(pane_id, ctx)
+                            && self.panes.visible_pane_count() > 1 =>
+                    {
+                        Some(PendingDrop::Dock(pane_id))
+                    }
+                    (true, false) => Some(PendingDrop::Restore {
+                        pane_id,
+                        target: *target_id,
+                        direction: *direction,
+                    }),
+                    _ => None,
+                };
+                true
             }
             PaneViewEvent::DroppedOnTabBar { .. } | PaneViewEvent::DraggedOntoTabBar { .. } => {
+                self.warpium_bottom_dock.pending_drop = None;
                 self.is_pane_docked(pane_id)
             }
-            PaneViewEvent::PaneDraggedOutsideTabBarOrPaneGroup
-            | PaneViewEvent::PaneDragEnded
-            | PaneViewEvent::PaneHeaderClicked => false,
+            PaneViewEvent::PaneDraggedOutsideTabBarOrPaneGroup => {
+                self.warpium_bottom_dock.pending_drop = None;
+                false
+            }
+            PaneViewEvent::PaneDragEnded => {
+                match self.warpium_bottom_dock.pending_drop.take() {
+                    Some(PendingDrop::Dock(dragged)) if dragged == pane_id => {
+                        self.move_pane_to_bottom_panel(dragged, ctx);
+                    }
+                    Some(PendingDrop::Restore {
+                        pane_id: dragged,
+                        target,
+                        direction,
+                    }) if dragged == pane_id => {
+                        self.restore_docked_pane_at(dragged, target, direction, ctx);
+                    }
+                    _ => {}
+                }
+                false
+            }
+            PaneViewEvent::PaneHeaderClicked => false,
         }
     }
 
@@ -297,7 +472,7 @@ impl PaneGroup {
             | PaneGroupAction::NavigateRight
             | PaneGroupAction::NavigateUp
             | PaneGroupAction::NavigateDown => {
-                self.focus_after_leaving_dock(ctx);
+                self.focus_after_leaving_dock_to_layout(ctx);
                 true
             }
             PaneGroupAction::ResizeLeft
@@ -321,13 +496,13 @@ impl PaneGroup {
     }
 
     pub(super) fn warpium_extend_keymap_context(&self, context: &mut Context, app: &AppContext) {
-        if !FeatureFlag::WarpiumBottomPanel.is_enabled() {
+        if !is_enabled(app) {
             return;
         }
         let focused = self.focused_pane_id(app);
         if self.is_pane_docked(focused) {
             context.set.insert(FOCUSED_PANE_DOCKED);
-        } else if self.is_pane_dockable(focused) {
+        } else if self.is_pane_dockable(focused, app) {
             context.set.insert(FOCUSED_PANE_DOCKABLE);
         }
     }
@@ -348,17 +523,32 @@ impl PaneGroup {
         }
     }
 
-    pub(super) fn handle_warpium_bottom_panel_action(
+    pub(crate) fn handle_warpium_bottom_panel_action(
         &mut self,
         action: &BottomPanelAction,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !FeatureFlag::WarpiumBottomPanel.is_enabled() {
+        // Getting panes back out keeps working after the setting is turned off.
+        let leaves_the_panel = matches!(
+            action,
+            BottomPanelAction::Restore(_)
+                | BottomPanelAction::RestoreFocusedPane
+                | BottomPanelAction::Close(_)
+        );
+        if !leaves_the_panel && !is_enabled(ctx) {
             return;
         }
         match action {
             BottomPanelAction::Toggle => self.toggle_bottom_panel(ctx),
-            BottomPanelAction::Hide => self.hide_bottom_panel(ctx),
+            BottomPanelAction::Collapse => self.collapse_bottom_panel(ctx),
+            BottomPanelAction::Expand => {
+                self.update_dock(ctx, |dock| dock.set_expanded(true));
+                if let Some(active) = self.warpium_bottom_dock.model.active() {
+                    self.focus_pane_by_id(active, ctx);
+                }
+                ctx.notify();
+                ctx.emit(super::Event::AppStateChanged);
+            }
             BottomPanelAction::MoveFocusedPane => {
                 let pane_id = self.focused_pane_id(ctx);
                 self.move_pane_to_bottom_panel(pane_id, ctx);
@@ -367,9 +557,110 @@ impl PaneGroup {
                 let pane_id = self.focused_pane_id(ctx);
                 self.restore_pane_from_bottom_panel(pane_id, ctx);
             }
-            BottomPanelAction::Select(pane_id) => self.focus_pane_by_id(*pane_id, ctx),
+            BottomPanelAction::Select(pane_id) => {
+                // Focusing an already focused pane is a no-op, so select explicitly too.
+                self.update_dock(ctx, |dock| dock.select(*pane_id));
+                self.focus_pane_by_id(*pane_id, ctx);
+                ctx.notify();
+            }
             BottomPanelAction::Restore(pane_id) => {
                 self.restore_pane_from_bottom_panel(*pane_id, ctx);
+            }
+            BottomPanelAction::Close(pane_id) => {
+                if self.is_pane_docked(*pane_id) {
+                    self.close_pane(*pane_id, ctx);
+                }
+            }
+            BottomPanelAction::NewTerminal => self.open_terminal_in_bottom_panel(ctx),
+            BottomPanelAction::SelectNext | BottomPanelAction::SelectPrevious => {
+                let next = matches!(action, BottomPanelAction::SelectNext);
+                let selected = self.update_dock(ctx, |dock| {
+                    if next {
+                        dock.select_next()
+                    } else {
+                        dock.select_previous()
+                    }
+                });
+                if let Some(selected) = selected {
+                    self.focus_pane_by_id(selected, ctx);
+                }
+                ctx.notify();
+            }
+            BottomPanelAction::ToggleMaximized => {
+                let Some(active) = self.warpium_bottom_dock.model.active() else {
+                    return;
+                };
+                let maximized = self.update_dock(ctx, |dock| dock.toggle_maximized());
+                if maximized {
+                    self.focus_pane_by_id(active, ctx);
+                }
+                ctx.notify();
+                ctx.emit(super::Event::AppStateChanged);
+            }
+            BottomPanelAction::OpenSubTabMenu(pane_id) => self.open_sub_tab_menu(*pane_id, ctx),
+            BottomPanelAction::MoveToTab { pane_id, target } => {
+                self.close_sub_tab_menu(ctx);
+                if self.is_pane_docked(*pane_id) {
+                    ctx.emit(super::Event::WarpiumBottomPanel(
+                        BottomPanelEvent::MoveToTab {
+                            pane_id: *pane_id,
+                            target: *target,
+                        },
+                    ));
+                }
+            }
+            BottomPanelAction::ChipDropped { pane_id, drop } => {
+                self.handle_chip_drop(*pane_id, *drop, ctx)
+            }
+        }
+    }
+
+    fn handle_chip_drop(
+        &mut self,
+        pane_id: PaneId,
+        drop: BottomPanelChipDrop,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.is_pane_docked(pane_id) {
+            return;
+        }
+        match drop {
+            BottomPanelChipDrop::Chip(target) => {
+                let dock = &self.warpium_bottom_dock.model;
+                let after = dock.index_of(pane_id) < dock.index_of(target);
+                if self
+                    .warpium_bottom_dock
+                    .model
+                    .move_entry(pane_id, target, after)
+                {
+                    ctx.notify();
+                    ctx.emit(super::Event::AppStateChanged);
+                }
+            }
+            BottomPanelChipDrop::LayoutPane { target, x, y } => {
+                if self.is_pane_docked(target) || !self.panes.is_pane_in_tree(target) {
+                    return;
+                }
+                let side = ctx
+                    .element_position_by_id(target.position_id())
+                    .map(|rect| {
+                        warpium_bottom_panel::drop_side(
+                            (
+                                rect.origin_x(),
+                                rect.origin_y(),
+                                rect.width(),
+                                rect.height(),
+                            ),
+                            (x, y),
+                        )
+                    })
+                    .unwrap_or(Side::Right);
+                self.restore_docked_pane_at(pane_id, target, direction_of(side), ctx);
+            }
+            BottomPanelChipDrop::TabBar(target) => {
+                ctx.emit(super::Event::WarpiumBottomPanel(
+                    BottomPanelEvent::MoveToTab { pane_id, target },
+                ));
             }
         }
     }
@@ -381,7 +672,7 @@ impl PaneGroup {
         pane_id: PaneId,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        if !self.is_pane_dockable(pane_id) {
+        if !self.is_pane_dockable(pane_id, ctx) {
             log::warn!("[Bottom panel] Pane can't move to the bottom panel: pane_id={pane_id:?}");
             return false;
         }
@@ -402,7 +693,16 @@ impl PaneGroup {
             return false;
         }
         self.remove_from_pane_history(pane_id);
-        self.dock_pane(pane_id, hint, ctx);
+        let origin = if self.is_logcat_pane(pane_id) {
+            DockOrigin::Logcat
+        } else {
+            DockOrigin::Manual
+        };
+        let generation = self.output_generation(pane_id, ctx);
+        self.dock_pane(
+            DockedPane::new(pane_id, origin, generation).with_restore_hint(hint),
+            ctx,
+        );
         if was_focused {
             self.focus_after_leaving_dock(ctx);
         }
@@ -428,9 +728,33 @@ impl PaneGroup {
             .filter(|hint| visible.contains(&hint.anchor))
             .map(|hint| (hint.anchor, direction_of(hint.side)))
             .or_else(|| {
-                self.warpium_layout_anchor(None)
+                self.warpium_layout_anchor()
                     .map(|anchor| (anchor, Direction::Right))
             });
+        self.insert_restored_pane(pane_id, target, ctx);
+        true
+    }
+
+    /// Puts a docked pane into the layout next to `target`, towards `direction`.
+    fn restore_docked_pane_at(
+        &mut self,
+        pane_id: PaneId,
+        target: PaneId,
+        direction: Direction,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.undock_pane(pane_id, ctx).is_none() {
+            return;
+        }
+        self.insert_restored_pane(pane_id, Some((target, direction)), ctx);
+    }
+
+    fn insert_restored_pane(
+        &mut self,
+        pane_id: PaneId,
+        target: Option<(PaneId, Direction)>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let inserted =
             target.is_some_and(|(anchor, direction)| self.panes.split(anchor, pane_id, direction));
         if !inserted {
@@ -444,38 +768,132 @@ impl PaneGroup {
         ctx.notify();
         ctx.emit(super::Event::TerminalViewStateChanged);
         ctx.emit(super::Event::AppStateChanged);
-        true
     }
 
-    fn toggle_bottom_panel(&mut self, ctx: &mut ViewContext<Self>) {
-        let dock = &self.warpium_bottom_dock.model;
-        let (is_empty, is_open, active) = (dock.is_empty(), dock.is_open(), dock.active());
-        if is_empty {
-            self.open_terminal_in_bottom_panel(ctx);
-        } else if is_open {
-            self.hide_bottom_panel(ctx);
-        } else if let Some(active) = active {
-            self.warpium_bottom_dock.model.set_open(true);
-            self.focus_pane_by_id(active, ctx);
+    /// Opens the context menu of a sub-tab: restore, move to another tab, close.
+    fn open_sub_tab_menu(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
+        if !self.is_pane_docked(pane_id) {
+            return;
+        }
+        let menu = match self.warpium_bottom_dock.menu.clone() {
+            Some(menu) => menu,
+            None => {
+                let menu = ctx.add_typed_action_view(|_| {
+                    Menu::new()
+                        .with_width(MENU_WIDTH)
+                        .with_drop_shadow()
+                        .prevent_interaction_with_other_elements()
+                });
+                ctx.subscribe_to_view(&menu, |me, _, event, ctx| match event {
+                    MenuEvent::Close { .. } => me.close_sub_tab_menu(ctx),
+                    MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
+                });
+                self.warpium_bottom_dock.menu = Some(menu.clone());
+                menu
+            }
+        };
+        let action = |action| PaneGroupAction::WarpiumBottomPanel(action);
+        let move_to = |target| action(BottomPanelAction::MoveToTab { pane_id, target });
+        let mut tab_items: Vec<MenuItem<PaneGroupAction>> = self
+            .other_tab_titles(ctx)
+            .into_iter()
+            .map(|(index, title)| {
+                MenuItemFields::new(format!("Tab {}: {title}", index + 1))
+                    .with_on_select_action(move_to(BottomPanelTabTarget::Tab(index)))
+                    .into_item()
+            })
+            .collect();
+        tab_items.push(
+            MenuItemFields::new("New tab")
+                .with_on_select_action(move_to(BottomPanelTabTarget::NewTab))
+                .into_item(),
+        );
+        let items = vec![
+            MenuItemFields::new("Restore pane to layout")
+                .with_on_select_action(action(BottomPanelAction::Restore(pane_id)))
+                .into_item(),
+            MenuItem::Submenu {
+                fields: MenuItemFields::new_submenu("Move to tab"),
+                menu: SubMenu::new(tab_items),
+            },
+            MenuItem::Separator,
+            MenuItemFields::new("Close")
+                .with_on_select_action(action(BottomPanelAction::Close(pane_id)))
+                .into_item(),
+        ];
+        menu.update(ctx, |menu, ctx| menu.set_items(items, ctx));
+        self.warpium_bottom_dock.menu_pane = Some(pane_id);
+        ctx.focus(&menu);
+        ctx.notify();
+    }
+
+    fn close_sub_tab_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.warpium_bottom_dock.menu_pane.take().is_some() {
             ctx.notify();
         }
     }
 
-    fn hide_bottom_panel(&mut self, ctx: &mut ViewContext<Self>) {
-        self.warpium_bottom_dock.model.set_open(false);
-        if self.is_pane_docked(self.focused_pane_id(ctx)) {
-            self.focus_after_leaving_dock(ctx);
+    /// The window's other tabs, by index, with their titles.
+    fn other_tab_titles(&self, ctx: &ViewContext<Self>) -> Vec<(usize, String)> {
+        if !ctx.has_singleton_model::<WorkspaceRegistry>() {
+            return Vec::new();
         }
-        ctx.notify();
+        let Some(workspace) = WorkspaceRegistry::as_ref(ctx).get(ctx.window_id(), ctx) else {
+            return Vec::new();
+        };
+        let own_id = ctx.view_id();
+        workspace
+            .as_ref(ctx)
+            .tab_views()
+            .enumerate()
+            .filter(|(_, pane_group)| pane_group.id() != own_id)
+            .map(|(index, pane_group)| (index, pane_group.as_ref(ctx).display_title(ctx)))
+            .collect()
     }
 
-    /// Opens a new terminal as a sub-tab of the bottom panel and focuses it.
-    fn open_terminal_in_bottom_panel(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Restores every docked pane to the layout (the setting was turned off).
+    fn restore_all_docked_panes(&mut self, ctx: &mut ViewContext<Self>) {
+        let docked: Vec<PaneId> = self.warpium_bottom_dock.model.ids().collect();
+        for pane_id in docked {
+            self.restore_pane_from_bottom_panel(pane_id, ctx);
+        }
+    }
+
+    fn toggle_bottom_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        let dock = &self.warpium_bottom_dock.model;
+        let (is_empty, is_expanded, active) = (dock.is_empty(), dock.is_expanded(), dock.active());
+        if is_empty {
+            self.open_terminal_in_bottom_panel(ctx);
+        } else if is_expanded {
+            self.collapse_bottom_panel(ctx);
+        } else if let Some(active) = active {
+            self.update_dock(ctx, |dock| dock.set_expanded(true));
+            self.focus_pane_by_id(active, ctx);
+            ctx.notify();
+            ctx.emit(super::Event::AppStateChanged);
+        }
+    }
+
+    fn collapse_bottom_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        self.update_dock(ctx, |dock| dock.set_expanded(false));
+        if self.is_pane_docked(self.focused_pane_id(ctx)) {
+            self.focus_after_leaving_dock_to_layout(ctx);
+        }
+        ctx.notify();
+        ctx.emit(super::Event::AppStateChanged);
+    }
+
+    /// The working directory for a terminal opened from the panel: the tab's locked project
+    /// root, else the active session's directory, else the new-session setting's default.
+    fn bottom_panel_terminal_directory(&self, ctx: &mut ViewContext<Self>) -> Option<PathBuf> {
+        if let Some(root) = self.locked_project_root() {
+            return Some(root);
+        }
         let base_session_id = self.active_session_id(ctx);
         let initial_directory = self.startup_path_for_new_session(base_session_id, ctx);
         let ignore_custom_startup_directory =
             self.should_ignore_custom_startup_directory(&None, ctx);
-        let startup_directory = SessionSettings::handle(ctx).read(ctx, |settings, _| {
+        SessionSettings::handle(ctx).read(ctx, |settings, _| {
             settings
                 .working_directory_config
                 .initial_directory_for_new_session(
@@ -483,47 +901,215 @@ impl PaneGroup {
                     initial_directory,
                     ignore_custom_startup_directory,
                 )
-        });
-        let (pane_data, _view) = self.create_terminal_pane_data(
-            startup_directory,
+        })
+    }
+
+    fn locked_project_root(&self) -> Option<PathBuf> {
+        self.project_root()
+            .primary()
+            .filter(|root| root.is_dir())
+            .map(|root| root.to_path_buf())
+    }
+
+    /// Opens a new terminal as a sub-tab of the bottom panel and focuses it.
+    fn open_terminal_in_bottom_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        let directory = self.bottom_panel_terminal_directory(ctx);
+        if let Some(pane_id) = self.add_terminal_to_bottom_panel(
+            directory,
             HashMap::new(),
+            DockOrigin::Manual,
+            None,
+            ctx,
+        ) {
+            self.focus_pane_by_id(pane_id, ctx);
+        }
+    }
+
+    /// Starts a terminal in `cwd` with `env` added to its environment as a new sub-tab, selected
+    /// (expanding the panel) but not focused.
+    fn add_terminal_to_bottom_panel(
+        &mut self,
+        cwd: Option<PathBuf>,
+        env: HashMap<OsString, OsString>,
+        origin: DockOrigin,
+        title: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<PaneId> {
+        let (pane_data, _view) = self.create_terminal_pane_data(
+            cwd,
+            env,
             IsSharedSessionCreator::No,
             None, /* chosen_shell */
             None, /* conversation_restoration */
             ctx,
         );
-        let Some(pane_id) = self.attach_child_pane_off_tree(Box::new(pane_data), ctx) else {
-            log::warn!("[Bottom panel] New terminal pane could not be attached");
-            return;
-        };
-        self.dock_pane(pane_id, None, ctx);
-        self.focus_pane_by_id(pane_id, ctx);
-        ctx.notify();
-        ctx.emit(super::Event::AppStateChanged);
+        self.adopt_pane_into_bottom_panel(Box::new(pane_data), origin, title, ctx)
     }
 
-    /// Splits a new terminal next to `pane_id`, the last visible pane of the layout.
-    fn open_fresh_terminal_next_to(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
-        self.add_session(
-            Direction::Right,
-            Some(pane_id),
-            pane_id.as_terminal_pane_id(),
-            None, /* chosen_shell */
-            None, /* conversation_restoration */
+    /// Adds a pane that isn't in this tab yet (new, or moved from another tab) as a sub-tab,
+    /// selected and expanded but not focused.
+    pub(crate) fn adopt_pane_into_bottom_panel(
+        &mut self,
+        pane: Box<dyn AnyPaneContent>,
+        origin: DockOrigin,
+        title: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<PaneId> {
+        let Some(pane_id) = self.attach_child_pane_off_tree(pane, ctx) else {
+            log::warn!("[Bottom panel] Pane could not be attached to the bottom panel");
+            return None;
+        };
+        let generation = self.output_generation(pane_id, ctx);
+        self.dock_pane(
+            DockedPane::new(pane_id, origin, generation).with_title(title),
             ctx,
         );
+        ctx.notify();
+        ctx.emit(super::Event::TerminalViewStateChanged);
+        ctx.emit(super::Event::AppStateChanged);
+        Some(pane_id)
+    }
+
+    /// Takes a docked pane out of this tab to move it elsewhere, with its sub-tab (origin and
+    /// title). Unlike `remove_pane_for_move`, it never touches the layout, so the tab survives.
+    pub(crate) fn take_docked_pane_for_move(
+        &mut self,
+        pane_id: PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<(Box<dyn AnyPaneContent>, DockedPane<PaneId>)> {
+        if !self.is_pane_docked(pane_id) {
+            return None;
+        }
+        let was_focused = self.focused_pane_id(ctx) == pane_id;
+        let entry = self.warpium_bottom_dock.model.entry(pane_id).cloned()?;
+        self.undock_pane(pane_id, ctx);
+        if was_focused {
+            self.focus_after_leaving_dock(ctx);
+        }
+        self.reassign_active_session_from(pane_id, ctx);
+        if let Some(pane) = self.pane_contents.get(&pane_id) {
+            pane.as_pane().detach(self, DetachType::Moved, ctx);
+        }
+        self.unsubscribe_from_docked_title(pane_id, ctx);
+        let pane = self.pane_contents.remove(&pane_id)?;
+        self.handle_pane_count_change(ctx);
+        ctx.notify();
+        ctx.emit(super::Event::TerminalViewStateChanged);
+        ctx.emit(super::Event::AppStateChanged);
+        Some((pane, entry))
+    }
+
+    /// Whether `pane_id` can leave this tab without closing it: it is docked, or the layout keeps
+    /// another pane (or a fresh one, for a tab with docked panes).
+    pub(crate) fn can_move_pane_out_keeping_tab(&self, pane_id: PaneId) -> bool {
+        self.is_pane_docked(pane_id)
+            || !self.warpium_bottom_dock.model.is_empty()
+            || self.panes.visible_pane_count() > 1
+    }
+
+    /// The idle terminal of a sub-tab started by `key` (a toolbar button, an Android run), for
+    /// that requester's next run. It is selected, expanding the panel, without taking focus.
+    pub(crate) fn idle_bottom_panel_session(
+        &mut self,
+        key: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<ViewHandle<TerminalView>> {
+        let origin = DockOrigin::Command {
+            key: key.to_owned(),
+        };
+        let pane_id =
+            self.warpium_bottom_dock
+                .model
+                .idle_entry_with_origin(&origin, |pane_id| {
+                    self.terminal_view_from_pane_id(pane_id, ctx)
+                        .is_none_or(|view| view.as_ref(ctx).warpium_is_busy(ctx))
+                })?;
+        self.update_dock(ctx, |dock| dock.select(pane_id));
+        ctx.notify();
+        self.terminal_view_from_pane_id(pane_id, ctx)
+    }
+
+    /// Starts a terminal for `key`'s run in a new sub-tab titled after `label` ("label (2)" while
+    /// its earlier sub-tabs are busy), selected without taking focus.
+    pub(crate) fn add_bottom_panel_session_for_command(
+        &mut self,
+        key: &str,
+        label: &str,
+        cwd: PathBuf,
+        env: HashMap<OsString, OsString>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<ViewHandle<TerminalView>> {
+        let origin = DockOrigin::Command {
+            key: key.to_owned(),
+        };
+        let title = self
+            .warpium_bottom_dock
+            .model
+            .title_for_new_entry(&origin, label);
+        let pane_id =
+            self.add_terminal_to_bottom_panel(Some(cwd), env, origin, Some(title), ctx)?;
+        self.terminal_view_from_pane_id(pane_id, ctx)
+    }
+
+    /// Shows a docked pane on its sub-tab; `focus` also focuses it.
+    pub(crate) fn reveal_docked_pane(
+        &mut self,
+        pane_id: PaneId,
+        focus: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if focus {
+            self.focus_pane_by_id(pane_id, ctx);
+        } else {
+            self.update_dock(ctx, |dock| dock.select(pane_id));
+        }
+        ctx.notify();
+    }
+
+    /// Splits a new terminal next to `pane_id`, the last visible pane of the layout, in the tab's
+    /// locked project root or else `pane_id`'s working directory.
+    fn open_fresh_terminal_next_to(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
+        let pane_cwd = self
+            .terminal_view_from_pane_id(pane_id, ctx)
+            .and_then(|view| view.as_ref(ctx).active_session_path_if_local(ctx))
+            .filter(|cwd| cwd.is_dir());
+        match fresh_terminal_directory(self.locked_project_root(), pane_cwd) {
+            Some(directory) => {
+                self.add_session_in_directory(
+                    Direction::Right,
+                    Some(pane_id),
+                    None, /* chosen_shell */
+                    Some(directory),
+                    None, /* conversation_restoration */
+                    DefaultSessionModeBehavior::Apply,
+                    ctx,
+                );
+            }
+            None => {
+                self.add_session(
+                    Direction::Right,
+                    Some(pane_id),
+                    pane_id.as_terminal_pane_id(),
+                    None, /* chosen_shell */
+                    None, /* conversation_restoration */
+                    ctx,
+                );
+            }
+        }
     }
 
     /// Records an off-tree pane as docked and shows it in the panel.
-    fn dock_pane(
-        &mut self,
-        pane_id: PaneId,
-        hint: Option<RestoreHint<PaneId>>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.warpium_bottom_dock.model.dock(pane_id, hint);
+    fn dock_pane(&mut self, docked: DockedPane<PaneId>, ctx: &mut ViewContext<Self>) {
+        let pane_id = docked.id;
+        self.update_dock(ctx, |dock| dock.dock(docked));
+        self.register_docked_pane(pane_id, ctx);
+    }
+
+    /// Sets up what a docked pane needs beyond the model: chip mouse state, the focus state's
+    /// docked set, title updates, the setting subscription and the chip status poll.
+    fn register_docked_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
         self.warpium_bottom_dock
-            .tab_mouse_states
+            .chip_states
             .entry(pane_id)
             .or_default();
         self.focus_state.update(ctx, |focus_state, _| {
@@ -541,6 +1127,85 @@ impl PaneGroup {
                 }
             });
         }
+        self.subscribe_to_bottom_panel_setting(ctx);
+        self.schedule_chip_status_poll(ctx);
+    }
+
+    fn unsubscribe_from_docked_title(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
+        if self
+            .warpium_bottom_dock
+            .title_subscriptions
+            .remove(&pane_id)
+            && let Some(pane) = self.pane_contents.get(&pane_id)
+        {
+            ctx.unsubscribe_to_model(&pane.as_pane().pane_configuration());
+        }
+    }
+
+    /// Turning the setting off puts every docked pane back into the layout, so none is stranded.
+    fn subscribe_to_bottom_panel_setting(&mut self, ctx: &mut ViewContext<Self>) {
+        if std::mem::replace(&mut self.warpium_bottom_dock.settings_subscribed, true) {
+            return;
+        }
+        ctx.subscribe_to_model(&WarpiumBottomPanelSettings::handle(ctx), |me, _, _, ctx| {
+            if !is_enabled(ctx) {
+                me.restore_all_docked_panes(ctx);
+            }
+        });
+    }
+
+    /// Checks the chips once a second while anything is docked: output and command state change
+    /// inside the terminals without telling the pane group.
+    fn schedule_chip_status_poll(&mut self, ctx: &mut ViewContext<Self>) {
+        if std::mem::replace(&mut self.warpium_bottom_dock.poll_scheduled, true) {
+            return;
+        }
+        ctx.spawn(
+            async move { Timer::after(STATUS_POLL_INTERVAL).await },
+            |me, _, ctx| {
+                me.warpium_bottom_dock.poll_scheduled = false;
+                if me.warpium_bottom_dock.model.is_empty() {
+                    me.warpium_bottom_dock.chip_fingerprints.clear();
+                    return;
+                }
+                let fingerprints = me.chip_fingerprints(ctx);
+                if fingerprints != me.warpium_bottom_dock.chip_fingerprints {
+                    me.warpium_bottom_dock.chip_fingerprints = fingerprints;
+                    ctx.notify();
+                }
+                me.schedule_chip_status_poll(ctx);
+            },
+        );
+    }
+
+    fn chip_fingerprints(&self, app: &AppContext) -> Vec<ChipFingerprint> {
+        self.warpium_bottom_dock
+            .model
+            .ids()
+            .map(|pane_id| {
+                let (status, unread) = self.chip_status(pane_id, app);
+                (pane_id, status, unread)
+            })
+            .collect()
+    }
+
+    /// A sub-tab's status and whether it has unread output.
+    fn chip_status(
+        &self,
+        pane_id: PaneId,
+        app: &AppContext,
+    ) -> (warpium_bottom_panel::SubTabStatus, bool) {
+        match self.terminal_view_from_pane_id(pane_id, app) {
+            Some(view) => {
+                let view = view.as_ref(app);
+                let unread = self
+                    .warpium_bottom_dock
+                    .model
+                    .has_unread(pane_id, view.warpium_output_generation());
+                (view.warpium_sub_tab_status(), unread)
+            }
+            None => (warpium_bottom_panel::SubTabStatus::Idle, false),
+        }
     }
 
     /// Removes a pane from the dock (not from `pane_contents`) and returns its restore hint, or
@@ -550,8 +1215,11 @@ impl PaneGroup {
         pane_id: PaneId,
         ctx: &mut ViewContext<Self>,
     ) -> Option<Option<RestoreHint<PaneId>>> {
-        let docked = self.warpium_bottom_dock.model.undock(pane_id)?;
-        self.warpium_bottom_dock.tab_mouse_states.remove(&pane_id);
+        let docked = self.update_dock(ctx, |dock| dock.undock(pane_id))?;
+        self.warpium_bottom_dock.chip_states.remove(&pane_id);
+        if self.warpium_bottom_dock.menu_pane == Some(pane_id) {
+            self.close_sub_tab_menu(ctx);
+        }
         self.focus_state.update(ctx, |focus_state, _| {
             focus_state.set_pane_docked(pane_id, false);
         });
@@ -559,8 +1227,8 @@ impl PaneGroup {
         Some(docked.restore_hint)
     }
 
-    /// Moves focus off a docked pane that is leaving or being hidden: to the panel's newly
-    /// selected sub-tab while the panel stays open, else to the layout.
+    /// Moves focus off a docked pane that is leaving: to the panel's newly selected sub-tab while
+    /// the panel stays expanded, else to the layout.
     fn focus_after_leaving_dock(&mut self, ctx: &mut ViewContext<Self>) {
         let focused = self.focused_pane_id(ctx);
         let target = self
@@ -568,176 +1236,20 @@ impl PaneGroup {
             .model
             .visible_pane()
             .filter(|id| *id != focused)
-            .or_else(|| self.warpium_layout_anchor(None));
+            .or_else(|| self.warpium_layout_anchor());
         match target {
             Some(target) => self.focus_pane_by_id(target, ctx),
             None => log::warn!("[Bottom panel] No pane to focus after leaving the panel"),
         }
     }
 
-    pub(super) fn render_warpium_bottom_dock(&self, app: &AppContext) -> Option<Box<dyn Element>> {
-        let active = self.warpium_bottom_dock.model.visible_pane()?;
-        if !self.pane_contents.contains_key(&active) {
-            return None;
+    /// Moves focus from the panel to the layout pane focused last.
+    fn focus_after_leaving_dock_to_layout(&mut self, ctx: &mut ViewContext<Self>) {
+        match self.warpium_layout_anchor() {
+            Some(target) => self.focus_pane_by_id(target, ctx),
+            None => log::warn!("[Bottom panel] No layout pane to focus"),
         }
-        // A maximized docked pane is rendered in place of the layout instead.
-        if self.is_focused_pane_maximized(app) && self.focused_pane_id(app) == active {
-            return None;
-        }
-        let appearance = Appearance::as_ref(app);
-        let content = Flex::column()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(self.render_warpium_dock_tab_strip(active, appearance, app))
-            .with_child(Shrinkable::new(1., active.render(app)).finish())
-            .finish();
-        let content = Container::new(content)
-            .with_border(Border::top(1.).with_border_fill(appearance.theme().outline()))
-            .finish();
-        Some(
-            Resizable::new(self.warpium_bottom_dock.height.clone(), content)
-                .with_dragbar_side(DragBarSide::Top)
-                .on_resize(|ctx, _| ctx.notify())
-                .with_bounds_callback(Box::new(|window_size| {
-                    let max = (window_size.y() - MIN_LAYOUT_HEIGHT).max(MIN_HEIGHT);
-                    (MIN_HEIGHT, max)
-                }))
-                .finish(),
-        )
     }
-
-    fn render_warpium_dock_tab_strip(
-        &self,
-        active: PaneId,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let dock = &self.warpium_bottom_dock;
-        let mut tabs = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        for pane_id in dock.model.ids() {
-            let Some(mouse_states) = dock.tab_mouse_states.get(&pane_id) else {
-                continue;
-            };
-            tabs.add_child(self.render_warpium_dock_tab(
-                pane_id,
-                pane_id == active,
-                mouse_states,
-                appearance,
-                app,
-            ));
-        }
-        let row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(Shrinkable::new(1., Clipped::new(tabs.finish()).finish()).finish())
-            .with_child(dock_button(
-                Icon::ArrowUp,
-                "Restore pane to layout",
-                dock.restore_button.clone(),
-                BottomPanelAction::Restore(active),
-                appearance,
-            ))
-            .with_child(dock_button(
-                Icon::ChevronDown,
-                "Hide bottom panel",
-                dock.hide_button.clone(),
-                BottomPanelAction::Hide,
-                appearance,
-            ))
-            .finish();
-        Container::new(
-            ConstrainedBox::new(row)
-                .with_height(TAB_STRIP_HEIGHT)
-                .finish(),
-        )
-        .with_horizontal_padding(4.)
-        .with_border(Border::bottom(1.).with_border_fill(appearance.theme().outline()))
-        .finish()
-    }
-
-    fn render_warpium_dock_tab(
-        &self,
-        pane_id: PaneId,
-        is_active: bool,
-        mouse_states: &TabMouseStates,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let title = self
-            .pane_contents
-            .get(&pane_id)
-            .map(|pane| {
-                pane.as_pane()
-                    .pane_configuration()
-                    .as_ref(app)
-                    .title()
-                    .to_owned()
-            })
-            .filter(|title| !title.is_empty())
-            .unwrap_or_else(|| "Terminal".to_owned());
-        let text_color = if is_active {
-            theme.active_ui_text_color()
-        } else {
-            theme.nonactive_ui_text_color()
-        };
-        let label = ConstrainedBox::new(
-            Text::new_inline(title, appearance.ui_font_family(), TAB_FONT_SIZE)
-                .with_color(text_color.into_solid())
-                .with_clip(ClipConfig::end())
-                .finish(),
-        )
-        .with_max_width(TAB_MAX_WIDTH)
-        .finish();
-        let label = Hoverable::new(mouse_states.tab.clone(), |_| {
-            Container::new(label).with_horizontal_padding(6.).finish()
-        })
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(PaneGroupAction::WarpiumBottomPanel(
-                BottomPanelAction::Select(pane_id),
-            ))
-        })
-        .with_cursor(Cursor::PointingHand)
-        .finish();
-        let close = icon_button(appearance, Icon::X, false, mouse_states.close.clone())
-            .build()
-            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(PaneGroupAction::Remove(pane_id)))
-            .with_cursor(Cursor::PointingHand)
-            .finish();
-        let tab = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(label)
-            .with_child(close)
-            .finish();
-        let mut container =
-            Container::new(tab).with_border(Border::bottom(2.).with_border_fill(if is_active {
-                theme.accent()
-            } else {
-                theme.outline()
-            }));
-        if is_active {
-            container = container.with_background(theme.surface_2());
-        }
-        container.finish()
-    }
-}
-
-fn dock_button(
-    icon: Icon,
-    tooltip: &'static str,
-    mouse_state: MouseStateHandle,
-    action: BottomPanelAction,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let ui_builder = appearance.ui_builder().clone();
-    icon_button(appearance, icon, false, mouse_state)
-        .with_tooltip(move || ui_builder.tool_tip(tooltip.to_owned()).build().finish())
-        .build()
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(PaneGroupAction::WarpiumBottomPanel(action.clone()))
-        })
-        .with_cursor(Cursor::PointingHand)
-        .finish()
 }
 
 /// The visible part of the layout tree, for finding a pane's neighbors.

@@ -96,6 +96,7 @@ impl Workspace {
                         root,
                         command,
                         button.display_label(),
+                        &toolbar_panel_key(button),
                         values,
                         ctx,
                     );
@@ -280,9 +281,13 @@ impl Workspace {
                 });
                 ctx.notify();
             }
-            ButtonAction::Command(command) => {
-                self.run_project_toolbar_command(root, command, button.display_label(), ctx)
-            }
+            ButtonAction::Command(command) => self.run_project_toolbar_command(
+                root,
+                command,
+                button.display_label(),
+                &toolbar_panel_key(button),
+                ctx,
+            ),
             ButtonAction::Workflow(name) => self.run_project_toolbar_workflow(root, name, ctx),
             ButtonAction::LaunchConfig(name) => self.open_project_toolbar_launch_config(name, ctx),
             ButtonAction::TabConfig(name) => {
@@ -307,15 +312,24 @@ impl Workspace {
         }
     }
 
-    /// Runs a command as an ordinary block, in the active session or a new tab or split.
+    /// Runs a command as an ordinary block, in the active session, a new tab or split, or a
+    /// bottom panel sub-tab; `panel_key` identifies the requester's sub-tab for reuse.
     pub(super) fn run_project_toolbar_command(
         &mut self,
         root: &Path,
         command: &CommandAction,
         title: &str,
+        panel_key: &str,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.run_project_toolbar_command_with_prompts(root, command, title, &BTreeMap::new(), ctx);
+        self.run_project_toolbar_command_with_prompts(
+            root,
+            command,
+            title,
+            panel_key,
+            &BTreeMap::new(),
+            ctx,
+        );
     }
 
     /// What the command variables stand for right now: the focused editor's file and selection
@@ -366,6 +380,7 @@ impl Workspace {
         root: &Path,
         command: &CommandAction,
         title: &str,
+        panel_key: &str,
         prompts: &BTreeMap<String, String>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -400,36 +415,25 @@ impl Workspace {
         let target = match command.target {
             CommandTarget::Current => {
                 if let Some(session) = self.session_for_current_target(root, ctx) {
-                    let (shell, session_cwd) = session.read(ctx, |view, ctx| {
-                        (
-                            view.active_session_shell_type(ctx),
-                            view.active_session_path_if_local(ctx),
-                        )
-                    });
-                    let shell = shell.map_or(ShellFamily::Posix, shell_family);
-                    let already_there = session_cwd
-                        .map(|session_cwd| dunce::canonicalize(&session_cwd).unwrap_or(session_cwd))
-                        .is_some_and(|session_cwd| session_cwd == cwd);
-                    let expanded = match expand(shell) {
-                        Ok(expanded) => expanded,
-                        Err(message) => {
-                            self.show_project_toolbar_error(message, ctx);
-                            return;
-                        }
-                    };
-                    let line = shell_line(
-                        &expanded,
-                        (!already_there).then_some(cwd.as_path()),
-                        &command.env,
-                        shell,
-                    );
-                    session.update(ctx, |view, ctx| {
-                        view.execute_command_or_set_pending(&line, ctx)
-                    });
+                    self.run_in_existing_session(&session, &cwd, &command.env, &expand, ctx);
                     return;
                 }
                 // No session can take the command here; run it in a new tab instead.
                 CommandTarget::NewTab
+            }
+            // With the bottom panel off, a new tab is the closest place out of the way.
+            CommandTarget::Panel if !crate::warpium::bottom_panel::is_enabled(ctx) => {
+                CommandTarget::NewTab
+            }
+            CommandTarget::Panel => {
+                let session = self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                    pane_group.idle_bottom_panel_session(panel_key, ctx)
+                });
+                if let Some(session) = session {
+                    self.run_in_existing_session(&session, &cwd, &command.env, &expand, ctx);
+                    return;
+                }
+                CommandTarget::Panel
             }
             target @ (CommandTarget::NewTab
             | CommandTarget::SplitRight
@@ -445,6 +449,19 @@ impl Workspace {
                 self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
                     pane_group.add_terminal_pane_for_toolbar_command(direction, cwd, env, ctx)
                 })
+            }
+            CommandTarget::Panel => {
+                let session = self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                    pane_group.add_bottom_panel_session_for_command(panel_key, title, cwd, env, ctx)
+                });
+                let Some(session) = session else {
+                    self.show_project_toolbar_error(
+                        "Project toolbar: couldn't open a terminal in the bottom panel".to_owned(),
+                        ctx,
+                    );
+                    return;
+                };
+                session
             }
             CommandTarget::Current | CommandTarget::NewTab => {
                 let mut options = NewTerminalOptions::default().with_initial_directory(cwd);
@@ -481,6 +498,39 @@ impl Workspace {
         };
         session.update(ctx, |view, ctx| {
             view.execute_command_or_set_pending(&expanded, ctx)
+        });
+    }
+
+    /// Types a command into a running, idle session, wrapped so that `cwd` (when the session isn't
+    /// there already) and `env` don't leak into it.
+    fn run_in_existing_session(
+        &mut self,
+        session: &ViewHandle<TerminalView>,
+        cwd: &Path,
+        env: &BTreeMap<String, String>,
+        expand: &dyn Fn(ShellFamily) -> Result<String, String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let (shell, session_cwd) = session.read(ctx, |view, ctx| {
+            (
+                view.active_session_shell_type(ctx),
+                view.active_session_path_if_local(ctx),
+            )
+        });
+        let shell = shell.map_or(ShellFamily::Posix, shell_family);
+        let already_there = session_cwd
+            .map(|session_cwd| dunce::canonicalize(&session_cwd).unwrap_or(session_cwd))
+            .is_some_and(|session_cwd| session_cwd == cwd);
+        let expanded = match expand(shell) {
+            Ok(expanded) => expanded,
+            Err(message) => {
+                self.show_project_toolbar_error(message, ctx);
+                return;
+            }
+        };
+        let line = shell_line(&expanded, (!already_there).then_some(cwd), env, shell);
+        session.update(ctx, |view, ctx| {
+            view.execute_command_or_set_pending(&line, ctx)
         });
     }
 
@@ -704,4 +754,9 @@ fn workspace_action_for_builtin(action: BuiltinAction) -> WorkspaceAction {
         BuiltinAction::SurfaceLeftPanelToggle => WorkspaceAction::ToggleLeftPanel,
         BuiltinAction::SurfaceVerticalTabsToggle => WorkspaceAction::ToggleVerticalTabsPanel,
     }
+}
+
+/// The bottom panel sub-tab key of a toolbar button, so its next run reuses its idle sub-tab.
+fn toolbar_panel_key(button: &ToolbarButton) -> String {
+    format!("toolbar:{}", button.id)
 }

@@ -173,7 +173,10 @@ fn a_panel_command_is_written_with_its_target() {
     let buttons = merged(&plan, Some(TEAM), None);
     assert!(matches!(
         &buttons[2].action,
-        ButtonAction::Command(CommandAction { target: CommandTarget::Panel, .. })
+        ButtonAction::Command(CommandAction {
+            target: CommandTarget::Panel,
+            ..
+        })
     ));
 }
 

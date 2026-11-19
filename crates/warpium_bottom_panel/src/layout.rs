@@ -94,7 +94,10 @@ pub fn drop_side(target: (f32, f32, f32, f32), point: (f32, f32)) -> Side {
 /// Where a fresh terminal that replaces the layout's last pane starts: the tab's locked project
 /// root, else the working directory of the pane it replaces. `None` leaves it to the user's
 /// new-session setting.
-pub fn fresh_terminal_directory<P>(locked_project_root: Option<P>, replaced_pane_cwd: Option<P>) -> Option<P> {
+pub fn fresh_terminal_directory<P>(
+    locked_project_root: Option<P>,
+    replaced_pane_cwd: Option<P>,
+) -> Option<P> {
     locked_project_root.or(replaced_pane_cwd)
 }
 

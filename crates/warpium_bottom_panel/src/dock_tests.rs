@@ -58,7 +58,10 @@ fn docking_an_already_docked_pane_keeps_its_place_and_updates_its_hint() {
 
     assert_eq!(ids(&dock), vec![1, 2]);
     assert_eq!(dock.active(), Some(1));
-    assert_eq!(dock.undock(1).and_then(|entry| entry.restore_hint), Some(hint));
+    assert_eq!(
+        dock.undock(1).and_then(|entry| entry.restore_hint),
+        Some(hint)
+    );
 }
 
 #[test]
@@ -318,7 +321,8 @@ fn marking_seen_never_goes_back() {
 
 #[test]
 fn restoring_keeps_the_saved_selection() {
-    let dock = BottomDock::from_restored(vec![Some(manual(1)), Some(manual(2))], Some(1), true, false);
+    let dock =
+        BottomDock::from_restored(vec![Some(manual(1)), Some(manual(2))], Some(1), true, false);
 
     assert_eq!(ids(&dock), vec![1, 2]);
     assert_eq!(dock.visible_pane(), Some(2));

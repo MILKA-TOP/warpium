@@ -2,7 +2,10 @@ use super::*;
 
 #[test]
 fn running_wins_over_the_last_exit_code() {
-    assert_eq!(SubTabStatus::of_terminal(true, Some(1)), SubTabStatus::Running);
+    assert_eq!(
+        SubTabStatus::of_terminal(true, Some(1)),
+        SubTabStatus::Running
+    );
 }
 
 #[test]

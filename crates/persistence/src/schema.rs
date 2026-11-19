@@ -322,6 +322,7 @@ diesel::table! {
         tab_id -> Integer,
         left_panel -> Nullable<Text>,
         right_panel -> Nullable<Text>,
+        warpium_bottom_panel -> Nullable<Text>,
     }
 }
 
