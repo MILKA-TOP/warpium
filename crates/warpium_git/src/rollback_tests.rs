@@ -15,7 +15,10 @@ fn states_and_base_text() {
     assert_eq!(file_state(path, "untracked.txt"), Ok(FileState::Untracked));
 
     std::fs::write(path.join("committed.txt"), "edited\n").unwrap();
-    assert_eq!(base_text(path, "committed.txt"), Ok(Some("base\n".to_owned())));
+    assert_eq!(
+        base_text(path, "committed.txt"),
+        Ok(Some("base\n".to_owned()))
+    );
     assert_eq!(base_text(path, "added.txt"), Ok(Some(String::new())));
     assert_eq!(base_text(path, "untracked.txt"), Ok(None));
 }

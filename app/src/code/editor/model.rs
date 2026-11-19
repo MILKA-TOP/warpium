@@ -646,6 +646,14 @@ impl CodeEditorModel {
         }
     }
 
+    /// Removes the diff base, so the content shows no changes.
+    pub fn clear_base(&mut self, ctx: &mut ModelContext<Self>) {
+        self.diff.update(ctx, |diff, _ctx| diff.clear_base());
+        self.diff_navigation_state = DiffNavigationState::Collapsed;
+        self.refresh_diff_state(ctx);
+        ctx.emit(CodeEditorModelEvent::DiffUpdated);
+    }
+
     pub fn positioning(&self, ctx: &AppContext) -> OffsetPositioning {
         let selection_position = self
             .render_state()

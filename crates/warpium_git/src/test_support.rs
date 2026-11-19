@@ -8,7 +8,12 @@ use tempfile::TempDir;
 
 pub(crate) fn git(repo: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
-        .args(["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+        .args([
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgsign=false",
+        ])
         .args(args)
         .current_dir(repo)
         .env("GIT_AUTHOR_NAME", "Ada Lovelace")

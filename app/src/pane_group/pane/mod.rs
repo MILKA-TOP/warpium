@@ -30,6 +30,8 @@ pub mod view;
 #[cfg(not(target_family = "wasm"))]
 pub(super) mod warpium_devices_pane;
 #[cfg(not(target_family = "wasm"))]
+pub(super) mod warpium_git_log_pane;
+#[cfg(not(target_family = "wasm"))]
 pub(super) mod warpium_logcat_pane;
 pub mod workflow_pane;
 
@@ -155,6 +157,8 @@ pub(crate) enum IPaneType {
     WarpiumLogcat,
     /// Warpium's Devices pane (running emulators' screens).
     WarpiumDevices,
+    /// Warpium's Git Log pane (commit graph, details and diffs).
+    WarpiumGitLog,
     /// A pane type only for tests.
     #[cfg(test)]
     Dummy,
@@ -181,6 +185,7 @@ impl Display for IPaneType {
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
             IPaneType::WarpiumLogcat => write!(f, "Logcat"),
             IPaneType::WarpiumDevices => write!(f, "Devices"),
+            IPaneType::WarpiumGitLog => write!(f, "Git Log"),
             #[cfg(test)]
             IPaneType::Dummy => write!(f, "Dummy"),
         }
@@ -314,6 +319,22 @@ impl PaneId {
         devices_pane_view: &ViewHandle<PaneView<crate::warpium::emulator::DevicesView>>,
     ) -> Self {
         Self::new(IPaneType::WarpiumDevices, devices_pane_view)
+    }
+
+    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<GitLogView>>`] (Warpium).
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn from_warpium_git_log_pane_ctx(
+        ctx: &ViewContext<PaneView<crate::warpium::git_log::GitLogView>>,
+    ) -> Self {
+        Self::new_from_ctx(IPaneType::WarpiumGitLog, ctx)
+    }
+
+    /// Creates a [`PaneId`] from a [`PaneView<GitLogView>`] entity ID (Warpium).
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn from_warpium_git_log_pane_view(
+        git_log_pane_view: &ViewHandle<PaneView<crate::warpium::git_log::GitLogView>>,
+    ) -> Self {
+        Self::new(IPaneType::WarpiumGitLog, git_log_pane_view)
     }
 
     /// Creates a [`PaneId`] from a [`PaneView<TerminalView>`] entity ID.
@@ -558,6 +579,15 @@ impl PaneId {
             }
             #[cfg(target_family = "wasm")]
             IPaneType::WarpiumDevices => warpui::elements::Empty::new().finish(),
+            #[cfg(not(target_family = "wasm"))]
+            IPaneType::WarpiumGitLog => {
+                ChildView::<PaneView<crate::warpium::git_log::GitLogView>>::with_id(
+                    self.0.pane_view_id,
+                )
+                .finish()
+            }
+            #[cfg(target_family = "wasm")]
+            IPaneType::WarpiumGitLog => warpui::elements::Empty::new().finish(),
             #[cfg(test)]
             IPaneType::Dummy => warpui::elements::Empty::new().finish(),
         };

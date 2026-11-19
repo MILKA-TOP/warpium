@@ -212,6 +212,8 @@ pub use pane::terminal_pane::TerminalPane;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use pane::warpium_devices_pane::DevicesPane;
 #[cfg(not(target_family = "wasm"))]
+pub(crate) use pane::warpium_git_log_pane::GitLogPane;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) use pane::warpium_logcat_pane::LogcatPane;
 pub use pane::workflow_pane::WorkflowPane;
 pub use pane::{
@@ -2041,6 +2043,9 @@ impl PaneGroup {
             )),
             LeafContents::WarpiumDevices => Err(anyhow::anyhow!(
                 "Devices pane should not have been persisted, as it cannot be restored"
+            )),
+            LeafContents::WarpiumGitLog => Err(anyhow::anyhow!(
+                "Git Log pane should not have been persisted, as it cannot be restored"
             )),
             LeafContents::GetStarted => {
                 if !FeatureFlag::GetStartedTab.is_enabled() {

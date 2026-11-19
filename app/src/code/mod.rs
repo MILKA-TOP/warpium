@@ -27,6 +27,8 @@ pub mod inline_diff;
 pub mod language_server_shutdown_manager;
 #[cfg(not(target_family = "wasm"))]
 pub mod lsp_logs;
+#[cfg(not(target_family = "wasm"))]
+mod warpium_git;
 pub mod lsp_telemetry;
 
 #[derive(Debug, thiserror::Error)]

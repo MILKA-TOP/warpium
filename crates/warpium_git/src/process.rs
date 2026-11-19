@@ -47,7 +47,13 @@ impl std::error::Error for GitError {}
 pub fn git_command(repo: &Path, args: &[String]) -> Command {
     let mut command = Command::new("git");
     command
-        .args(["-c", "core.quotepath=false", "-c", "color.ui=never", "--no-pager"])
+        .args([
+            "-c",
+            "core.quotepath=false",
+            "-c",
+            "color.ui=never",
+            "--no-pager",
+        ])
         .args(args)
         .current_dir(repo)
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -117,14 +123,17 @@ pub fn repo_toplevel(dir: &Path) -> Result<PathBuf, GitError> {
 /// `path` relative to the work tree root, with `/` separators, as git names files. Symlinked
 /// prefixes (`/var` and `/private/var` on macOS) are resolved first.
 pub fn relative_to_repo(toplevel: &Path, path: &Path) -> Option<String> {
-    let relative = path.strip_prefix(toplevel).ok().map(Path::to_path_buf).or_else(|| {
-        let toplevel = toplevel.canonicalize().ok()?;
-        let path = path
-            .canonicalize()
+    let relative =
+        path.strip_prefix(toplevel)
             .ok()
-            .or_else(|| Some(path.parent()?.canonicalize().ok()?.join(path.file_name()?)))?;
-        path.strip_prefix(&toplevel).ok().map(Path::to_path_buf)
-    })?;
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                let toplevel = toplevel.canonicalize().ok()?;
+                let path = path.canonicalize().ok().or_else(|| {
+                    Some(path.parent()?.canonicalize().ok()?.join(path.file_name()?))
+                })?;
+                path.strip_prefix(&toplevel).ok().map(Path::to_path_buf)
+            })?;
     let parts: Vec<String> = relative
         .components()
         .map(|component| component.as_os_str().to_string_lossy().into_owned())
@@ -142,7 +151,9 @@ pub struct LogRow {
 pub enum LogEvent {
     Rows(Vec<LogRow>),
     /// The whole history was listed.
-    Finished { total: usize },
+    Finished {
+        total: usize,
+    },
     Failed(String),
 }
 

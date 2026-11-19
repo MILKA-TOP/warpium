@@ -939,6 +939,8 @@ pub enum WorkspaceAction {
     InstallAgentMcpServers,
     /// Warpium: removes its MCP servers from the coding agents' configs.
     UninstallAgentMcpServers,
+    /// Warpium: the Git Log pane and the git settings.
+    WarpiumGit(crate::warpium::git_tools::WarpiumGitAction),
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1308,6 +1310,7 @@ impl WorkspaceAction {
             | ToggleLogcatMcp
             | InstallAgentMcpServers
             | UninstallAgentMcpServers
+            | WarpiumGit(_)
             | FixSettingsWithOz { .. }
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }

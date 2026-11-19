@@ -141,6 +141,7 @@ pub fn initialize_settings_for_tests_with_mode_and_headlessness(
     CodeSettings::register(app);
     SemanticSelection::register(app);
     crate::warpium::sync_settings::WarpiumBottomPanelSettings::register(app);
+    crate::warpium::sync_settings::WarpiumGitSettings::register(app);
 
     app.update(|ctx| {
         // Add settings models that are backed by secure storage, not user preferences.

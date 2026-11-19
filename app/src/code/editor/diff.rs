@@ -583,6 +583,15 @@ impl DiffModel {
         self.base.clone()
     }
 
+    /// Removes the base, so the content shows no changes.
+    pub fn clear_base(&mut self) {
+        self.base = None;
+        self.status = DiffStatus::default();
+        if let Some((abort_handle, _)) = self.abort_handle.take() {
+            abort_handle.abort();
+        }
+    }
+
     /// Given the new content, compute the new set of diff contents.
     pub fn compute_diff(
         &mut self,

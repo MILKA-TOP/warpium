@@ -115,9 +115,9 @@ impl GraphBuilder {
             node_edges.push(node);
         }
         for parent in parents.iter().skip(1) {
-            let existing = slots.iter().position(|slot| {
-                slot.is_some_and(|(lane, _)| lane.waiting_for == *parent)
-            });
+            let existing = slots
+                .iter()
+                .position(|slot| slot.is_some_and(|(lane, _)| lane.waiting_for == *parent));
             if let Some(existing) = existing {
                 if !node_edges.contains(&existing) {
                     node_edges.push(existing);

@@ -15671,6 +15671,7 @@ dependencies = [
  "warpium_android",
  "warpium_bottom_panel",
  "warpium_emulator",
+ "warpium_git",
  "warpium_ide_run_configs",
  "warpium_project_root",
  "warpium_project_toolbar",

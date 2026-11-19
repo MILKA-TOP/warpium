@@ -885,6 +885,59 @@ cargo build --release -p warpium_logcat_mcp -p code_index
 claude mcp add --scope local warpium-logcat -- "$PWD/target/release/warpium-logcat" mcp --root /path/to/project
 ```
 
+## Git tools (log and graph, change markers, Rollback, blame)
+
+Roadmap items 3, 19 and 20, with IntelliJ IDEA as the reference; design and perf notes in
+[docs/warpium/research/git-tools.md](docs/warpium/research/git-tools.md). Fork-only code lives in
+`crates/warpium_git` (protoc-free, `cargo test -p warpium_git`: log parsing, graph layout on
+synthetic histories with a perf bound, blame porcelain, details, changed files, unified diffs,
+rollback, and streaming against real temporary repositories), `app/src/warpium/git_tools.rs`
+(actions, bindings, settings helpers), `app/src/warpium/git_log.rs` and `git_log_graph.rs` (the
+pane), `app/src/pane_group/pane/warpium_git_log_pane.rs`, `app/src/workspace/view/warpium_git.rs`,
+`app/src/code/warpium_git.rs` (editor markers, Rollback, blame) and
+`app/src/code/editor/warpium_blame_column.rs`. OSS channel only; git runs as `git` from `PATH`
+(`GIT_OPTIONAL_LOCKS=0`, never prompting), always off the main thread.
+
+- **Git Log pane.** "Show Git Log" in the palette opens it below the active pane (one per window,
+  reused; not persisted) for the active tab's repository: its locked project root, else the
+  project toolbar's project, else the active session's directory. Rows: graph, ref labels
+  (HEAD's branch, local, remote, tags), subject, author, date, short hash. `git log --date-order`
+  is streamed: a background thread parses it and lays out the graph, and stops reading at the
+  visible end plus 1,500 rows (pages of 5,000), so huge repositories open as fast as small ones.
+  Filters: branch (HEAD, all, any branch), author, message (case-insensitive) or a commit hash
+  (starts the log at that commit), and a file (history). Author and message filters list
+  commits without the graph. Up/Down/PageUp/PageDown move the selection, `cmd-c` copies its hash.
+- **Details.** The right side shows the selected commit's hash, author, committer, refs, full
+  message and changed files against its first parent; clicking a file shows its diff there (Esc
+  or the back arrow returns), with a button that opens the working tree file.
+- **Change markers.** File editor panes compare the buffer with the file in `HEAD` (a staged new
+  file: all added; untracked: nothing) using Warp's code review diff machinery: gutter slivers,
+  click to expand the change inline with **Rollback**, Previous and Next, a revert button on hover.
+  The base is reloaded when the file loads, changes on disk, or the editor regains focus (at most
+  every 2 s). Context menu and palette (editor focused): "Show change at cursor (git)", "Next
+  change (git)", "Previous change (git)". Setting `warpium.git_gutter_markers` (default on),
+  "Enable/Disable git change markers in the code editor".
+- **Rollback….** Context menu or palette, with a confirmation: `git checkout HEAD -- <file>`
+  (index and work tree), or `git rm --cached` for a staged new file (kept on disk); unsaved edits
+  are dropped and the buffer reloads. Code review's per-file **Discard** is the changes-list
+  equivalent and is unchanged.
+- **Annotate with Git Blame.** Context menu or palette toggles a column left of the gutter with
+  each run of lines' date and author, tinted by age; hover for hash, author, date and summary,
+  click to open the commit in the Git Log pane. Blame runs with the buffer on stdin (`--contents
+  -`), so unsaved lines show as not committed, and reruns after each save.
+- **Inline blame.** Setting `warpium.inline_blame` (default off), "Enable/Disable inline git blame
+  for the current line": the focused editor shows the cursor line's author, age and summary at the
+  right of that line.
+- **Upstream touch points:** `app_state.rs`, `launch_config.rs`, `persistence/sqlite.rs`,
+  `pane_group/mod.rs`, `pane_group/pane/mod.rs`, `workspace/view/vertical_tabs.rs` (the pane
+  type), `workspace/action.rs` and `workspace/view.rs` (`WorkspaceAction::WarpiumGit`, keymap
+  flags), `code/view.rs` (enabling git for file editors), `code/local_code_editor.rs` (field,
+  action, hooks on load, disk changes, focus, context menu, overlays), `code/editor/view.rs`
+  (annotation column, `enable_warpium_change_markers`, `clear_base`), `code/editor/model.rs` and
+  `diff.rs` (`clear_base`), `code/editor/nav_bar.rs` (revert label).
+- **Not yet:** docking the log in the bottom panel, side-by-side diffs, `--follow` across renames,
+  annotating older revisions, branch operations from the log.
+
 ## Versioning
 
 A Warpium version is the upstream Warp release it is based on plus a fork counter as one

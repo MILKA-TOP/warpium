@@ -32,7 +32,17 @@ fn streams_a_history_with_a_merge() {
     commit_file(path, "b.txt", "feature\n", "Feature work");
     git(path, &["checkout", "--quiet", "main"]);
     commit_file(path, "a.txt", "1\n2\n", "Main work");
-    git(path, &["merge", "--quiet", "--no-ff", "-m", "Merge feature", "feature"]);
+    git(
+        path,
+        &[
+            "merge",
+            "--quiet",
+            "--no-ff",
+            "-m",
+            "Merge feature",
+            "feature",
+        ],
+    );
     git(path, &["tag", "v1"]);
 
     let (sender, receiver) = mpsc::channel();
@@ -48,8 +58,20 @@ fn streams_a_history_with_a_merge() {
 
     let merge = &rows[0];
     assert_eq!(merge.commit.parents.len(), 2);
-    assert!(merge.commit.refs.iter().any(|r| r.is_head && r.name == "main"));
-    assert!(merge.commit.refs.iter().any(|r| r.kind == RefKind::Tag && r.name == "v1"));
+    assert!(
+        merge
+            .commit
+            .refs
+            .iter()
+            .any(|r| r.is_head && r.name == "main")
+    );
+    assert!(
+        merge
+            .commit
+            .refs
+            .iter()
+            .any(|r| r.kind == RefKind::Tag && r.name == "v1")
+    );
     assert!(
         merge
             .graph
@@ -95,10 +117,7 @@ fn dropping_the_stream_stops_git() {
         let _ = sender.send(event);
     })
     .unwrap();
-    assert!(matches!(
-        receiver.recv_timeout(WAIT),
-        Ok(LogEvent::Rows(_))
-    ));
+    assert!(matches!(receiver.recv_timeout(WAIT), Ok(LogEvent::Rows(_))));
     drop(stream);
     // The thread exits without reporting a failure, and drops its sender.
     loop {
@@ -174,8 +193,8 @@ fn details_files_diff_and_blame_from_real_git() {
     let path = repo.path();
     commit_file(path, "a.txt", "one\ntwo\n", "Initial\n\nLonger body.");
     commit_file(path, "a.txt", "one\nTWO\nthree\n", "Change a");
-    let head = String::from_utf8(run_git(path, &["rev-parse".into(), "HEAD".into()]).unwrap())
-        .unwrap();
+    let head =
+        String::from_utf8(run_git(path, &["rev-parse".into(), "HEAD".into()]).unwrap()).unwrap();
     let head = crate::Oid::from_hex(head.trim()).unwrap();
 
     let details = String::from_utf8(run_git(path, &details_args(&head)).unwrap()).unwrap();
@@ -188,7 +207,8 @@ fn details_files_diff_and_blame_from_real_git() {
             .unwrap();
     assert_eq!(parent_details.message, "Initial\n\nLonger body.");
 
-    let files = parse_name_status(&run_git(path, &changed_files_args(&head, Some(&parent))).unwrap());
+    let files =
+        parse_name_status(&run_git(path, &changed_files_args(&head, Some(&parent))).unwrap());
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path, "a.txt");
     let root_files = parse_name_status(&run_git(path, &changed_files_args(&parent, None)).unwrap());

@@ -13,6 +13,7 @@ pub mod model;
 mod nav_bar;
 pub mod scroll;
 pub mod view;
+pub(crate) mod warpium_blame_column;
 
 pub use comment_editor::{CommentEditor, CommentEditorEvent};
 pub use comments::{EditorCommentsModel, EditorReviewComment};

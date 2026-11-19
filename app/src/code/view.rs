@@ -425,6 +425,8 @@ impl CodeView {
                     ctx,
                 );
                 editor.add_footer(ctx);
+                #[cfg(not(target_family = "wasm"))]
+                editor.warpium_enable_git(ctx);
                 editor
             } else {
                 editor

@@ -16,8 +16,12 @@ fn record(oid: char, parents: &[char], refs: &str, subject: &str) -> String {
 
 #[test]
 fn parses_records() {
-    let output = record('a', &['b', 'c'], "HEAD -> refs/heads/main", "Merge branch 'x'")
-        + &record('b', &[], "", "Initial");
+    let output = record(
+        'a',
+        &['b', 'c'],
+        "HEAD -> refs/heads/main",
+        "Merge branch 'x'",
+    ) + &record('b', &[], "", "Initial");
     let mut parser = LogParser::default();
     let mut commits = Vec::new();
     parser.feed(output.as_bytes(), &mut commits);
@@ -68,7 +72,10 @@ fn subject_keeps_separators_after_the_last_field() {
 
 #[test]
 fn malformed_records_are_skipped() {
-    let output = format!("nothex\x1f\x1fA\x1fa\x1f1\x1f\x1fs\x1e{}", record('a', &[], "", "ok"));
+    let output = format!(
+        "nothex\x1f\x1fA\x1fa\x1f1\x1f\x1fs\x1e{}",
+        record('a', &[], "", "ok")
+    );
     let mut parser = LogParser::default();
     let mut commits = Vec::new();
     parser.feed(output.as_bytes(), &mut commits);

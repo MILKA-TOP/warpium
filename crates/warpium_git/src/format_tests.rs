@@ -17,7 +17,10 @@ fn relative_times() {
 #[test]
 fn local_dates_have_fixed_shapes() {
     assert_eq!(local_date(1_700_000_000).len(), "2023-11-14".len());
-    assert_eq!(local_date_time(1_700_000_000).len(), "2023-11-14 22:13".len());
+    assert_eq!(
+        local_date_time(1_700_000_000).len(),
+        "2023-11-14 22:13".len()
+    );
 }
 
 #[test]

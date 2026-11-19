@@ -6,7 +6,8 @@ fn oid(byte: char) -> Oid {
 
 #[test]
 fn parses_name_status() {
-    let output = b"M\0src/a.kt\0A\0b.txt\0R087\0old/name.kt\0new/name.kt\0D\0gone\0C100\0x\0y\0T\0link\0";
+    let output =
+        b"M\0src/a.kt\0A\0b.txt\0R087\0old/name.kt\0new/name.kt\0D\0gone\0C100\0x\0y\0T\0link\0";
     let changes = parse_name_status(output);
     assert_eq!(
         changes,
@@ -56,7 +57,10 @@ fn truncated_name_status_stops() {
 #[test]
 fn args_against_first_parent_or_root() {
     let args = changed_files_args(&oid('a'), Some(&oid('b')));
-    assert_eq!(args[args.len() - 2..], [oid('b').to_hex(), oid('a').to_hex()]);
+    assert_eq!(
+        args[args.len() - 2..],
+        [oid('b').to_hex(), oid('a').to_hex()]
+    );
     let args = changed_files_args(&oid('a'), None);
     assert!(args.contains(&"--root".to_owned()));
 
@@ -121,7 +125,11 @@ fn binary_and_rename_headers_are_info() {
     let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
     assert_eq!(
         texts,
-        ["rename from x", "rename to y", "Binary files a/x and b/y differ"]
+        [
+            "rename from x",
+            "rename to y",
+            "Binary files a/x and b/y differ"
+        ]
     );
     assert!(lines.iter().all(|line| line.kind == DiffLineKind::Info));
 }

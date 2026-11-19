@@ -1365,7 +1365,7 @@ fn class_files_for_frame(frame: &StackFrame, index: &code_index::CodeIndex) -> V
 }
 
 /// A labelled dropdown button styled like the toolbar's other controls.
-fn chip_button(
+pub(super) fn chip_button(
     mouse_state: MouseStateHandle,
     label: String,
     icon: Option<Icon>,

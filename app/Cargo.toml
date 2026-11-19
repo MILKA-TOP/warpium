@@ -313,6 +313,7 @@ wgpu.workspace = true
 code_index.workspace = true
 warpium_android.workspace = true
 warpium_agent_mcp.workspace = true
+warpium_git.workspace = true
 warpium_ide_run_configs.workspace = true
 # `test-support` provides the in-process fake emulator behind debug builds' "[Debug] Start fake
 # Android emulator" commands (compiled out of release builds).

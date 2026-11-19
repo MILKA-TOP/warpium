@@ -56,8 +56,8 @@ pub fn changed_files_args(commit: &Oid, first_parent: Option<&Oid>) -> Vec<Strin
         "--no-commit-id",
         "--no-color",
     ]
-        .map(str::to_owned)
-        .to_vec();
+    .map(str::to_owned)
+    .to_vec();
     match first_parent {
         Some(parent) => args.push(parent.to_hex()),
         None => args.push("--root".to_owned()),
@@ -121,7 +121,11 @@ pub fn parse_name_status(output: &[u8]) -> Vec<FileChange> {
 }
 
 /// Arguments of the patch of one file in `commit` against its first parent.
-pub fn file_diff_args(commit: &Oid, first_parent: Option<&Oid>, change: &FileChange) -> Vec<String> {
+pub fn file_diff_args(
+    commit: &Oid,
+    first_parent: Option<&Oid>,
+    change: &FileChange,
+) -> Vec<String> {
     let mut args: Vec<String> = [
         "diff-tree",
         "-p",
@@ -130,8 +134,8 @@ pub fn file_diff_args(commit: &Oid, first_parent: Option<&Oid>, change: &FileCha
         "--no-color",
         "--no-ext-diff",
     ]
-        .map(str::to_owned)
-        .to_vec();
+    .map(str::to_owned)
+    .to_vec();
     match first_parent {
         Some(parent) => args.push(parent.to_hex()),
         None => args.push("--root".to_owned()),
@@ -173,9 +177,7 @@ pub fn parse_unified_diff(patch: &str) -> Vec<DiffLine> {
     let (mut old_line, mut new_line) = (0u32, 0u32);
     let mut in_hunk = false;
     for line in patch.lines() {
-        if let Some((old_start, new_start)) =
-            line.strip_prefix("@@").and_then(parse_hunk_header)
-        {
+        if let Some((old_start, new_start)) = line.strip_prefix("@@").and_then(parse_hunk_header) {
             old_line = old_start;
             new_line = new_start;
             in_hunk = true;

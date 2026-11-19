@@ -1625,6 +1625,9 @@ pub(crate) fn initialize_app(
     // Warpium: Android devices, AVDs and the Logcat pane (adb is contacted on first use).
     #[cfg(not(target_family = "wasm"))]
     warpium::android::init(ctx);
+    // Warpium: the Git Log pane of each window.
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(|_| warpium::git_log::GitLogPaneManager::default());
     // Warpium: its MCP servers for coding agents (Warp's registry entry and installs elsewhere).
     #[cfg(not(target_family = "wasm"))]
     warpium::agent_mcp::init(ctx);
