@@ -232,6 +232,24 @@ pub fn launch_app_command(package: &str) -> String {
     )
 }
 
+/// The device shell command that starts `activity` of `package`; a name starting with `.` is
+/// relative to the package, as in the manifest.
+pub fn launch_activity_command(package: &str, activity: &str) -> String {
+    format!(
+        "am start -n {} -a android.intent.action.MAIN -c android.intent.category.LAUNCHER",
+        shell_quote(&format!("{package}/{activity}"))
+    )
+}
+
+/// The device shell command that opens `link` in `package`.
+pub fn launch_deep_link_command(package: &str, link: &str) -> String {
+    format!(
+        "am start -a android.intent.action.VIEW -c android.intent.category.BROWSABLE -d {} {}",
+        shell_quote(link),
+        shell_quote(package)
+    )
+}
+
 #[cfg(test)]
 #[path = "project_tests.rs"]
 mod tests;
