@@ -10,6 +10,7 @@ pub(crate) mod code_index;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod code_index_palette;
 pub(crate) mod code_navigation;
+pub(crate) mod container_paste;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod emulator;
 #[cfg(not(target_family = "wasm"))]

@@ -25175,6 +25175,15 @@ impl TypedActionView for Workspace {
                 );
                 ctx.notify();
             }
+            ToggleWarpiumContainerImagePaste => {
+                crate::warpium::sync_settings::WarpiumContainerPasteSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.container_image_paste.toggle_and_save_value(ctx));
+                    },
+                );
+                ctx.notify();
+            }
             ToggleLogcatMcp => {
                 #[cfg(not(target_family = "wasm"))]
                 self.update_agent_mcp_project(ctx);
@@ -27528,6 +27537,11 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::BOTTOM_PANEL_CONTEXT_FLAG);
+        }
+        if crate::warpium::container_paste::is_enabled(app) {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::CONTAINER_IMAGE_PASTE_CONTEXT_FLAG);
         }
         if *crate::warpium::sync_settings::WarpiumAgentSettings::as_ref(app).logcat_mcp {
             context

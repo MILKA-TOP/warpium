@@ -175,3 +175,38 @@ mod bottom_panel {
         },
     ]);
 }
+
+/// Keymap context flag present while [`WarpiumContainerPasteSettings::container_image_paste`] is
+/// on.
+pub(crate) const CONTAINER_IMAGE_PASTE_CONTEXT_FLAG: &str = "WarpiumContainerImagePaste";
+
+pub(crate) use container_paste::{ContainerImagePaste, WarpiumContainerPasteSettings};
+
+// Its own group for the same reason as `agent` above.
+mod container_paste {
+    use ::settings::{SupportedPlatforms, SyncToCloud};
+    use warp_core::define_settings_group;
+
+    define_settings_group!(WarpiumContainerPasteSettings, settings: [
+        container_image_paste: ContainerImagePaste {
+            type: bool,
+            default: true,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            surface: ::settings::SettingSurfaces::GUI,
+            private: false,
+            toml_path: "warpium.container_image_paste",
+            description: "Whether pasting or dropping an image into a terminal running a Docker/Podman container or an SSH session copies the image there and pastes its path, so CLI agents inside (Claude Code, Codex, ...) can read it.",
+        },
+        container_image_paste_container: ContainerImagePasteContainer {
+            type: String,
+            default: String::new(),
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            surface: ::settings::SettingSurfaces::GUI,
+            private: false,
+            toml_path: "warpium.container_image_paste_container",
+            description: "The container (name or id; prefix it with `podman:` or `nerdctl:` for those engines) to paste images into while the terminal runs a command that isn't recognized as a container session, such as a wrapper script. Empty: detected containers only.",
+        },
+    ]);
+}

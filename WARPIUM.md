@@ -885,6 +885,57 @@ cargo build --release -p warpium_logcat_mcp -p code_index
 claude mcp add --scope local warpium-logcat -- "$PWD/target/release/warpium-logcat" mcp --root /path/to/project
 ```
 
+## Image paste into containers and SSH sessions
+
+CLI agents read a pasted image from the Mac's clipboard, which they can't reach inside a container
+or on an SSH host. While a terminal runs such a session, a paste with an image on the clipboard (or
+only image files, as Finder's **Copy** gives) and a drop of image files copy the images there with
+the host's CLI and paste their paths, which Claude Code, Codex and Kimi Code take as images (`@path`
+for Gemini CLI). Research and the alternatives considered:
+[docs/warpium/research/docker-image-paste.md](docs/warpium/research/docker-image-paste.md). Fork-only
+code lives in `crates/warpium_container_paste` (protoc-free, `cargo test -p warpium_container_paste`:
+command-line parsing, container selection from `inspect` output, bind-mount path mapping, naming
+and cleanup, and the copy methods against a fake `docker`/`ssh` script),
+`app/src/warpium/container_paste.rs` (setting, palette toggle, paste thread) and
+`app/src/terminal/view/warpium_container_paste.rs` (detection and pasting the paths).
+
+- **Detection.** The active long-running command, after aliases and wrappers (`sudo`, `env`,
+  `FOO=1`; the last command of `a && b`): `docker`/`podman`/`nerdctl` `run`, `exec`, `attach`,
+  `start -a`, `container …`, `compose run`/`exec`/`attach`, `docker-compose`, `podman-compose` and
+  `ssh`. Detached commands don't count. When Warp tracks a shell inside the container or on the host
+  (a warpified subshell), the agent is the running command and the subshell's spawning command is
+  parsed instead, with the session's hostname (Docker's default is the short container id) as a
+  hint. Otherwise `warpium.container_image_paste_container` (name or id, `podman:`/`nerdctl:`
+  prefixes) is used while a command other than a CLI agent Warp detects runs in a local shell.
+  Commands typed in a shell on another machine (a warpified SSH session) aren't parsed, since the
+  Mac's CLIs can't reach what they name. This takes precedence over Warp's `^V` hand-off to host
+  agents, which can't work there.
+- **Which container.** `exec`, `attach`, `start` and `--name` name it. `run` without a name: the
+  newest running container of the image (`ps -q` + `inspect`, references normalized). Compose: the
+  service's container in the `-p` project, else the project whose working directory is the
+  `--project-directory`/`-f` folder or the shell's directory or a parent; one-off containers first
+  for `run`, the service's own for `exec`. Global options selecting the daemon (`--context`, `-H`,
+  `--connection`, …) are passed on.
+- **Copying.** `exec -i <id> sh -c '… cat > "$1/$2"'` with the image on stdin into
+  `/tmp/warpium-paste`, else `cp` (staged world-readable), else the writable bind mount holding the
+  shell's directory (`<source>/.warpium/paste/`, with a `*` `.gitignore`). SSH: the session's
+  `-p`/`-i`/`-J`/`-F`/`-o`/`-l` options plus `BatchMode=yes`, so it needs key auth or a
+  `ControlMaster` connection. Files are named
+  `warpium-<stem or paste>-<time>-<n>.<ext>` (`[A-Za-z0-9._-]` only). TIFF, BMP and HEIC go through
+  `sips` to PNG; images over 100 MB are refused. CLIs are looked up in `PATH`, then
+  `/usr/local/bin`, `/opt/homebrew/bin`, `~/.docker/bin`, `~/.orbstack/bin`, `~/.rd/bin`, Docker
+  Desktop's bundle and `/opt/podman/bin`; every command times out after 20 s.
+- **Pasting.** On a background thread; the paths are pasted only if the same command still runs,
+  each as its own bracketed paste (Codex only attaches a paste that is exactly one path), then a
+  space. Failures show a toast with the reason and each method's error.
+- **Cleanup.** Pasted files older than a day are removed after each paste (in the container or on
+  the host in the background with `find`; in a bind mount also beyond the newest 50).
+- **Setting:** `warpium.container_image_paste` (default on, OSS channel only), in Settings →
+  Features → Warpium and as "Enable/Disable image paste into containers and SSH sessions" in the
+  command palette.
+- **Upstream touch points:** two hooks in `terminal/view.rs` (`paste`, `drag_and_drop_files`) and
+  the module declaration.
+
 ## Versioning
 
 A Warpium version is the upstream Warp release it is based on plus a fork counter as one
