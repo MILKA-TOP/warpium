@@ -100,7 +100,7 @@ Coding agents can read your app's Logcat and crashes too, so they can check thei
 - **Git log.** A JetBrains-style git log and graph with branches, commits and sorting.
 - **Upstream updates.** A notification when a new Warp version is available, so it can be merged into Warpium.
 - **Images for agents in Docker.** Paste images into CLI agents such as Claude Code that run inside Docker containers.
-- **Kotlin and code navigation.** Kotlin support and IDE-like navigation, as if the project were indexed. The goal is to replace Android Studio for everyday work.
+- **Kotlin and code navigation.** Kotlin support and IDE-like navigation, as if the project were indexed. The goal is to replace Android Studio for everyday work. Already there: in a Kotlin or Java project, ⌘O searches classes, symbols and files in **All / Classes / Symbols / Files** tabs, like Search Everywhere in Android Studio (Tab switches tabs).
 - **Run configurations.** Build and run Android Studio and IntelliJ IDEA projects from their run configurations, and possibly show Compose Preview. This is still being researched, with a focus on performance.
 
 ## License and trademarks

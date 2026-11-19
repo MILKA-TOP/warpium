@@ -15672,6 +15672,7 @@ dependencies = [
  "warpium_bottom_panel",
  "warpium_project_root",
  "warpium_project_toolbar",
+ "warpium_search_everywhere",
  "warpium_self_update",
  "warpium_upstream_check",
  "warpui",
@@ -16537,6 +16538,10 @@ dependencies = [
  "toml 0.8.23",
  "toml_edit 0.25.6+spec-1.1.0",
 ]
+
+[[package]]
+name = "warpium_search_everywhere"
+version = "0.1.0"
 
 [[package]]
 name = "warpium_self_update"
