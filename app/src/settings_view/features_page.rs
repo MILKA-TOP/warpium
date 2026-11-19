@@ -753,6 +753,8 @@ pub enum FeaturesPageAction {
     ToggleWarpiumLogcatMcp,
     /// Warpium: toggles the bottom panel.
     ToggleWarpiumBottomPanel,
+    /// Warpium: toggles pasting images into containers and SSH sessions.
+    ToggleWarpiumContainerImagePaste,
     ToggleAsyncFind,
     ToggleNotifications,
     ToggleRestoreSession,
@@ -921,6 +923,10 @@ impl FeaturesPageAction {
             Self::ToggleWarpiumBottomPanel => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleWarpiumBottomPanel".to_string(),
                 value: to_string(crate::warpium::bottom_panel::is_enabled(ctx)),
+            },
+            Self::ToggleWarpiumContainerImagePaste => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleWarpiumContainerImagePaste".to_string(),
+                value: to_string(crate::warpium::container_paste::is_enabled(ctx)),
             },
             Self::ToggleWarpiumLogcatMcp => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleWarpiumLogcatMcp".to_string(),
@@ -1530,6 +1536,14 @@ impl TypedActionView for FeaturesPageView {
                     ctx,
                     |settings, ctx| {
                         report_if_error!(settings.bottom_panel.toggle_and_save_value(ctx));
+                    },
+                );
+            }
+            ToggleWarpiumContainerImagePaste => {
+                crate::warpium::sync_settings::WarpiumContainerPasteSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.container_image_paste.toggle_and_save_value(ctx));
                     },
                 );
             }
@@ -3156,6 +3170,7 @@ impl FeaturesPageView {
                 vec![
                     Box::new(WarpiumProjectToolbarWidget::default()),
                     Box::new(WarpiumBottomPanelWidget::default()),
+                    Box::new(WarpiumContainerImagePasteWidget::default()),
                     Box::new(WarpiumLogcatMcpWidget::default()),
                     Box::new(WarpiumAgentMcpInstallWidget::default()),
                 ],
@@ -7528,6 +7543,61 @@ impl SettingsWidget for WarpiumBottomPanelWidget {
             Some(
                 "A dock below each tab's panes where terminals and Logcat keep running out of \
                  the way; cmd-j shows it or collapses it to a strip of status chips."
+                    .into(),
+            ),
+        )
+    }
+}
+
+/// Warpium: pasting images into containers and SSH sessions.
+#[derive(Default)]
+struct WarpiumContainerImagePasteWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for WarpiumContainerImagePasteWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "warpium image paste screenshot docker podman container compose ssh remote agent claude \
+         codex clipboard drag drop"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::warpium::sync_settings::{ContainerImagePaste, WarpiumContainerPasteSettings};
+
+        render_body_item::<FeaturesPageAction>(
+            "Paste images into containers and SSH sessions".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ContainerImagePaste::storage_key(),
+                ContainerImagePaste::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*WarpiumContainerPasteSettings::as_ref(app).container_image_paste)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleWarpiumContainerImagePaste);
+                })
+                .finish(),
+            Some(
+                "Pasting or dropping an image while a terminal runs `docker run`/`exec`, \
+                 `docker compose run`/`exec`, Podman or `ssh` copies it there and pastes its \
+                 path, so CLI agents inside can read it."
                     .into(),
             ),
         )

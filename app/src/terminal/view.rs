@@ -51,6 +51,8 @@ mod testing;
 mod tooltips;
 pub mod use_agent_footer;
 mod warpium_bottom_panel;
+#[cfg(not(target_family = "wasm"))]
+mod warpium_container_paste;
 mod zero_state_block;
 
 use std::any::Any;
@@ -17433,6 +17435,13 @@ impl TerminalView {
         } else {
             let clipboard_content = ctx.clipboard().read();
 
+            #[cfg(not(target_family = "wasm"))]
+            if !should_paste_in_input
+                && self.warpium_paste_image_into_container(&clipboard_content, ctx)
+            {
+                return;
+            }
+
             if is_cli_agent_paste && clipboard_content.has_image_data() {
                 if !cfg!(windows) {
                     self.write_user_bytes_to_pty(vec![escape_sequences::C0::SYN], ctx);
@@ -27052,6 +27061,11 @@ impl TerminalView {
             .is_active_and_long_running();
 
         let image_filepaths = get_image_filepaths_from_paths(paths);
+
+        #[cfg(not(target_family = "wasm"))]
+        if is_in_long_running_command && self.warpium_drop_images_into_container(paths, ctx) {
+            return;
+        }
 
         // CLI-agent paste path: when a CLI agent (e.g. Claude Code) is the
         // foreground long-running process and the user is interacting with its
