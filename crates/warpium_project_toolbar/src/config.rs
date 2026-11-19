@@ -98,6 +98,8 @@ pub enum CommandTarget {
     NewTab,
     SplitRight,
     SplitDown,
+    /// A sub-tab of the tab's bottom panel; the button's idle sub-tab is reused.
+    Panel,
 }
 
 impl CommandTarget {
@@ -107,9 +109,10 @@ impl CommandTarget {
             "new_tab" => Ok(Self::NewTab),
             "split_right" => Ok(Self::SplitRight),
             "split_down" => Ok(Self::SplitDown),
+            "panel" => Ok(Self::Panel),
             other => Err(format!(
-                "unknown target `{other}`: expected `current`, `new_tab`, `split_right` or \
-                 `split_down`"
+                "unknown target `{other}`: expected `current`, `new_tab`, `split_right`, \
+                 `split_down` or `panel`"
             )),
         }
     }
@@ -120,6 +123,7 @@ impl CommandTarget {
             Self::NewTab => "new_tab",
             Self::SplitRight => "split_right",
             Self::SplitDown => "split_down",
+            Self::Panel => "panel",
         }
     }
 }

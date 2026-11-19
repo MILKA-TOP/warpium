@@ -260,6 +260,7 @@ fn target_label(target: CommandTarget) -> &'static str {
         CommandTarget::NewTab => "new tab",
         CommandTarget::SplitRight => "split right",
         CommandTarget::SplitDown => "split down",
+        CommandTarget::Panel => "bottom panel",
     }
 }
 

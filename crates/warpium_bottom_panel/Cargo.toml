@@ -3,8 +3,10 @@ name = "warpium_bottom_panel"
 authors = ["Warp Team <dev@warp.dev>"]
 version = "0.1.0"
 edition = "2024"
-description = "Warpium: the bottom panel's model (docked panes, active sub-tab, restore position)"
+description = "Warpium: the bottom panel's model (sub-tabs, collapsed strip, unread output, saved form, restore position)"
 publish.workspace = true
 license.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
