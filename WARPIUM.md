@@ -637,6 +637,12 @@ for 50 sampled classes and functions (with how many came through overrides), Go 
 latency on the same declarations, update time after editing a file, lines of source, and peak RSS. A separate process measures the warm start, so its peak RSS is what the index
 keeps resident.
 
+The `complete (N typed)` lines time code completion (`CodeIndex::complete`, a research prototype not
+yet wired into the editor; see [code-completion.md](docs/warpium/research/code-completion.md)) at
+the same references after deleting each name and typing its first 0, 1 or 3 characters. They report
+how many of all references list the name, and for the references the index resolves exactly, how
+often it is first, in the top 5 and listed at all.
+
 ```bash
 script/warpium/code_index_bench                   # all four corpora
 script/warpium/code_index_bench --combined        # also all four as one ~260k-symbol root

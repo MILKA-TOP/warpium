@@ -15,6 +15,8 @@ pub(crate) enum Want {
     Call,
     /// A name used as a value: a property, an enum entry, an object or a class.
     Value,
+    /// Any declaration: a name still being typed, which may become a call or a value.
+    Any,
 }
 
 /// How the name under the cursor is looked up.

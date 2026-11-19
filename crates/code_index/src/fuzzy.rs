@@ -45,6 +45,11 @@ impl Pattern {
         Some(Self { chars, mask })
     }
 
+    /// The query's first character, as typed.
+    pub fn first_byte(&self) -> Option<u8> {
+        self.chars.first().copied()
+    }
+
     /// Quick rejection: whether a name with character mask `name_mask` could match.
     pub fn may_match(&self, name_mask: u64) -> bool {
         name_mask & self.mask == self.mask

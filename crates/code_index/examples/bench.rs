@@ -9,7 +9,9 @@
 //! cold full index, snapshot save, warm start (snapshot load, and load + rescan), query latency
 //! (p50/p95/max over a fixed query list plus names sampled from the index), Go to Definition on
 //! references sampled from the corpus, Find Usages of sampled declarations, and incremental update
-//! after an edit, and Go to Implementation on the same declarations. `--name` labels the output instead of the root path (use it for private
+//! after an edit, Go to Implementation on the same declarations, and completion at the sampled
+//! references with their first 0, 1 or 3 characters typed (latency, and how often the name that was
+//! there is listed first, in the top 5 or at all, among references that resolve in the index). `--name` labels the output instead of the root path (use it for private
 //! projects so their paths stay out of logs).
 
 use std::path::{Path, PathBuf};
@@ -81,6 +83,9 @@ const REFERENCES_PER_FILE: usize = 10;
 /// Declarations whose usages are timed, per kind (types, functions).
 const USAGE_TARGETS: usize = 25;
 const USAGES_LIMIT: usize = 1000;
+/// Completion items requested per query, and the prefix lengths typed before completing.
+const COMPLETION_LIMIT: usize = 50;
+const COMPLETION_PREFIXES: [usize; 3] = [0, 1, 3];
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -257,6 +262,8 @@ fn run(root: &Path, cache: &Path, label: &str, threads: usize) {
         percent(exact, references.len())
     );
 
+    run_completion(&index, &references);
+
     let mut latencies = Vec::new();
     let mut usage_counts = Vec::new();
     let mut via_counts = Vec::new();
@@ -332,6 +339,101 @@ fn run(root: &Path, cache: &Path, label: &str, threads: usize) {
         mb(peak),
         mb(peak_after_cold)
     );
+}
+
+/// Completion at each sampled reference after deleting the name and retyping its first characters.
+/// Quality counts only references whose definition the index finds exactly, since library names
+/// aren't indexed; member accesses (after a dot) are also reported on their own.
+fn run_completion(index: &CodeIndex, references: &[(String, String, Language, Position)]) {
+    for typed in COMPLETION_PREFIXES {
+        let mut latencies = Vec::new();
+        let mut member_latencies = Vec::new();
+        let (mut judged, mut first, mut top5, mut listed) = (0, 0, 0, 0);
+        let mut listed_anywhere = 0;
+        let (mut member_judged, mut member_top5) = (0, 0);
+        for (rel_path, text, language, position) in references {
+            let starts: Vec<usize> = std::iter::once(0)
+                .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+                .collect();
+            let line_start = starts[position.line as usize];
+            let Some((start, _)) = text[line_start..]
+                .char_indices()
+                .nth(position.column as usize)
+            else {
+                continue;
+            };
+            let start = line_start + start;
+            let name_len = text[start..]
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(text.len() - start);
+            let name = &text[start..start + name_len];
+            if name.chars().count() <= typed {
+                continue;
+            }
+            let after_dot = text[..start].ends_with('.');
+            let exact = index
+                .find_definition(
+                    &SourceFile {
+                        rel_path,
+                        text,
+                        language: *language,
+                    },
+                    *position,
+                )
+                .filter(|result| !result.at_declaration)
+                .and_then(|result| result.definitions.first().map(|d| d.resolution.is_exact()))
+                .unwrap_or(false);
+
+            let kept: String = name.chars().take(typed).collect();
+            let edited = format!("{}{kept}{}", &text[..start], &text[start + name_len..]);
+            let file = SourceFile {
+                rel_path,
+                text: &edited,
+                language: *language,
+            };
+            let cursor = Position {
+                line: position.line,
+                column: position.column + typed as u32,
+            };
+            let started = Instant::now();
+            let result = index.complete(&file, cursor, COMPLETION_LIMIT);
+            let elapsed = started.elapsed();
+            latencies.push(elapsed);
+            if after_dot {
+                member_latencies.push(elapsed);
+            }
+            let rank =
+                result.and_then(|result| result.items.iter().position(|item| item.name == name));
+            listed_anywhere += usize::from(rank.is_some());
+            if !exact {
+                continue;
+            }
+            judged += 1;
+            first += usize::from(rank == Some(0));
+            top5 += usize::from(rank.is_some_and(|rank| rank < 5));
+            listed += usize::from(rank.is_some());
+            if after_dot {
+                member_judged += 1;
+                member_top5 += usize::from(rank.is_some_and(|rank| rank < 5));
+            }
+        }
+        println!(
+            "complete ({typed} typed)   {}  ({} refs, {:.0}% listed; of {} resolved: {:.0}% first, {:.0}% top 5, {:.0}% listed)",
+            percentiles(&mut latencies),
+            latencies.len(),
+            percent(listed_anywhere, latencies.len()),
+            judged,
+            percent(first, judged),
+            percent(top5, judged),
+            percent(listed, judged)
+        );
+        println!(
+            "  after a dot         {}  ({:.0}% top 5 of {} resolved)",
+            percentiles(&mut member_latencies),
+            percent(member_top5, member_judged),
+            member_judged
+        );
+    }
 }
 
 /// The fixed list plus names sampled evenly from the index, and their camel-hump initials.
