@@ -122,7 +122,7 @@ pub enum BottomPanelEvent {
 }
 
 /// A docking or restore picked while dragging a pane header, applied when it is dropped.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 enum PendingDrop {
     Dock(PaneId),
     Restore {

@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use settings::ToggleableSetting as _;
 use warp_errors::report_if_error;
 use warpium_bottom_panel::DockOrigin;
 use warpui::{ViewContext, ViewHandle};
