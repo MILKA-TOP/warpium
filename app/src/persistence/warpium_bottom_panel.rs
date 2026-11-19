@@ -39,7 +39,9 @@ pub(super) fn add_docked_terminal_blocks(
         return Ok(());
     }
     let blocks = schema::blocks::table
-        .filter(schema::blocks::columns::pane_leaf_uuid.eq_any(uuids))
+        .filter(
+            schema::blocks::columns::pane_leaf_uuid.eq_any(uuids.into_iter().collect::<Vec<_>>()),
+        )
         .order_by(schema::blocks::columns::id.asc())
         .select(Block::as_select())
         .load::<Block>(conn)?;
