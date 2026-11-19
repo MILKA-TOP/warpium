@@ -17,6 +17,7 @@ mod lex;
 pub mod mcp;
 mod model;
 mod persist;
+mod project_root;
 mod resolve;
 mod scan;
 mod usages;
@@ -36,6 +37,9 @@ pub use index::{
 pub use interner::Sym;
 pub use model::{Language, Origin, Position, SymbolKind, Visibility, flags};
 pub use persist::{FORMAT_VERSION, PersistError, write_snapshot};
+pub use project_root::{
+    FileProjectRoot, FsRootMarkers, ProjectRootKind, RootMarkers, project_root_for_file,
+};
 pub use resolve::{Definition, DefinitionResult, Resolution, SourceFile};
 pub use usages::{Usage, UsagesResult};
 

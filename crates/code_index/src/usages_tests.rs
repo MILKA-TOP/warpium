@@ -355,3 +355,53 @@ fn parameters_and_named_arguments_with_the_name_are_not_usages() {
         ]
     );
 }
+
+#[test]
+fn calls_on_a_known_subtype_count_as_via_in_files_that_also_name_the_interface() {
+    let dir = project(&[
+        ("Repo.kt", "interface Repo {\n    fun load(x: Int)\n}\n"),
+        (
+            "DbRepo.kt",
+            "class DbRepo : Repo {\n    override fun load(x: Int) {}\n}\n",
+        ),
+        (
+            "Main.kt",
+            "fun main() {\n    DbRepo().load(2)\n    val db = DbRepo()\n    db.load(3)\n    val repo: Repo = DbRepo()\n    repo.load(4)\n}\n",
+        ),
+    ]);
+    let index = CodeIndex::build(dir.path(), 1);
+
+    let result = usages_at(&index, "Repo.kt", Language::Kotlin, "fun load", "load");
+
+    assert_eq!(
+        found_via(&result),
+        vec![
+            ("Main.kt", 5, false),
+            ("Main.kt", 1, true),
+            ("Main.kt", 3, true)
+        ]
+    );
+}
+
+#[test]
+fn calls_whose_receiver_type_is_not_written_count_as_usages_of_the_interface_member() {
+    let dir = project(&[
+        ("Repo.kt", "interface Repo {\n    fun load(x: Int)\n}\n"),
+        (
+            "DbRepo.kt",
+            "class DbRepo : Repo {\n    override fun load(x: Int) {}\n}\n\nfun makeRepo() = DbRepo()\n",
+        ),
+        (
+            "Main.kt",
+            "fun main(repo: Repo) {\n    repo.load(1)\n    makeRepo().load(2)\n}\n",
+        ),
+    ]);
+    let index = CodeIndex::build(dir.path(), 1);
+
+    let result = usages_at(&index, "Repo.kt", Language::Kotlin, "fun load", "load");
+
+    assert_eq!(
+        found_via(&result),
+        vec![("Main.kt", 1, false), ("Main.kt", 2, false)]
+    );
+}
