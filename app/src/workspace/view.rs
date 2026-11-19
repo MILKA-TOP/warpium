@@ -24,6 +24,8 @@ pub(crate) mod tests;
 mod vertical_tabs;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_android;
+#[cfg(not(target_family = "wasm"))]
+mod warpium_emulator;
 mod warpium_project_root;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_project_toolbar;
@@ -25127,6 +25129,18 @@ impl TypedActionView for Workspace {
                     true,
                     ctx,
                 );
+            }
+            ShowRunningEmulator => {
+                #[cfg(not(target_family = "wasm"))]
+                self.show_running_emulator(None, ctx);
+            }
+            StartFakeAndroidEmulator(_kind) => {
+                #[cfg(all(debug_assertions, not(target_family = "wasm")))]
+                self.start_fake_emulator(*_kind, ctx);
+            }
+            StopFakeAndroidEmulators => {
+                #[cfg(all(debug_assertions, not(target_family = "wasm")))]
+                self.stop_fake_emulators(ctx);
             }
             ToggleAndroidTools => {
                 crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(

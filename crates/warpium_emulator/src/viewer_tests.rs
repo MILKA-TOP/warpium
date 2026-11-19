@@ -202,8 +202,5 @@ fn failure_stops_streaming_and_ignores_later_paints_and_frames() {
 
     assert_eq!(request, None);
     assert!(!viewer.is_streaming());
-    assert_eq!(
-        viewer.status(),
-        &ViewerStatus::Failed(SessionError::Exited)
-    );
+    assert_eq!(viewer.status(), &ViewerStatus::Failed(SessionError::Exited));
 }

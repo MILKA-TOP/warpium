@@ -73,7 +73,8 @@ impl Viewer {
         self.streaming.is_some()
     }
 
-    fn is_connected(&self) -> bool {
+    /// The session is up, whether or not frames are streaming.
+    pub fn is_connected(&self) -> bool {
         match self.status {
             ViewerStatus::WaitingForFrame | ViewerStatus::Showing | ViewerStatus::ScreenOff => true,
             ViewerStatus::Connecting | ViewerStatus::Failed(_) => false,

@@ -15667,6 +15667,7 @@ dependencies = [
  "warp_web_event_bus",
  "warpium_agent_mcp",
  "warpium_android",
+ "warpium_emulator",
  "warpium_project_root",
  "warpium_project_toolbar",
  "warpium_self_update",

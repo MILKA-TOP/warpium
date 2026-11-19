@@ -920,6 +920,12 @@ pub enum WorkspaceAction {
     LaunchAndroidAvd,
     /// Warpium: toggles the Android tools (devices, run, Logcat).
     ToggleAndroidTools,
+    /// Warpium: opens (or focuses) the Devices pane with the running emulators.
+    ShowRunningEmulator,
+    /// Warpium, debug builds: starts an in-process fake emulator and shows it.
+    StartFakeAndroidEmulator(crate::warpium::FakeEmulatorKind),
+    /// Warpium, debug builds: stops the fake emulators.
+    StopFakeAndroidEmulators,
     /// Warpium: toggles registering the Logcat MCP server in Warp's MCP servers.
     ToggleLogcatMcp,
     /// Warpium: installs its MCP servers (Logcat, code index) into the coding agents found.
@@ -1285,6 +1291,9 @@ impl WorkspaceAction {
             | SelectAndroidDevice
             | LaunchAndroidAvd
             | ToggleAndroidTools
+            | ShowRunningEmulator
+            | StartFakeAndroidEmulator(_)
+            | StopFakeAndroidEmulators
             | ToggleLogcatMcp
             | InstallAgentMcpServers
             | UninstallAgentMcpServers

@@ -158,6 +158,8 @@ pub enum LeafContents {
     GetStarted,
     /// Warpium's Logcat pane. Not persisted: the log is a live stream that starts empty.
     WarpiumLogcat,
+    /// Warpium's Devices pane. Not persisted: it shows emulators that are running now.
+    WarpiumDevices,
 }
 
 #[cfg(feature = "local_fs")]
@@ -179,6 +181,7 @@ impl LeafContents {
             LeafContents::NetworkLog
             // Warpium's Logcat pane streams from a device; there is nothing to restore.
             | LeafContents::WarpiumLogcat
+            | LeafContents::WarpiumDevices
             // Environment management panes are opened on-demand via workspace
             // actions and have no persistable state.
             | LeafContents::EnvironmentManagement(_) => false,
