@@ -254,6 +254,83 @@ fn parse_hunk_header(header: &str) -> Option<(u32, u32)> {
     Some((start(old)?, start(new)?))
 }
 
+/// One side of a side-by-side row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SideCell {
+    /// The 1-based line number on this side.
+    pub line: u32,
+    pub text: String,
+    /// Whether the line was removed (left) or added (right).
+    pub changed: bool,
+}
+
+/// A row of the Before/After view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SideBySideRow {
+    /// A hunk header or other line spanning both sides.
+    Banner { kind: DiffLineKind, text: String },
+    /// Lines shown next to each other; a side is empty where the other side has extra lines.
+    Lines {
+        left: Option<SideCell>,
+        right: Option<SideCell>,
+    },
+}
+
+/// Pairs a unified diff's lines for a Before/After view: context lines face each other, and in
+/// each run of changes the removed lines face the added ones in order, the shorter side padded.
+pub fn side_by_side(lines: &[DiffLine]) -> Vec<SideBySideRow> {
+    let mut rows = Vec::new();
+    let mut removed: Vec<SideCell> = Vec::new();
+    let mut added: Vec<SideCell> = Vec::new();
+    let flush =
+        |rows: &mut Vec<SideBySideRow>, removed: &mut Vec<SideCell>, added: &mut Vec<SideCell>| {
+            let count = removed.len().max(added.len());
+            let mut left = removed.drain(..);
+            let mut right = added.drain(..);
+            for _ in 0..count {
+                rows.push(SideBySideRow::Lines {
+                    left: left.next(),
+                    right: right.next(),
+                });
+            }
+        };
+    for line in lines {
+        match line.kind {
+            DiffLineKind::Removed => removed.push(SideCell {
+                line: line.old_line.unwrap_or(0),
+                text: line.text.clone(),
+                changed: true,
+            }),
+            DiffLineKind::Added => added.push(SideCell {
+                line: line.new_line.unwrap_or(0),
+                text: line.text.clone(),
+                changed: true,
+            }),
+            DiffLineKind::Context => {
+                flush(&mut rows, &mut removed, &mut added);
+                let cell = |number: Option<u32>| SideCell {
+                    line: number.unwrap_or(0),
+                    text: line.text.clone(),
+                    changed: false,
+                };
+                rows.push(SideBySideRow::Lines {
+                    left: Some(cell(line.old_line)),
+                    right: Some(cell(line.new_line)),
+                });
+            }
+            DiffLineKind::Hunk | DiffLineKind::Info => {
+                flush(&mut rows, &mut removed, &mut added);
+                rows.push(SideBySideRow::Banner {
+                    kind: line.kind,
+                    text: line.text.clone(),
+                });
+            }
+        }
+    }
+    flush(&mut rows, &mut removed, &mut added);
+    rows
+}
+
 #[cfg(test)]
 #[path = "diff_tests.rs"]
 mod tests;

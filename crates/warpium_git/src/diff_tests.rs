@@ -133,3 +133,42 @@ fn binary_and_rename_headers_are_info() {
     );
     assert!(lines.iter().all(|line| line.kind == DiffLineKind::Info));
 }
+
+#[test]
+fn side_by_side_pairs_changes_and_pads_the_shorter_side() {
+    let patch = "@@ -1,4 +1,4 @@\n keep\n-old 1\n-old 2\n+new 1\n tail\n+appended\n";
+    let rows = side_by_side(&parse_unified_diff(patch));
+    assert_eq!(rows.len(), 6);
+    assert!(matches!(
+        &rows[0],
+        SideBySideRow::Banner {
+            kind: DiffLineKind::Hunk,
+            ..
+        }
+    ));
+    let cells = |row: &SideBySideRow| match row {
+        SideBySideRow::Lines { left, right } => (
+            left.as_ref()
+                .map(|cell| (cell.line, cell.text.clone(), cell.changed)),
+            right
+                .as_ref()
+                .map(|cell| (cell.line, cell.text.clone(), cell.changed)),
+        ),
+        SideBySideRow::Banner { .. } => panic!("unexpected banner"),
+    };
+    let cell = |line, text: &str, changed| Some((line, text.to_owned(), changed));
+    assert_eq!(
+        cells(&rows[1]),
+        (cell(1, "keep", false), cell(1, "keep", false))
+    );
+    assert_eq!(
+        cells(&rows[2]),
+        (cell(2, "old 1", true), cell(2, "new 1", true))
+    );
+    assert_eq!(cells(&rows[3]), (cell(3, "old 2", true), None));
+    assert_eq!(
+        cells(&rows[4]),
+        (cell(4, "tail", false), cell(3, "tail", false))
+    );
+    assert_eq!(cells(&rows[5]), (None, cell(4, "appended", true)));
+}

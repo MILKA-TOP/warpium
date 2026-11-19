@@ -26,7 +26,7 @@ use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::UiComponent as _;
-use warpui::{AppContext, Element};
+use warpui::{AppContext, Element, SingletonEntity as _};
 
 use super::{
     BranchChoice, DETAILS_PADDING, DetailsState, DiffContent, FONT_SIZE, FileDiff, GitLogAction,
