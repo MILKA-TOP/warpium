@@ -935,6 +935,8 @@ pub enum WorkspaceAction {
     StopFakeAndroidEmulators,
     /// Warpium: toggles registering the Logcat MCP server in Warp's MCP servers.
     ToggleLogcatMcp,
+    /// Warpium: toggles pasting images into containers and SSH sessions.
+    ToggleWarpiumContainerImagePaste,
     /// Warpium: installs its MCP servers (Logcat, code index) into the coding agents found.
     InstallAgentMcpServers,
     /// Warpium: removes its MCP servers from the coding agents' configs.
@@ -1308,6 +1310,7 @@ impl WorkspaceAction {
             | StartFakeAndroidEmulator(_)
             | StopFakeAndroidEmulators
             | ToggleLogcatMcp
+            | ToggleWarpiumContainerImagePaste
             | InstallAgentMcpServers
             | UninstallAgentMcpServers
             | WarpiumGit(_)

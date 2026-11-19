@@ -96,6 +96,7 @@ code_index = { path = "crates/code_index" }
 warpium_android = { path = "crates/warpium_android" }
 warpium_emulator = { path = "crates/warpium_emulator" }
 warpium_agent_mcp = { path = "crates/warpium_agent_mcp" }
+warpium_container_paste = { path = "crates/warpium_container_paste" }
 warpium_search_everywhere = { path = "crates/warpium_search_everywhere" }
 warpium_git = { path = "crates/warpium_git" }
 warp_core = { path = "crates/warp_core" }
