@@ -561,6 +561,22 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
   (both open the pane's device menu) and "Enable/Disable Android tools (devices, logcat, run)",
   which toggles `warpium.android` (default on, OSS channel only).
 
+## Embedded Android emulator (in progress)
+
+Roadmap item 13 phase B: showing a running emulator inside a pane through its built-in gRPC
+endpoint. The design and the PR plan are in
+[docs/warpium/research/embedded-emulator.md](docs/warpium/research/embedded-emulator.md). Not wired
+into the app yet.
+
+`crates/warpium_emulator` (protoc-free; `cargo test -p warpium_emulator`) discovers running
+emulators from their `pid_<pid>.ini` files, talks to them with `tonic` (frames, input, buttons,
+rotation, keepalive) and holds the frame mailbox and pointer mapping. Its tests run against an
+in-process fake emulator (`test_support`, also behind the `test-support` feature). The protobuf
+code in `src/proto/generated.rs` is committed: after updating the vendored
+`proto/emulator_controller.proto`, run `script/warpium/gen-emulator-proto`, which compiles it with
+`protox` from a separate generator workspace (`crates/warpium_emulator/codegen`), so neither
+`protoc` nor a build script is needed.
+
 ## MCP servers for coding agents
 
 Warpium ships two stdio MCP servers next to its executable (`Warpium.app/Contents/MacOS/`, built by
