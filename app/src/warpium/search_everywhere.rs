@@ -215,6 +215,7 @@ mod all_tab {
     use crate::search::item::{IconLocation, SearchItem, SearchItemDetail};
     use crate::search::mixer::{AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper};
     use crate::search::result_renderer::ItemHighlightState;
+    use crate::themes::theme::Fill as ThemeFill;
     use crate::warpium::code_index_palette::{
         MAX_RESULTS, indexing_footer, search_handle, search_symbols,
     };
@@ -359,7 +360,7 @@ mod all_tab {
             &self,
             highlight_state: ItemHighlightState,
             appearance: &Appearance,
-        ) -> Option<Fill> {
+        ) -> Option<ThemeFill> {
             self.item.item_background(highlight_state, appearance)
         }
 
