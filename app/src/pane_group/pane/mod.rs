@@ -28,6 +28,8 @@ pub(super) mod settings_pane;
 pub(super) mod terminal_pane;
 pub mod view;
 #[cfg(not(target_family = "wasm"))]
+pub(super) mod warpium_devices_pane;
+#[cfg(not(target_family = "wasm"))]
 pub(super) mod warpium_logcat_pane;
 pub mod workflow_pane;
 
@@ -151,6 +153,8 @@ pub(crate) enum IPaneType {
     DeferredPlaceholder,
     /// Warpium's Logcat pane.
     WarpiumLogcat,
+    /// Warpium's Devices pane (running emulators' screens).
+    WarpiumDevices,
     /// A pane type only for tests.
     #[cfg(test)]
     Dummy,
@@ -176,6 +180,7 @@ impl Display for IPaneType {
             IPaneType::NetworkLog => write!(f, "Network Log"),
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
             IPaneType::WarpiumLogcat => write!(f, "Logcat"),
+            IPaneType::WarpiumDevices => write!(f, "Devices"),
             #[cfg(test)]
             IPaneType::Dummy => write!(f, "Dummy"),
         }
@@ -293,6 +298,22 @@ impl PaneId {
         logcat_pane_view: &ViewHandle<PaneView<crate::warpium::logcat::LogcatView>>,
     ) -> Self {
         Self::new(IPaneType::WarpiumLogcat, logcat_pane_view)
+    }
+
+    /// Creates a [`PaneId`] from a [`ViewContext<PaneView<DevicesView>>`] (Warpium).
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn from_warpium_devices_pane_ctx(
+        ctx: &ViewContext<PaneView<crate::warpium::emulator::DevicesView>>,
+    ) -> Self {
+        Self::new_from_ctx(IPaneType::WarpiumDevices, ctx)
+    }
+
+    /// Creates a [`PaneId`] from a [`PaneView<DevicesView>`] entity ID (Warpium).
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn from_warpium_devices_pane_view(
+        devices_pane_view: &ViewHandle<PaneView<crate::warpium::emulator::DevicesView>>,
+    ) -> Self {
+        Self::new(IPaneType::WarpiumDevices, devices_pane_view)
     }
 
     /// Creates a [`PaneId`] from a [`PaneView<TerminalView>`] entity ID.
@@ -528,6 +549,15 @@ impl PaneId {
             }
             #[cfg(target_family = "wasm")]
             IPaneType::WarpiumLogcat => warpui::elements::Empty::new().finish(),
+            #[cfg(not(target_family = "wasm"))]
+            IPaneType::WarpiumDevices => {
+                ChildView::<PaneView<crate::warpium::emulator::DevicesView>>::with_id(
+                    self.0.pane_view_id,
+                )
+                .finish()
+            }
+            #[cfg(target_family = "wasm")]
+            IPaneType::WarpiumDevices => warpui::elements::Empty::new().finish(),
             #[cfg(test)]
             IPaneType::Dummy => warpui::elements::Empty::new().finish(),
         };

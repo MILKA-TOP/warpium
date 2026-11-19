@@ -128,6 +128,8 @@ pub fn init(app: &mut AppContext) {
     #[cfg(not(target_family = "wasm"))]
     crate::warpium::logcat::init(app);
     #[cfg(not(target_family = "wasm"))]
+    crate::warpium::emulator::init_bindings(app);
+    #[cfg(not(target_family = "wasm"))]
     crate::warpium::agent_mcp::init_bindings(app);
     crate::warpium::container_paste::init_bindings(app);
 

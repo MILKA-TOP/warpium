@@ -292,6 +292,8 @@ pub(crate) enum ProjectToolbarAction {
     SelectAndroidDevice(String),
     LaunchAndroidAvd(String),
     OpenLogcat,
+    /// Show the emulator with this adb serial in the Devices pane.
+    ShowEmulator(String),
     /// Open the toolbar editor, with this button selected.
     Customize(Option<String>),
     /// Open the toolbar editor with a new button.
@@ -341,6 +343,8 @@ pub(crate) enum ProjectToolbarEvent {
         module: AndroidAppModule,
     },
     OpenLogcat,
+    /// Show the emulator with this adb serial in the Devices pane.
+    ShowEmulator(String),
     /// Open the toolbar editor for the project at `root`, with the button `select` selected or,
     /// with `add`, a new button.
     Customize {
@@ -986,6 +990,21 @@ impl ProjectToolbarView {
                     MenuItemFields::new("Open Logcat")
                         .with_on_select_action(ProjectToolbarAction::OpenLogcat),
                 ));
+                if super::emulator::is_enabled(ctx) {
+                    let emulator = AndroidModel::as_ref(ctx)
+                        .selected_device()
+                        .filter(|device| {
+                            device.entry.state.is_online()
+                                && device.serial().starts_with("emulator-")
+                        })
+                        .map(|device| device.serial().to_owned());
+                    if let Some(serial) = emulator {
+                        items.push(MenuItem::Item(
+                            MenuItemFields::new("Show running emulator in Warpium")
+                                .with_on_select_action(ProjectToolbarAction::ShowEmulator(serial)),
+                        ));
+                    }
+                }
                 items
             }
         };
@@ -2056,6 +2075,11 @@ impl TypedActionView for ProjectToolbarView {
             ProjectToolbarAction::OpenLogcat => {
                 self.open_menu = None;
                 ctx.emit(ProjectToolbarEvent::OpenLogcat);
+                ctx.notify();
+            }
+            ProjectToolbarAction::ShowEmulator(serial) => {
+                self.open_menu = None;
+                ctx.emit(ProjectToolbarEvent::ShowEmulator(serial.clone()));
                 ctx.notify();
             }
             ProjectToolbarAction::Customize(select) => self.customize(select.clone(), false, ctx),

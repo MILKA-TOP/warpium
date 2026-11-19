@@ -703,8 +703,10 @@ and `app/src/workspace/view/warpium_android.rs`. The pane adds `IPaneType::Warpi
 
 Roadmap item 13 phase B: showing a running emulator inside a pane through its built-in gRPC
 endpoint. The design and the PR plan are in
-[docs/warpium/research/embedded-emulator.md](docs/warpium/research/embedded-emulator.md). Not wired
-into the app yet.
+[docs/warpium/research/embedded-emulator.md](docs/warpium/research/embedded-emulator.md). Behind
+`FeatureFlag::WarpiumEmbeddedEmulator` (dogfood; on in Warpium debug builds, which stand in for a
+dogfood channel, see `app/src/bin/oss.rs`) and the `warpium.android` setting. View only so far: no
+input, and no launching (PR 3 and PR 4 of the plan).
 
 `crates/warpium_emulator` (protoc-free; `cargo test -p warpium_emulator`) discovers running
 emulators from their `pid_<pid>.ini` files, talks to them with `tonic` (frames, input, buttons,
@@ -713,7 +715,39 @@ in-process fake emulator (`test_support`, also behind the `test-support` feature
 code in `src/proto/generated.rs` is committed: after updating the vendored
 `proto/emulator_controller.proto`, run `script/warpium/gen-emulator-proto`, which compiles it with
 `protox` from a separate generator workspace (`crates/warpium_emulator/codegen`), so neither
-`protoc` nor a build script is needed.
+`protoc` nor a build script is needed. `session` runs one emulator connection on a
+`warpium-emulator-<port>` thread (connect and token check, frame stream, keepalive every 2 minutes
+while streaming, restart on resize after 150 ms); `viewer` is the pane's state machine (when to
+stream, when to pause). Both are unit-tested against the fake.
+
+**Devices pane** (`app/src/warpium/emulator.rs`, `app/src/pane_group/pane/warpium_devices_pane.rs`,
+`app/src/workspace/view/warpium_emulator.rs`; `IPaneType::WarpiumDevices`,
+`LeafContents::WarpiumDevices`, never persisted):
+
+- **Opening.** "Show running emulator in Warpium" in the palette, or the same entry in the project
+  toolbar's device menu when the selected device is an online emulator. One pane per window, split
+  right; each running emulator (from discovery) is a sub-tab. Discovery re-runs when the pane opens,
+  on its refresh button and whenever adb's device list changes; an emulator that vanished shows
+  "The emulator exited".
+- **Frames.** `streamScreenshot` RGBA8888 at the frame area's physical pixel size (the emulator
+  scales and never exceeds its display), latest frame only, shown at most 60 times a second. Each
+  frame becomes a new `StaticImage` (`StaticImage::from_rgba`, the one upstream addition): the
+  renderer's texture cache is keyed by the image's `Arc`, so every frame uploads a new texture and
+  the previous one is freed at the end of the next frame. PR 5 replaces this with a stable texture.
+- **Pausing.** A tab streams only while it is painted: while streaming, the frame element asks the
+  window to repaint every 200 ms, and a tab not painted for 500 ms (another tab or pane tab in
+  front, a hidden window) cancels its stream; the next paint resumes it. A visible, static
+  emulator therefore costs about five window repaints a second.
+- **States.** Connecting, waiting for the screen, screen off, and failures: rejected token, TLS-only
+  endpoint (`grpc.server_cert`), unreachable port (with Retry) and exited (with Close tab).
+- **Frame stats** at debug level every 5 s while frames arrive:
+  `[Devices] emulator-5554 frames received=… dropped=… shown=… painted=… avg_copy_ms=… size=…`
+  (`RUST_LOG=warp::warpium::emulator=debug`).
+- **Trying it without an emulator** (debug builds only): "[Debug] Start fake Android emulator"
+  starts the crate's fake in-process (1080×2400, about 30 synthetic frames a second, listed as
+  `emulator-5900`, `-5902`, …) and shows it; "… with a stale token" and "… that requires TLS" show
+  the error states, and "[Debug] Stop fake Android emulators" the exited state. The fake's frames
+  are a gradient whose blue channel is the frame number.
 
 ## MCP servers for coding agents
 

@@ -314,6 +314,9 @@ code_index.workspace = true
 warpium_android.workspace = true
 warpium_agent_mcp.workspace = true
 warpium_container_paste.workspace = true
+# `test-support` provides the in-process fake emulator behind debug builds' "[Debug] Start fake
+# Android emulator" commands (compiled out of release builds).
+warpium_emulator = { workspace = true, features = ["test-support"] }
 app-installation-detection.workspace = true
 async-io.workspace = true
 axum.workspace = true
@@ -1060,6 +1063,7 @@ history_search_ranking_v2 = []
 stored_screenshots = []
 cloud_agent_shell_respawn = []
 acp_harness = []
+warpium_embedded_emulator = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"
