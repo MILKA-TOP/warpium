@@ -37,6 +37,10 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> String {
 pub(crate) fn init_repo() -> TempDir {
     let dir = tempfile::tempdir().expect("temp dir");
     git(dir.path(), &["init", "--quiet"]);
+    // Commands run through `run_git` (revert, cherry-pick) commit without the test env vars.
+    git(dir.path(), &["config", "user.name", "Ada Lovelace"]);
+    git(dir.path(), &["config", "user.email", "ada@example.com"]);
+    git(dir.path(), &["config", "commit.gpgsign", "false"]);
     dir
 }
 
