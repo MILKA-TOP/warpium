@@ -1,0 +1,106 @@
+# Fork-only unit tests for Warpium code.
+#
+# Warpium Build (warpium-build.yml) only builds the macOS app, so the fork's unit tests in the
+# `warp` app crate and the fork crates were never compiled or run in CI. This workflow runs them
+# on a standard Linux runner, in parallel with the macOS build: Linux runners are plentiful,
+# while the free macOS runners are the bottleneck.
+#
+# Scope: every test in the fork-only crates, plus tests in the `warp` crate whose path contains
+# "warpium" (app/src/warpium/**, pane_group::warpium_*, workspace::view::warpium_*, ...).
+# Upstream's own test suite is out of scope: upstream runs it, and it needs gcloud/SSH setup.
+name: Warpium Tests
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '**/*.md'
+      - 'specs/**'
+      - 'tools/**'
+  pull_request:
+    branches: [master, 'claude/**']
+    paths-ignore:
+      - '**/*.md'
+      - 'specs/**'
+      - 'tools/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warpium-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  # No debuginfo: smaller test binaries, faster links, a smaller cache, less disk. Panics still
+  # print symbolized backtraces.
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUST_BACKTRACE: '1'
+  # Fewer parallel rustc processes: lower peak memory next to the huge `warp` crate.
+  CARGO_BUILD_JOBS: '2'
+
+jobs:
+  linux:
+    name: Unit tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      # The `warp` test binary is large; make room on the standard runner's disk.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /usr/share/swift /opt/hostedtoolcache/CodeQL
+          docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+
+      # rustc on the `warp` crate needs more than the standard runner's 16 GB when several
+      # crates build at once (the first run was killed with SIGTERM while compiling it).
+      - name: Add swap
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile >/dev/null
+          sudo swapon /mnt/swapfile
+          free -h
+
+      - uses: actions/checkout@v6.0.3
+
+      # Upstream's shared setup: LFS objects, Rust cache, protoc and the Linux test dependencies.
+      # A cache key of its own keeps it apart from anything else; only master saves it.
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          install_test_deps: true
+          cache_key: warpium-linux-tests
+
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: nextest
+
+      - name: Compile tests
+        run: |
+          crates=()
+          for dir in crates/warpium_* crates/code_index; do
+            crates+=(-p "$(basename "$dir")")
+          done
+          echo "FORK_CRATES=${crates[*]}" >> "$GITHUB_ENV"
+          # --lib: only the app's unit-test binary, not its seven binaries. nice: keep the runner
+          # agent responsive (the previous run starved it and the runner was lost).
+          nice -n 15 cargo nextest run --locked "${crates[@]}" --no-run
+          nice -n 15 cargo nextest run --locked -p warp --lib --no-run
+          df -h /
+
+      - name: Run fork crate tests
+        run: cargo nextest run --locked --no-fail-fast $FORK_CRATES
+
+      - name: Run Warpium tests in the app crate
+        run: cargo nextest run --locked --no-fail-fast -p warp --lib -E 'test(/warpium/)'

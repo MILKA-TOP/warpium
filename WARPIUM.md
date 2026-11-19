@@ -825,6 +825,11 @@ gated to `warpdotdev` and don't run here. Don't change whether workflows are ena
 - **Dogfood features:** branch and PR builds add the cargo features in the bundle step's
   `DOGFOOD_FEATURES` (currently `warpium_bottom_panel`) so features in development can be tested
   from the artifact; release builds leave them out.
+- **Unit tests:** `.github/workflows/warpium-tests.yml` ("Warpium Tests") runs on
+  `ubuntu-latest` for the same triggers, in parallel with the macOS build: all tests of the
+  fork crates (`crates/warpium_*`, `crates/code_index`) plus the `warp` crate's tests whose path
+  contains `warpium` (`cargo nextest run -p warp --lib -E 'test(/warpium/)'`). Name fork test modules
+  so they match (e.g. `warpium_*` files, `app/src/warpium/**`). Upstream's suite isn't run.
 - **Cross-compile caveat:** the Intel runner can't run the arm64 binary that generates
   `settings_schema.json`, so CI builds lack the bundled `modify-settings` agent skill. Local
   builds on Apple silicon include it.
