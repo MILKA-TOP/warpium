@@ -439,6 +439,7 @@ impl CommandSearchView {
             SearchBarEvent::QueryFilterChanged { .. } => {}
             SearchBarEvent::SelectionUpdateInZeroState { .. } => {}
             SearchBarEvent::EnterInZeroState { .. } => {}
+            SearchBarEvent::TabWithActiveFilter { .. } => {}
         }
     }
 

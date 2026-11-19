@@ -27,6 +27,7 @@ mod warpium_android;
 mod warpium_project_root;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_project_toolbar;
+mod warpium_search_everywhere;
 #[cfg(target_family = "wasm")]
 mod wasm_view;
 
@@ -14830,12 +14831,9 @@ impl Workspace {
         });
     }
 
-    /// Warpium: opens Go to Class or Go to Symbol over the current project's code index, or the
-    /// results of the last Go to Definition or Find Usages (`QueryFilter::CodeNavigation`).
-    fn open_code_index_palette(&mut self, filter: QueryFilter, ctx: &mut ViewContext<Self>) {
-        if filter != QueryFilter::CodeNavigation {
-            self.ensure_code_index_project(ctx);
-        }
+    /// Warpium: lists the results of the last Go to Definition or Find Usages.
+    fn open_code_navigation_palette(&mut self, ctx: &mut ViewContext<Self>) {
+        let filter = QueryFilter::CodeNavigation;
         self.palette.update(ctx, |view, ctx| {
             view.reset(ctx);
             let mixer = view.search_bar.as_ref(ctx).mixer().clone();
@@ -14942,8 +14940,10 @@ impl Workspace {
     #[cfg(not(target_family = "wasm"))]
     fn rerun_code_index_palette_query(&mut self, ctx: &mut ViewContext<Self>) {
         let is_code_palette_open = self.current_workspace_state.is_palette_open
-            && (self.is_palette_mode_enabled(PaletteMode::CodeClasses, ctx)
-                || self.is_palette_mode_enabled(PaletteMode::CodeSymbols, ctx));
+            && matches!(
+                self.palette.as_ref(ctx).active_query_filter(ctx),
+                Some(QueryFilter::CodeClasses | QueryFilter::CodeSymbols | QueryFilter::CodeAll)
+            );
         if !is_code_palette_open {
             return;
         }
@@ -14951,32 +14951,6 @@ impl Workspace {
             view.search_bar
                 .update(ctx, |search_bar, ctx| search_bar.run_query(ctx));
         });
-    }
-
-    /// Warpium: indexes the project of the active tab: its locked project root, else the
-    /// repository of the active session, else the session's directory.
-    #[cfg_attr(target_family = "wasm", allow(unused_variables))]
-    fn ensure_code_index_project(&self, ctx: &mut ViewContext<Self>) {
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let window_id = ctx.window_id();
-            let mut root = self
-                .active_tab_pane_group()
-                .as_ref(ctx)
-                .project_root()
-                .primary()
-                .map(Path::to_path_buf);
-            if root.is_none() {
-                root = crate::search::files::model::FileSearchModel::as_ref(ctx).repo_root(ctx);
-            }
-            let require_build_files = root.is_none();
-            if root.is_none() {
-                root = ActiveSession::as_ref(ctx)
-                    .path_if_local(window_id)
-                    .map(Path::to_path_buf);
-            }
-            crate::warpium::code_index::ensure_project(root, require_build_files, ctx);
-        }
     }
 
     fn open_files_palette(&mut self, ctx: &mut ViewContext<Self>) {
@@ -15236,6 +15210,9 @@ impl Workspace {
         source: PaletteSource,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Warpium: an open project search switches tabs instead of starting over.
+        let warpium_palette_was_open = self.current_workspace_state.is_palette_open
+            && !matches!(source, PaletteSource::CtrlTab { .. });
         self.close_all_overlays(ctx);
 
         // Set the shared session viewer state before opening the palette
@@ -15274,12 +15251,32 @@ impl Workspace {
             },
             PaletteMode::LaunchConfig => self.open_launch_config_palette(ctx),
             PaletteMode::WarpDrive => self.open_warp_drive_palette(ctx),
-            PaletteMode::Files => self.open_files_palette(ctx),
+            PaletteMode::Files => {
+                if !self.open_warpium_search_everywhere(
+                    crate::warpium::search_everywhere::SearchTab::All,
+                    warpium_palette_was_open,
+                    ctx,
+                ) {
+                    self.open_files_palette(ctx);
+                }
+            }
             PaletteMode::Conversations => self.open_conversations_palette(ctx),
-            PaletteMode::CodeClasses => self.open_code_index_palette(QueryFilter::CodeClasses, ctx),
-            PaletteMode::CodeSymbols => self.open_code_index_palette(QueryFilter::CodeSymbols, ctx),
+            PaletteMode::CodeClasses => {
+                self.open_warpium_search_everywhere(
+                    crate::warpium::search_everywhere::SearchTab::Classes,
+                    warpium_palette_was_open,
+                    ctx,
+                );
+            }
+            PaletteMode::CodeSymbols => {
+                self.open_warpium_search_everywhere(
+                    crate::warpium::search_everywhere::SearchTab::Symbols,
+                    warpium_palette_was_open,
+                    ctx,
+                );
+            }
             PaletteMode::CodeNavigation => {
-                self.open_code_index_palette(QueryFilter::CodeNavigation, ctx);
+                self.open_code_navigation_palette(ctx);
             }
         }
 
@@ -15422,11 +15419,9 @@ impl Workspace {
                 }
             }
             CommandPaletteEvent::OpenCodeIndexPalette { filter } => {
-                self.ensure_code_index_project(ctx);
-                let filter = *filter;
-                self.palette.update(ctx, |view, ctx| {
-                    view.set_active_query_filter(filter, ctx);
-                });
+                if let Some(tab) = crate::warpium::search_everywhere::filter_tab(*filter) {
+                    self.open_warpium_search_everywhere(tab, false, ctx);
+                }
             }
             CommandPaletteEvent::OpenDirectory { path } => {
                 let active_terminal_view = self

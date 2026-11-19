@@ -162,6 +162,7 @@ impl ExternalSecretsMenu {
             SearchBarEvent::QueryFilterChanged { .. } => {}
             SearchBarEvent::SelectionUpdateInZeroState { .. } => {}
             SearchBarEvent::EnterInZeroState { .. } => {}
+            SearchBarEvent::TabWithActiveFilter { .. } => {}
         }
     }
 

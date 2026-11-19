@@ -22,6 +22,7 @@ pub(crate) mod project_toolbar_editor;
 pub(crate) mod project_toolbar_prompt;
 #[cfg(not(target_family = "wasm"))]
 mod project_toolbar_row;
+pub(crate) mod search_everywhere;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod self_update;
 pub(crate) mod sync_settings;

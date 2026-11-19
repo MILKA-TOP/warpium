@@ -399,9 +399,23 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   `UserViewModel`) > camel humps from a later word (`VM`) > subsequence. Within a tier, project
   sources rank above tests and generated code, then shorter names. `pkg.Name` narrows by package or
   enclosing class; `String.shout` finds extension functions by receiver.
-- **Palettes.** **Go to Class** (`ctrl-cmd-O`) and **Go to Symbol** (`ctrl-alt-cmd-O`), both
-  editable and listed in the command palette. JetBrains' `cmd-O`/`cmd-alt-O` are taken by Warp
-  (Files palette, `/open-repo`). Enter opens the declaration in the editor at its name.
+- **Project search (Search Everywhere).** In a Kotlin/Java project, `cmd-O` (Warp's Files palette)
+  opens the palette with **All / Classes / Symbols / Files** tabs, as Android Studio does. Click a
+  tab, or press `tab` / `shift-tab` in the search field to cycle them (with a filter applied, tab
+  did nothing before); the query carries over. **Go to Class** (`ctrl-cmd-O`) and **Go to Symbol**
+  (`ctrl-alt-cmd-O`), both editable and listed in the command palette, open the same palette on
+  their tab. While it is open, a tab's shortcut switches to that tab, or closes the palette when
+  it is already on it (`cmd-O` counts as All's and Files'). Classes and Symbols are the Go to
+  Class/Symbol searches (`CodeSymbolDataSource`), Files is Warp's file search, and All
+  (`QueryFilter::CodeAll`, `AllTabDataSource` in `app/src/warpium/search_everywhere.rs`) lists
+  the best 8 of each under a heading (`Classes · 8 of 37`), classes first, symbols without types,
+  then files. The tab order, the merge and the tabs decision are in
+  `crates/warpium_search_everywhere` (`cargo test -p warpium_search_everywhere`). Enter opens the
+  declaration at its name, or the file. `cmd-O` keeps the plain Files palette unless the setting
+  is on (OSS channel) and the project (see **Project root** below) has Gradle or Maven build files
+  at its root or was indexed before (a snapshot exists), so other repositories are never crawled;
+  it then starts indexing, and drops the tabs once a finished index turns out to hold no sources.
+  JetBrains' `cmd-alt-O` is taken by Warp (`/open-repo`).
 - **Go to Definition** (`cmd-B`, cmd-click, or the editor's context menu) and **Find Usages**
   (`alt-F7`) in `.kt`, `.kts` and `.java` editors, both editable. The editor sends its text
   (unsaved edits included) and cursor to the workspace, which resolves it on a background executor
@@ -445,7 +459,7 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   only implement an interface are never parsed. At most 400 files are parsed per query and files over 128 KB never
   are (parsing is most of the cost, about 1 ms per 7 KB); past that, mentions in files naming the
   class count as approximate.
-- **Project root.** When a Go to palette opens: the tab's locked [project root](#tab-project-root)
+- **Project root.** When a Go to palette or the project search opens: the tab's locked [project root](#tab-project-root)
   (its primary folder), else the
   repository of the active session, else its directory if that holds Gradle or Maven build files.
   The home directory and `/` are never indexed. One project is held at a time; switching cancels
