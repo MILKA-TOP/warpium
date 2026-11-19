@@ -17,10 +17,10 @@ use crate::lex::{line_starts, offset_of};
 use crate::model::{Language, Origin, Position, SymbolKind, Visibility, flags};
 
 use syntax::{
-    EnclosingClass, LocalDecl, Lookup, Receiver, TypeNode, classify, dotted_name,
-    enclosing_classes, find_local, property_type, receiver_shape, supertypes, type_path,
+    EnclosingClass, LocalDecl, Lookup, Receiver, classify, dotted_name, enclosing_classes,
+    find_local, property_type, receiver_shape,
 };
-pub(crate) use syntax::{Want, identifier_name, is_identifier};
+pub(crate) use syntax::{TypeNode, Want, identifier_name, is_identifier, supertypes, type_path};
 
 /// Most declarations a name-only fallback returns.
 const MAX_FALLBACK: usize = 50;

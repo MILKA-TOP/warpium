@@ -8,7 +8,9 @@ use crate::extract::{RawFile, extract};
 use crate::fuzzy::{MatchTier, Pattern};
 use crate::interner::{Interner, Sym};
 use crate::layout::{is_walkable_dir, place};
-use crate::model::{FileData, Import, Language, Origin, Position, Symbol, SymbolKind, Visibility};
+use crate::model::{
+    FileData, Import, Language, Origin, Position, Supertype, Symbol, SymbolKind, Visibility,
+};
 use crate::scan::{FoundFile, abs_path, rel_path, scan, stat_file};
 
 /// Files larger than this are recorded without symbols: they are almost always generated and
@@ -185,7 +187,19 @@ impl CodeIndex {
             stats.files_removed += batch_stats.files_removed;
             true
         });
+        if stats.files_parsed + stats.files_removed > 0 {
+            self.shrink_to_fit();
+        }
         stats
+    }
+
+    /// Releases the spare capacity the tables grew into, after a build, rescan or load. Cheap
+    /// next to the parsing that precedes it (a few milliseconds for 100k strings).
+    pub fn shrink_to_fit(&mut self) {
+        self.interner.shrink_to_fit();
+        self.files.shrink_to_fit();
+        self.by_path.shrink_to_fit();
+        self.by_name.shrink_to_fit();
     }
 
     /// Reindexes the given changed, added or removed paths (files or directories).
@@ -229,6 +243,7 @@ impl CodeIndex {
             heap_bytes += file.rel_path.capacity() * 2
                 + file.symbols.capacity() * std::mem::size_of::<Symbol>()
                 + file.imports.capacity() * std::mem::size_of::<Import>()
+                + file.supertypes.capacity() * std::mem::size_of::<Supertype>()
                 + file.identifiers.capacity() * std::mem::size_of::<Sym>();
         }
         IndexStats {
@@ -626,9 +641,21 @@ impl CodeIndex {
                 is_static: import.is_static,
             })
             .collect();
+        let supertypes = raw
+            .supertypes
+            .iter()
+            .map(|(symbol, written)| {
+                let (qualifier, name) = written.rsplit_once('.').unwrap_or(("", written));
+                Supertype {
+                    symbol: *symbol,
+                    name: interner.intern(name),
+                    qualifier: interner.intern(qualifier),
+                }
+            })
+            .collect();
         let mut identifiers: Vec<Sym> = raw
             .identifiers
-            .iter()
+            .lines()
             .map(|identifier| interner.intern(identifier))
             .collect();
         identifiers.sort_unstable();
@@ -642,6 +669,7 @@ impl CodeIndex {
             origin: placement.origin,
             imports,
             symbols,
+            supertypes,
             identifiers,
             mtime_ns: found.mtime_ns,
             size: found.size,

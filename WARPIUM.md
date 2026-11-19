@@ -280,6 +280,47 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
   "Enable/Disable project toolbar" in the command palette, next to "Edit project toolbar" and
   "Edit personal toolbar overrides". OSS channel only.
 
+## Bottom panel
+
+A per-tab dock below the split layout for panes whose processes should keep running out of the
+way (JetBrains-style tool window, roadmap item 14; design in
+[docs/warpium/research/bottom-panel.md](docs/warpium/research/bottom-panel.md)). Gated by
+`FeatureFlag::WarpiumBottomPanel` (cargo feature `warpium_bottom_panel`, also in `DOGFOOD_FLAGS`),
+which CI builds into branch and PR artifacts only (see [CI](#ci)). Fork-only code lives in
+`crates/warpium_bottom_panel` (protoc-free, `cargo test -p warpium_bottom_panel`: sub-tab order and
+selection, restore position, layout anchor), `app/src/pane_group/warpium_bottom_dock.rs` (the
+dock in `PaneGroup`: move/restore/close, hooks, rendering, bindings) and
+`app/src/terminal/view/warpium_bottom_panel.rs` (the terminal menu items).
+
+- **Lifecycle.** A docked pane leaves the layout tree but stays in `PaneGroup::pane_contents`
+  without being detached, like an off-tree child agent pane, so its terminal manager and PTY keep
+  running and its subscriptions (shell exit, titles) keep working. Quit and close-tab warnings
+  count its running commands because they walk `pane_contents`. Closing the tab closes the dock.
+- **Commands.** `cmd-j` (Mac) toggles the panel and opens a terminal in it when it is empty;
+  palette "Move pane to bottom panel", "Restore pane to layout", "Toggle bottom panel"; terminal
+  context and pane header menus offer "Move to bottom panel" (or "Restore pane to layout" for a
+  docked pane). The panel's strip has a sub-tab per pane (click to show and focus, `x` to close),
+  "Restore pane to layout" and "Hide bottom panel" buttons, and the panel is resizable from its
+  top edge.
+- **Rules.** Restoring puts the pane back next to its previous neighbor when that pane is still
+  visible, else right of the layout pane focused last. `exit` in a docked terminal closes only its
+  sub-tab. Closing or moving away the layout's last visible pane while the dock has panes opens a
+  fresh terminal in the layout instead of closing the tab, and so does docking the last one.
+  Splits from a docked pane split the layout pane focused last; layout navigation from a docked
+  pane returns focus to the layout; docked panes can't be dragged or dropped onto. Focusing a
+  docked pane (from the panel, session navigation or a closed neighbor) shows the panel on it.
+- **Not yet.** Docked panes aren't persisted, so they aren't restored on relaunch (next step, now
+  that the tab project root changes to `TabSnapshot` have landed). Only terminal panes can be docked; Logcat, the
+  collapsed chip strip and unread badges come later.
+- **Upstream touch points** (one-line hooks into `warpium_bottom_dock.rs`, check after upstream
+  merges): `pane_group/mod.rs` (`PaneGroupAction::WarpiumBottomPanel`, the `warpium_bottom_dock`
+  field, `close_pane`, `remove_pane_for_move`, `focus_pane`, `update_pane_history`,
+  `handle_focus_change`, `add_pane_with_options`, `handle_pane_view_event`, `handle_pane_event`,
+  `handle_action`, `keymap_context`, `render`, `reveal_and_focus_pane`), `pane_group/focus_state.rs`
+  (docked set), `pane_group/pane/mod.rs` (`PaneEvent::WarpiumBottomPanel`),
+  `terminal/view/action.rs` and `terminal/view.rs` (`TerminalAction::WarpiumBottomPanel`, menu
+  items) and `terminal/view/pane_impl.rs` (header menu).
+
 ## Tab project root
 
 Each tab has a project root that the Project Explorer, global search, code review, the project
@@ -332,7 +373,7 @@ placement) and `app/src/workspace/view/warpium_project_header.rs` (the explorer 
   terminal inside a container whose working directory maps into the project counts as inside it;
   locking from the Projects list.
 
-## Kotlin/Java code index (Go to Class / Symbol / Definition, Find Usages)
+## Kotlin/Java code index (Go to Class / Symbol / Definition / Implementation, Find Usages)
 
 An in-process declaration index for Kotlin and Java projects, KMP and plain JVM alike: phases 0
 to 2 of [the research report](docs/warpium/research/kotlin-navigation-and-toolchain.md). No
@@ -347,7 +388,8 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   objects, companion objects, enums and entries, annotations, records, type aliases, functions
   (with extension receivers), properties (including `val`/`var` constructor parameters),
   constructors and nested types, with package, file, span, visibility, `expect`/`actual`, the
-  file's imports and the set of identifiers its code uses (outside comments and strings, for Find
+  file's imports, the supertypes each class, interface and object declares (for Go to
+  Implementation) and the set of identifiers its code uses (outside comments and strings, for Find
   Usages). Local declarations inside function bodies are left out. The module and source set
   (`commonMain`, `iosMain`, `main`, `test`, …) come from the path, so test and generated code can
   rank lower and `expect` declarations link to their `actual`s by qualified name. Modules named as
@@ -368,6 +410,14 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   name, Go to Definition shows its usages instead, as in the JetBrains IDEs. The bindings only
   apply where the editor's keymap context has `WarpiumCodeNavigation` (navigable file, setting on),
   and cmd-click is only offered when no language server serves the file.
+- **Go to Implementation** (`alt-cmd-B`, as in the JetBrains keymap, or the context menu; editable;
+  `crates/code_index/src/hierarchy.rs`): the project types that extend or implement a type, also
+  indirectly; the members overriding a function or property (Kotlin members need `override`; Java
+  methods only the name, since `@Override` is optional, so overloads count too); the `actual`s of an
+  `expect` declaration. A supertype as written counts when it is qualified to the type's name or
+  the file sees the type (same file or package, import, star import), or when no other type has
+  the name. Nothing is precomputed: a query scans the per-file supertype lists once per inheritance
+  level (well under a millisecond on 100k-symbol projects).
 - **Definition resolution** (`crates/code_index/src/resolve`). The current file is parsed; names
   resolve through local variables and parameters, enclosing classes (with companion objects and
   their declared supertypes), the file, explicit imports (aliases too), the package, star imports
@@ -382,7 +432,17 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   import, star import); a member counts in files that name its class (a receiver type or supertype
   has to be written down for exact resolution). Files that also see or declare another declaration
   with the name are parsed and each mention resolved; otherwise every mention counts. Usages only
-  matched by name are marked `≈`. At most 400 files are parsed per query and files over 128 KB never
+  matched by name are marked `≈`. As in the JetBrains IDEs, usages of the members overriding a
+  member (at most 200, looked up for at most 4 targets) and of `expect`/`actual` counterparts are
+  listed too, after the others under a **Via implementations/overrides** heading: a mention in a
+  resolved file counts there when it resolves to an override or counterpart, elsewhere when the
+  file never names the class of the declaration itself. A file that names both (say `Repo` and
+  its implementation `DbRepo`) is resolved, so `DbRepo().load()`, or `db.load()` after
+  `val db = DbRepo()`, counts as via while `repo.load()` with `repo: Repo` stays direct. A receiver
+  whose type isn't written nearby (`makeRepo().load()`, chained calls) resolves by name and is
+  listed as a direct usage, since there is no type inference. Mentions that are indexed declarations of
+  the name (an override, an overload) are dropped before deciding to parse a file, so files that
+  only implement an interface are never parsed. At most 400 files are parsed per query and files over 128 KB never
   are (parsing is most of the cost, about 1 ms per 7 KB); past that, mentions in files naming the
   class count as approximate.
 - **Project root.** When a Go to palette opens: the tab's locked [project root](#tab-project-root)
@@ -396,8 +456,17 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   cores, at most 8) that exists only for the build, parsing in batches of 512 files. The palette
   searches on a background executor under a shared read lock. Saves are reparsed off the main
   thread from `repo_metadata` watcher events.
-  Go to Definition and Find Usages index the project holding the file (its git repository, else
-  the outermost directory with Gradle settings) when the current project doesn't.
+  Names, packages and paths are interned into one string buffer with a hash table of ids (about
+  21 bytes per string beyond its text), and the tables are shrunk to fit after a build, rescan or
+  load: on 100k-symbol corpora the index holds about 20 MB of heap and a warm process about 36 MB
+  of RSS.
+  Go to Definition and Find Usages index the project holding the file when the current project
+  doesn't (`code_index::project_root_for_file`). Inside one of the tab's locked
+  [project root](#tab-project-root) folders (the deepest holding the file), the choice never leaves
+  that folder: the outermost directory with Gradle settings between the file and the folder, else
+  the nearest git repository there, else the locked folder itself (a plain folder of Kotlin files
+  without git or build files works). Elsewhere: the outermost directory with Gradle settings
+  inside the file's git repository (anywhere, outside one), else the repository.
 - **Snapshot.** `<user cache dir>/dev.milka.Warpium/code-index/<hash of the root>/index.bin`
   (`~/Library/Caches/…` on macOS): a versioned binary format (`FORMAT_VERSION`) with a deduplicated
   string table. Nothing is written inside the project. On open, the snapshot is loaded (the palette
@@ -410,8 +479,9 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
 ### MCP server for agents
 
 `warpium-code-index` serves the index over MCP (stdio) as a candidate replacement for `ast-index`.
-Tools: `find_class`, `find_symbol` (optional `kind`), `file_outline`, `find_definition` and
-`find_usages`. The last two take `path`, a 1-based `line`, and either a 1-based `column` or the
+Tools: `find_class`, `find_symbol` (optional `kind`), `file_outline`, `find_definition`,
+`find_usages` (overrides' usages follow under "Via implementations/overrides") and
+`find_implementations`. The last three take `path`, a 1-based `line`, and either a 1-based `column` or the
 identifier's `name` on that line (agents usually know the name, not the column). Results are compact
 text lines with kind, name, package, `file:line` and source set, with `expect`/`actual` counterparts
 listed under each hit; usages are `path:line:column` plus the line, `≈` when only the name
@@ -437,7 +507,8 @@ snapshot size, warm start (load, and load plus rescan), p50/p95/max latency of ~
 Go to Symbol queries (a fixed list plus names sampled from the corpus), Go to Definition latency on
 ~550 references sampled from the corpus (names after a dot and capitalized names; the share
 resolved is low where most references are to libraries, which aren't indexed), Find Usages latency
-for 50 sampled classes and functions, update time after editing a file, and peak RSS. A separate process measures the warm start, so its peak RSS is what the index
+for 50 sampled classes and functions (with how many came through overrides), Go to Implementation
+latency on the same declarations, update time after editing a file, lines of source, and peak RSS. A separate process measures the warm start, so its peak RSS is what the index
 keeps resident.
 
 ```bash
@@ -794,6 +865,14 @@ gated to `warpdotdev` and don't run here. Don't change whether workflows are ena
   build release only (a manual run can pick debug). Each profile has its own Rust cache, saved
   only by master runs, so PR builds restore master's warm debug cache. Measure performance on
   a master or release build.
+- **Dogfood features:** branch and PR builds add the cargo features in the bundle step's
+  `DOGFOOD_FEATURES` (currently `warpium_bottom_panel`) so features in development can be tested
+  from the artifact; release builds leave them out.
+- **Unit tests:** `.github/workflows/warpium-tests.yml` ("Warpium Tests") runs on
+  `ubuntu-latest` for the same triggers, in parallel with the macOS build: all tests of the
+  fork crates (`crates/warpium_*`, `crates/code_index`) plus the `warp` crate's tests whose path
+  contains `warpium` (`cargo nextest run -p warp --lib -E 'test(/warpium/)'`). Name fork test modules
+  so they match (e.g. `warpium_*` files, `app/src/warpium/**`). Upstream's suite isn't run.
 - **Cross-compile caveat:** the Intel runner can't run the arm64 binary that generates
   `settings_schema.json`, so CI builds lack the bundled `modify-settings` agent skill. Local
   builds on Apple silicon include it.

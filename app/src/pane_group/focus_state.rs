@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use super::pane::{PaneId, TerminalPaneId};
@@ -12,6 +14,8 @@ pub struct PaneGroupFocusState {
     active_session_id: Option<TerminalPaneId>,
     in_split_pane: bool,
     is_focused_pane_maximized: bool,
+    /// Warpium: panes docked in the bottom panel, outside the split layout.
+    docked_panes: HashSet<PaneId>,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +47,7 @@ impl PaneGroupFocusState {
             active_session_id,
             in_split_pane,
             is_focused_pane_maximized: false,
+            docked_panes: HashSet::new(),
         }
     }
 
@@ -69,6 +74,20 @@ impl PaneGroupFocusState {
     /// Returns true if the focused pane is maximized.
     pub fn is_focused_pane_maximized(&self) -> bool {
         self.is_focused_pane_maximized
+    }
+
+    /// Warpium: whether the pane is docked in the bottom panel.
+    pub fn is_pane_docked(&self, pane_id: PaneId) -> bool {
+        self.docked_panes.contains(&pane_id)
+    }
+
+    /// Warpium: records whether the pane is docked in the bottom panel.
+    pub(super) fn set_pane_docked(&mut self, pane_id: PaneId, docked: bool) {
+        if docked {
+            self.docked_panes.insert(pane_id);
+        } else {
+            self.docked_panes.remove(&pane_id);
+        }
     }
 
     /// Computes the split pane state for a given pane based on current focus state.
@@ -199,6 +218,11 @@ impl PaneFocusHandle {
             .is_some_and(|terminal_id| {
                 self.focus_state.as_ref(app).active_session_id() == Some(terminal_id)
             })
+    }
+
+    /// Warpium: true if this pane is docked in the bottom panel.
+    pub fn is_docked(&self, app: &AppContext) -> bool {
+        self.focus_state.as_ref(app).is_pane_docked(self.pane_id)
     }
 
     /// Returns a reference to the underlying focus state model handle.

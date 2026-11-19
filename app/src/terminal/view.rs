@@ -50,6 +50,7 @@ mod tab_metadata;
 mod testing;
 mod tooltips;
 pub mod use_agent_footer;
+mod warpium_bottom_panel;
 mod zero_state_block;
 
 use std::any::Any;
@@ -18368,6 +18369,7 @@ impl TerminalView {
                     .into_item(),
             );
         }
+        items.extend(self.warpium_bottom_panel_menu_items(ctx));
 
         items
     }
@@ -27843,6 +27845,7 @@ impl TypedActionView for TerminalView {
             | AltSelect(_)
             | AltMouseAction(_)
             | ToggleMaximizePane
+            | WarpiumBottomPanel(_)
             | PromptContextMenu { .. }
             | OpenInputContextMenu { .. }
             | InputContextMenuItem(_)
@@ -28156,6 +28159,9 @@ impl TypedActionView for TerminalView {
                 ctx.emit(Event::Pane(PaneEvent::SplitUp(chosen_shell.to_owned())))
             }
             ToggleMaximizePane => ctx.emit(Event::Pane(PaneEvent::ToggleMaximized)),
+            WarpiumBottomPanel(request) => {
+                ctx.emit(Event::Pane(PaneEvent::WarpiumBottomPanel(*request)))
+            }
             PromptContextMenu {
                 position_offset_from_prompt,
             } => self.show_prompt_context_menu(*position_offset_from_prompt, ctx),

@@ -9,6 +9,7 @@
 mod cache;
 mod extract;
 pub mod fuzzy;
+mod hierarchy;
 mod index;
 mod interner;
 mod layout;
@@ -16,6 +17,7 @@ mod lex;
 pub mod mcp;
 mod model;
 mod persist;
+mod project_root;
 mod resolve;
 mod scan;
 mod usages;
@@ -27,6 +29,7 @@ use instant::Instant;
 
 pub use cache::{default_snapshot_path, snapshot_path_in};
 pub use fuzzy::MatchTier;
+pub use hierarchy::ImplementationsResult;
 pub use index::{
     CodeIndex, IndexStats, PendingUpdate, SearchResult, SearchScope, SymbolInfo, UpdateStats,
     default_threads, prepare_changes, refresh_in_batches,
@@ -34,6 +37,9 @@ pub use index::{
 pub use interner::Sym;
 pub use model::{Language, Origin, Position, SymbolKind, Visibility, flags};
 pub use persist::{FORMAT_VERSION, PersistError, write_snapshot};
+pub use project_root::{
+    FileProjectRoot, FsRootMarkers, ProjectRootKind, RootMarkers, project_root_for_file,
+};
 pub use resolve::{Definition, DefinitionResult, Resolution, SourceFile};
 pub use usages::{Usage, UsagesResult};
 

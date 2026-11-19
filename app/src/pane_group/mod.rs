@@ -185,6 +185,7 @@ pub(crate) use child_agent::materialization::{
 pub mod focus_state;
 pub mod pane;
 pub mod tree;
+mod warpium_bottom_dock;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_project_toolbar;
 pub mod working_directories;
@@ -219,6 +220,7 @@ pub use pane::{
 };
 pub use tree::{Direction, PaneData, PaneFlex, PaneNode, SplitDirection};
 use warp_errors::report_error;
+pub use warpium_bottom_dock::{BottomPanelAction, BottomPanelPaneRequest};
 pub use working_directories::{WorkingDirectoriesEvent, WorkingDirectoriesModel};
 
 use self::pane::{DetachType, PaneViewEvent};
@@ -314,6 +316,8 @@ pub enum PaneGroupAction {
     ToggleMaximizePane,
     HandleFocusChange,
     FocusTerminalView(EntityId),
+    /// Warpium: the bottom panel.
+    WarpiumBottomPanel(BottomPanelAction),
 }
 #[derive(PartialEq)]
 enum PaneRemovalReason {
@@ -328,6 +332,7 @@ pub fn init(app: &mut AppContext) {
     app.register_binding_validator::<PaneGroup>(is_binding_pty_compliant);
 
     self::pane::init(app);
+    warpium_bottom_dock::init_bindings(app);
 
     app.register_fixed_bindings([
         // Also create the navigation shortcuts with `meta` in place of `alt`, to accommodate
@@ -981,6 +986,9 @@ pub struct PaneGroup {
 
     /// Tab-level custom title set via the rename-tab flow.
     custom_title: Option<String>,
+
+    /// Warpium: the tab's bottom panel.
+    warpium_bottom_dock: warpium_bottom_dock::WarpiumBottomDock,
 }
 
 /// A cloud orchestration parent whose direct children (per the server's
@@ -1246,6 +1254,9 @@ impl PaneGroup {
         event: &PaneViewEvent,
         ctx: &mut ViewContext<PaneGroup>,
     ) {
+        if self.warpium_ignores_pane_view_event(pane_id, event) {
+            return;
+        }
         if self.pane_contents.contains_key(&pane_id) {
             match event {
                 PaneViewEvent::MovePaneWithinPaneGroup {
@@ -3239,6 +3250,7 @@ impl PaneGroup {
             transitively_shared_child_panes: HashMap::new(),
             child_agent_origin: None,
             custom_title: None,
+            warpium_bottom_dock: Default::default(),
         };
 
         // Notify any restored panes that they belong to this pane group.
@@ -4415,6 +4427,7 @@ impl PaneGroup {
     ) -> Option<Box<dyn AnyPaneContent>> {
         // Clear any hidden pane entry since the pane is being permanently removed from this group.
         self.panes.remove_hidden_pane(*pane_id);
+        self.warpium_keep_layout_for_removal(*pane_id, ctx);
 
         let was_focused = self.focus_state.as_ref(ctx).is_pane_focused(*pane_id);
         self.focus_next_terminal_pane_and_activate_session(*pane_id, PaneRemovalReason::Move, ctx);
@@ -4823,6 +4836,10 @@ impl PaneGroup {
             self.terminal_with_open_share_block_modal = None;
         }
 
+        if self.warpium_close_docked_pane(pane_id, ctx) {
+            return;
+        }
+
         // Child agent panes return to off-tree state instead of being
         // destroyed; future pill clicks re-host the same view. The view
         // keeps ownership of its conversation, so we skip the
@@ -4868,6 +4885,8 @@ impl PaneGroup {
         if let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
             self.remove_child_agent_panes(terminal_view.id(), ctx);
         }
+
+        self.warpium_keep_layout_for_removal(pane_id, ctx);
 
         if FeatureFlag::UndoClosedPanes.is_enabled() {
             // Don't clase a pane that's already been hidden to allow for undo functionality
@@ -5012,7 +5031,7 @@ impl PaneGroup {
     /// then focus it. Used by cross-tab navigation paths that may resolve
     /// to a swapped-out pane; without the reveal, focus would land on an
     /// off-tree pane the user can't see. Logs a warning if the pane is
-    /// neither in the tree nor swap-hidden.
+    /// neither in the tree, swap-hidden nor docked in the bottom panel (which focus reveals).
     pub fn reveal_and_focus_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
         if let Some(replacement_id) = self.panes.replacement_pane_for_original(pane_id) {
             self.revert_swap_clearing_split_off(replacement_id, ctx);
@@ -5028,7 +5047,7 @@ impl PaneGroup {
             }
             ctx.emit(Event::TerminalViewStateChanged);
             ctx.emit(Event::AppStateChanged);
-        } else if !self.panes.is_pane_in_tree(pane_id) {
+        } else if !self.panes.is_pane_in_tree(pane_id) && !self.is_pane_docked(pane_id) {
             log::warn!(
                 "reveal_and_focus_pane: pane {pane_id:?} is off-tree; focus will land on a non-visible pane"
             );
@@ -5218,6 +5237,9 @@ impl PaneGroup {
                 // The toggled pane might not be the active pane -- focus it first.
                 self.focus_pane_by_id(pane_id, ctx);
                 self.toggle_maximize_pane(ctx);
+            }
+            PaneEvent::WarpiumBottomPanel(request) => {
+                self.handle_warpium_pane_request(pane_id, *request, ctx);
             }
             PaneEvent::FocusSelf => self.focus_pane_by_id(pane_id, ctx),
             PaneEvent::FocusActiveSession => self.focus_active_session(ctx),
@@ -6858,7 +6880,10 @@ impl PaneGroup {
 
         let pane_id = self.init_pane(new_pane, ctx)?;
         let split_succeeded = match options.base_pane_id {
-            Some(base_pane_id) => self.panes.split(base_pane_id, pane_id, options.direction),
+            Some(base_pane_id) => {
+                let base_pane_id = self.warpium_split_base(base_pane_id);
+                self.panes.split(base_pane_id, pane_id, options.direction)
+            }
             None => {
                 self.panes.split_root(pane_id, options.direction);
                 true
@@ -7719,6 +7744,9 @@ impl PaneGroup {
     }
 
     fn update_pane_history(&mut self, new_pane: PaneId) {
+        if self.warpium_skips_pane_history(new_pane) {
+            return;
+        }
         self.pane_history.retain(|&x| x != new_pane);
         self.pane_history.push(new_pane);
     }
@@ -7757,6 +7785,7 @@ impl PaneGroup {
         self.focus_state.update(ctx, |focus_state, ctx| {
             focus_state.set_focused_pane(id, ctx);
         });
+        self.warpium_on_pane_focused(id);
 
         ctx.emit(Event::PaneTitleUpdated);
         // Update the active session if the newly focused pane is a terminal pane.
@@ -8226,6 +8255,9 @@ impl PaneGroup {
     /// Updates the pane group's state in response to a view within a pane
     /// receiving focus.
     fn handle_focus_change(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.warpium_focus_docked_pane_with_app_focus(ctx) {
+            return;
+        }
         for pane_index in 0..self.pane_count() {
             if let Some(content) = self.pane_by_index(pane_index)
                 && content.has_application_focus(ctx)
@@ -8258,6 +8290,9 @@ impl TypedActionView for PaneGroup {
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         use PaneGroupAction::*;
+        if self.warpium_handle_action_for_docked_focus(action, ctx) {
+            return;
+        }
         match action {
             Add(direction) => {
                 let chosen_shell = {
@@ -8296,6 +8331,7 @@ impl TypedActionView for PaneGroup {
             } => self.move_pane(*id, *target_pane_id, *direction, ctx),
             HandleFocusChange => self.handle_focus_change(ctx),
             FocusTerminalView(terminal_view_id) => self.focus_terminal_view(*terminal_view_id, ctx),
+            WarpiumBottomPanel(action) => self.handle_warpium_bottom_panel_action(action, ctx),
         }
     }
 }
@@ -8327,6 +8363,7 @@ impl View for PaneGroup {
                 ctx.set.insert("PaneGroup_MultiplePanes");
             }
         };
+        self.warpium_extend_keymap_context(&mut ctx, app);
 
         ctx
     }
@@ -8379,6 +8416,9 @@ impl View for PaneGroup {
                 .finish()
         };
         column.add_child(Shrinkable::new(1., main_content).finish());
+        if let Some(bottom_dock) = self.render_warpium_bottom_dock(app) {
+            column.add_child(bottom_dock);
+        }
 
         let mut stack = Stack::new().with_child(column.finish());
 

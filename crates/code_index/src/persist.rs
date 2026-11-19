@@ -11,12 +11,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::index::CodeIndex;
 use crate::interner::{Interner, Sym};
-use crate::model::{FileData, Import, Language, Origin, Position, Symbol, SymbolKind, Visibility};
+use crate::model::{
+    FileData, Import, Language, Origin, Position, Supertype, Symbol, SymbolKind, Visibility,
+};
 
 const MAGIC: &[u8; 4] = b"WPCI";
 const END_MAGIC: &[u8; 4] = b"END!";
 /// Bump whenever the layout or the extraction rules change, so stale snapshots are rebuilt.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PersistError {
@@ -72,6 +74,10 @@ impl CodeIndex {
                     table.add(receiver, &self.interner);
                 }
             }
+            for supertype in &file.supertypes {
+                table.add(supertype.name, &self.interner);
+                table.add(supertype.qualifier, &self.interner);
+            }
         }
 
         let mut out = Vec::with_capacity(64 + self.symbol_count * 12);
@@ -123,6 +129,12 @@ impl CodeIndex {
                     &mut out,
                     u64::from(symbol.end_line.saturating_sub(symbol.name_pos.line)),
                 );
+            }
+            write_varint(&mut out, file.supertypes.len() as u64);
+            for supertype in &file.supertypes {
+                write_varint(&mut out, u64::from(supertype.symbol));
+                write_varint(&mut out, table.id(supertype.name));
+                write_varint(&mut out, table.id(supertype.qualifier));
             }
             write_varint(&mut out, file.identifiers.len() as u64);
             for identifier in &file.identifiers {
@@ -219,6 +231,19 @@ impl CodeIndex {
                     end_line: line.saturating_add(after),
                 });
             }
+            let supertype_count = reader.len()?;
+            let mut supertypes = Vec::with_capacity(supertype_count);
+            for _ in 0..supertype_count {
+                let symbol = reader.u32()?;
+                if symbol as usize >= symbols.len() {
+                    return Err(PersistError::Corrupt("supertype of a missing symbol"));
+                }
+                supertypes.push(Supertype {
+                    symbol,
+                    name: sym(reader.varint()?)?,
+                    qualifier: sym(reader.varint()?)?,
+                });
+            }
             let identifier_count = reader.len()?;
             let mut identifiers = Vec::with_capacity(identifier_count);
             for _ in 0..identifier_count {
@@ -235,6 +260,7 @@ impl CodeIndex {
                 package,
                 imports,
                 symbols,
+                supertypes,
                 identifiers,
                 mtime_ns,
                 size,
@@ -249,6 +275,7 @@ impl CodeIndex {
         for file in files {
             index.insert_file_data(file);
         }
+        index.shrink_to_fit();
         Ok(index)
     }
 }

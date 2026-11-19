@@ -104,6 +104,7 @@ impl Server {
                 None => Err("Missing required argument: path".to_owned()),
             },
             "find_definition" => self.definition(&arguments),
+            "find_implementations" => self.implementations(&arguments),
             "find_usages" => {
                 let limit = requested_limit.map_or(DEFAULT_USAGES_LIMIT, |limit| {
                     (limit as usize).clamp(1, MAX_USAGES_LIMIT)
@@ -307,7 +308,19 @@ impl Server {
                 " (more not shown)"
             },
         )];
-        for usage in &result.usages {
+        let direct = result.usages.iter().filter(|usage| !usage.via).count();
+        for (position, usage) in result.usages.iter().enumerate() {
+            if position == direct {
+                lines.push(format!(
+                    "Via implementations/overrides ({}):",
+                    result
+                        .via
+                        .iter()
+                        .map(|symbol| format!("{}:{}", symbol.rel_path, symbol.name_pos.line + 1))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
             lines.push(format!(
                 "{}:{}:{}{}  {}",
                 usage.rel_path,
@@ -320,6 +333,50 @@ impl Server {
         if result.usages.iter().any(|usage| !usage.exact) {
             lines.push("≈ the name matches and the declaration is visible there, but the reference wasn't resolved to it.".to_owned());
         }
+        Ok(lines.join("\n"))
+    }
+
+    fn implementations(&mut self, arguments: &Value) -> Result<String, String> {
+        let (rel_path, text, language, position) = self.location(arguments)?;
+        let index = self.index();
+        let file = SourceFile {
+            rel_path: &rel_path,
+            text: &text,
+            language,
+        };
+        let Some(result) = index.find_implementations(&file, position) else {
+            return Err(format!(
+                "No identifier at {rel_path}:{}:{}.",
+                position.line + 1,
+                position.column + 1
+            ));
+        };
+        if result.targets.is_empty() {
+            return Ok(format!(
+                "No declaration of \"{}\" found in the project.",
+                result.name
+            ));
+        }
+        let targets = result
+            .targets
+            .iter()
+            .map(SymbolInfo::qualified_name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if result.implementations.is_empty() {
+            return Ok(format!("No implementations of {targets} in the project."));
+        }
+        let count = result.implementations.len();
+        let mut lines = vec![format!(
+            "{count} implementation{} of {targets}{}:",
+            if count == 1 { "" } else { "s" },
+            if result.complete {
+                ""
+            } else {
+                " (more not shown)"
+            },
+        )];
+        lines.extend(result.implementations.iter().map(describe_location));
         Ok(lines.join("\n"))
     }
 
@@ -449,7 +506,8 @@ fn initialize_result(params: &Value) -> Value {
             find_symbol (fuzzy, camel humps: \"UVM\" finds UserViewModel; \"pkg.Name\" narrows by \
             package or enclosing class) instead of grep to locate declarations, file_outline \
             to list a file's declarations, find_definition to jump from a reference to its \
-            declaration, and find_usages to list where a declaration is used.",
+            declaration, find_usages to list where a declaration is used (and its overrides), \
+            and find_implementations for the subtypes of a type or the overrides of a member.",
     })
 }
 
@@ -531,7 +589,17 @@ fn tool_definitions() -> Value {
             "name": "find_usages",
             "description": "Find usages of the Kotlin/Java declaration a name at path:line \
                 declares or refers to, across the project (imports, type references, calls; not \
-                comments or strings). Usages that only match by name are marked ≈.",
+                comments or strings). Usages that only match by name are marked ≈. Usages of \
+                members overriding it, and of expect/actual counterparts, follow under \
+                \"Via implementations/overrides\".",
+            "inputSchema": position("the name"),
+        },
+        {
+            "name": "find_implementations",
+            "description": "Go to implementation for a Kotlin/Java declaration a name at \
+                path:line declares or refers to: the project classes and objects that extend or \
+                implement a type (also indirectly), the members overriding a function or \
+                property, or the actual declarations of an expect one.",
             "inputSchema": position("the name"),
         },
     ])

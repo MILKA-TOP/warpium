@@ -1022,6 +1022,9 @@ pub enum FeatureFlag {
     /// before they expire and on first use after they have expired.
     ManagedMcpCredentialRefresh,
 
+    /// Warpium: the per-tab bottom panel that keeps panes (and their running processes) out of
+    /// the split layout.
+    WarpiumBottomPanel,
     /// Warpium: shows a running Android emulator's screen in a Devices pane, through the
     /// emulator's gRPC endpoint.
     WarpiumEmbeddedEmulator,
@@ -1105,6 +1108,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PreviewUrlsMcp,
     FeatureFlag::GitMirrorCache,
     FeatureFlag::AgentPromptSteering,
+    FeatureFlag::WarpiumBottomPanel,
     FeatureFlag::WarpiumEmbeddedEmulator,
 ];
 

@@ -4725,3 +4725,6 @@ fn test_undo_close_keeps_a_file_pane_watching_its_file() {
 
 #[path = "local_child_restoration_tests.rs"]
 mod local_child_restoration;
+
+#[path = "warpium_bottom_dock_tests.rs"]
+mod warpium_bottom_dock_tests;

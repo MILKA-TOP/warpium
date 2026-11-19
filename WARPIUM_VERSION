@@ -5,4 +5,4 @@
 # FORK_COUNTER: Warpium release number on top of UPSTREAM_TAG. Bump it for every Warpium
 #   release; reset it to 1 whenever UPSTREAM_TAG changes.
 UPSTREAM_TAG=v0.2026.06.03.09.49.stable_00
-FORK_COUNTER=5
+FORK_COUNTER=6

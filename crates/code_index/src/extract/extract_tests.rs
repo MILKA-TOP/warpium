@@ -265,3 +265,67 @@ fn java_defaults_to_package_private_except_in_interfaces() {
     assert_eq!(find(&file, "open").flags, flags::STATIC);
     assert_eq!(find(&file, "call").visibility, Visibility::Public);
 }
+
+#[test]
+fn kotlin_records_declared_supertypes_without_type_arguments() {
+    let file = kotlin(
+        "class Repo(d: Dao) : Base<Item>(), com.example.Listener, Outer.Inner, Closeable by d\n\
+         object Single : Base<Item>()\n",
+    );
+
+    assert_eq!(
+        file.supertypes,
+        vec![
+            (0, "Base".to_owned()),
+            (0, "com.example.Listener".to_owned()),
+            (0, "Outer.Inner".to_owned()),
+            (0, "Closeable".to_owned()),
+            (1, "Base".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn java_records_superclass_and_interfaces() {
+    let file = java(
+        "class Repo extends Base<Item> implements Listener, java.io.Closeable {}\n\
+         interface Api extends Remote {}\n",
+    );
+
+    assert_eq!(
+        file.supertypes,
+        vec![
+            (0, "Base".to_owned()),
+            (0, "Listener".to_owned()),
+            (0, "java.io.Closeable".to_owned()),
+            (1, "Remote".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn kotlin_override_members_are_flagged() {
+    let file = kotlin(
+        "class Square(override val name: String) : Shape {\n\
+             override fun area() = 1.0\n\
+             fun scale() {}\n\
+         }\n",
+    );
+
+    assert!(find(&file, "name").flags & flags::OVERRIDE != 0);
+    assert!(find(&file, "area").flags & flags::OVERRIDE != 0);
+    assert_eq!(find(&file, "scale").flags & flags::OVERRIDE, 0);
+}
+
+#[test]
+fn java_methods_annotated_override_are_flagged() {
+    let file = java(
+        "class Square implements Shape {\n\
+             @Override public double area() { return 1; }\n\
+             public void scale() {}\n\
+         }\n",
+    );
+
+    assert!(find(&file, "area").flags & flags::OVERRIDE != 0);
+    assert_eq!(find(&file, "scale").flags & flags::OVERRIDE, 0);
+}

@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use code_index::{
-    CodeIndex, Definition, Language, PersistError, Position, SourceFile, Usage, write_snapshot,
+    CodeIndex, Definition, Language, PersistError, Position, SourceFile, SymbolInfo, Usage,
+    write_snapshot,
 };
 use futures::channel::oneshot;
 use instant::Instant;
@@ -83,7 +84,11 @@ pub(crate) struct NavigationResults {
 #[derive(Debug)]
 pub(crate) enum NavigationItem {
     Definition(Definition),
+    /// A Go to Implementation result: a subtype, an override or an `actual`.
+    Implementation(SymbolInfo),
     Usage(Usage),
+    /// A heading over the usages that follow it (those reached through overrides).
+    Group(String),
 }
 
 /// What a Go to Definition or Find Usages request came to.
@@ -180,7 +185,7 @@ pub(crate) fn init_bindings(ctx: &mut AppContext) {
         .with_mac_key_binding("ctrl-alt-cmd-o"),
     ]);
 
-    // JetBrains keys. Warp's code editor binds neither cmd-B nor alt-F7.
+    // JetBrains keys. Warp's code editor binds none of cmd-B, alt-cmd-B and alt-F7.
     let in_navigable_editor =
         id!("LocalCodeEditorView") & id!(CODE_NAVIGATION_CONTEXT_FLAG) & !id!("IMEOpen");
     ctx.register_editable_bindings([
@@ -192,6 +197,14 @@ pub(crate) fn init_bindings(ctx: &mut AppContext) {
         .with_group(BindingGroup::Navigation.as_str())
         .with_context_predicate(in_navigable_editor.clone())
         .with_mac_key_binding("cmd-b"),
+        EditableBinding::new(
+            "editor:code_index_go_to_implementation",
+            "Go to Implementation (Kotlin/Java code index)",
+            LocalCodeEditorAction::CodeIndexNavigate(CodeNavigationKind::Implementations),
+        )
+        .with_group(BindingGroup::Navigation.as_str())
+        .with_context_predicate(in_navigable_editor.clone())
+        .with_mac_key_binding("alt-cmd-b"),
         EditableBinding::new(
             "editor:code_index_find_usages",
             "Find Usages (Kotlin/Java code index)",
@@ -238,10 +251,10 @@ pub(crate) fn ensure_project(
     CodeIndexModel::handle(ctx).update(ctx, |model, ctx| model.open_project(root, ctx));
 }
 
-/// Makes sure the project holding `file` is indexed, when the current project doesn't hold it:
-/// the outermost directory with Gradle settings inside the enclosing repository (or anywhere,
-/// outside one), else the repository.
-pub(crate) fn ensure_project_for_file(file: &Path, ctx: &mut AppContext) {
+/// Makes sure the project holding `file` is indexed, when the current project doesn't hold it.
+/// `locked_roots` are the folders the active tab's project is locked to (empty when it follows
+/// its terminals); see [`code_index::project_root_for_file`] for the precedence.
+pub(crate) fn ensure_project_for_file(file: &Path, locked_roots: &[PathBuf], ctx: &mut AppContext) {
     if !ctx.has_singleton_model::<CodeIndexModel>() {
         return;
     }
@@ -252,24 +265,19 @@ pub(crate) fn ensure_project_for_file(file: &Path, ctx: &mut AppContext) {
     if holds_file {
         return;
     }
-    let repository = file
-        .ancestors()
-        .skip(1)
-        .find(|dir| dir.join(".git").exists());
-    let gradle_root = file
-        .ancestors()
-        .skip(1)
-        .take_while(|dir| repository.is_none_or(|repository| dir.starts_with(repository)))
-        .filter(|dir| {
-            dir.join("settings.gradle.kts").is_file() || dir.join("settings.gradle").is_file()
-        })
-        .last();
-    match (gradle_root, repository) {
-        (Some(root), _) => ensure_project(Some(root.to_path_buf()), true, ctx),
-        // A repository is a project root even without build files at its top.
-        (None, Some(repository)) => ensure_project(Some(repository.to_path_buf()), false, ctx),
-        (None, None) => {}
-    }
+    // `file` is canonical; so must the locked folders be for prefix checks.
+    let locked_roots: Vec<PathBuf> = locked_roots
+        .iter()
+        .map(|root| std::fs::canonicalize(root).unwrap_or_else(|_| root.clone()))
+        .collect();
+    let Some(choice) =
+        code_index::project_root_for_file(file, &locked_roots, &code_index::FsRootMarkers)
+    else {
+        return;
+    };
+    // Repositories and locked folders are project roots even without build files at their top.
+    let require_build_files = choice.kind == code_index::ProjectRootKind::Gradle;
+    ensure_project(Some(choice.root), require_build_files, ctx);
 }
 
 /// Resolves `request` against the index on the calling (background) thread.
@@ -363,6 +371,39 @@ pub(crate) fn navigate(handle: &IndexHandle, request: &CodeNavigationRequest) ->
                 }),
             }
         }
+        CodeNavigationKind::Implementations => {
+            let Some(result) = index.find_implementations(&file, position) else {
+                return NavigationOutcome::Nothing("No name at the cursor".to_owned());
+            };
+            let Some(target) = result.targets.first().map(SymbolInfo::qualified_name) else {
+                return NavigationOutcome::Nothing(format!(
+                    "No declaration of {} in the project{indexing_note}",
+                    result.name
+                ));
+            };
+            match result.implementations.as_slice() {
+                [] => NavigationOutcome::Nothing(format!(
+                    "No implementations of {target}{indexing_note}"
+                )),
+                [only] => NavigationOutcome::Open {
+                    path: index.abs_path(&only.rel_path),
+                    position: only.name_pos,
+                },
+                several => NavigationOutcome::Show(NavigationResults {
+                    root: handle.root.clone(),
+                    summary: format!(
+                        "{}{} implementations of {target}{indexing_note}",
+                        several.len(),
+                        if result.complete { "" } else { "+" },
+                    ),
+                    items: result
+                        .implementations
+                        .into_iter()
+                        .map(NavigationItem::Implementation)
+                        .collect(),
+                }),
+            }
+        }
         CodeNavigationKind::Usages => {
             let Some(result) = index.find_usages(&file, position, MAX_USAGES, USAGES_THREADS)
             else {
@@ -386,14 +427,28 @@ pub(crate) fn navigate(handle: &IndexHandle, request: &CodeNavigationRequest) ->
                     if result.complete { "" } else { "+" },
                     if count == 1 { "" } else { "s" },
                 ),
-                items: result
-                    .usages
-                    .into_iter()
-                    .map(NavigationItem::Usage)
-                    .collect(),
+                items: usage_items(result.usages),
             })
         }
     }
+}
+
+/// The usages as palette rows: those of the declaration itself, then a heading and those reached
+/// through overriding members or `expect`/`actual` counterparts (the index sorts them last).
+fn usage_items(usages: Vec<Usage>) -> Vec<NavigationItem> {
+    let via = usages.iter().filter(|usage| usage.via).count();
+    let mut items = Vec::with_capacity(usages.len() + 1);
+    let mut grouped = false;
+    for usage in usages {
+        if usage.via && !grouped {
+            grouped = true;
+            items.push(NavigationItem::Group(format!(
+                "Via implementations/overrides ({via})"
+            )));
+        }
+        items.push(NavigationItem::Usage(usage));
+    }
+    items
 }
 
 fn is_indexable_root(root: &Path, require_build_files: bool) -> bool {
@@ -723,6 +778,10 @@ fn build(
         changed += stats.files_parsed + stats.files_removed;
         true
     });
+    if changed > 0 && !cancelled.load(Ordering::Relaxed) {
+        // Drops the spare capacity the tables grew into while batches were applied.
+        index.write().shrink_to_fit();
+    }
     if changed > 0
         && !cancelled.load(Ordering::Relaxed)
         && let Some(snapshot) = snapshot
@@ -790,3 +849,7 @@ impl RepositorySubscriber for Subscriber {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "code_index_tests.rs"]
+mod tests;

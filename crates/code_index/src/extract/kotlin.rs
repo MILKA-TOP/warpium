@@ -2,9 +2,9 @@ use arborium_tree_sitter::Node;
 
 use super::{
     RawFile, RawImport, RawSymbol, child_of_kind, children, compact_text, has_token,
-    join_container, named_children, normalized_text, position, text,
+    join_container, named_children, normalized_text, position, push_supertypes, text,
 };
-use crate::model::{SymbolKind, Visibility, flags};
+use crate::model::{Language, SymbolKind, Visibility, flags};
 
 pub(super) fn extract(root: Node, source: &[u8], file: &mut RawFile) {
     for child in named_children(root) {
@@ -25,7 +25,7 @@ pub(super) fn extract(root: Node, source: &[u8], file: &mut RawFile) {
             _ => {}
         }
     }
-    visit_declarations(root, "", source, &mut file.symbols);
+    visit_declarations(root, "", source, file);
 }
 
 fn push_import(header: Node, source: &[u8], file: &mut RawFile) {
@@ -45,7 +45,7 @@ fn push_import(header: Node, source: &[u8], file: &mut RawFile) {
 
 /// Visits the declarations directly inside `parent` (a file or a class body). Function bodies
 /// aren't entered, so local declarations are left out.
-fn visit_declarations(parent: Node, container: &str, source: &[u8], out: &mut Vec<RawSymbol>) {
+fn visit_declarations(parent: Node, container: &str, source: &[u8], out: &mut RawFile) {
     for node in named_children(parent) {
         match node.kind() {
             "class_declaration" => visit_class(node, container, source, out),
@@ -58,7 +58,7 @@ fn visit_declarations(parent: Node, container: &str, source: &[u8], out: &mut Ve
             "function_declaration" => {
                 if let Some(name) = child_of_kind(node, "simple_identifier") {
                     let (visibility, flags) = modifiers(node, source);
-                    out.push(symbol(
+                    out.symbols.push(symbol(
                         node,
                         name,
                         SymbolKind::Function,
@@ -74,7 +74,7 @@ fn visit_declarations(parent: Node, container: &str, source: &[u8], out: &mut Ve
             "type_alias" => {
                 if let Some(name) = child_of_kind(node, "type_identifier") {
                     let (visibility, flags) = modifiers(node, source);
-                    out.push(symbol(
+                    out.symbols.push(symbol(
                         node,
                         name,
                         SymbolKind::TypeAlias,
@@ -90,7 +90,7 @@ fn visit_declarations(parent: Node, container: &str, source: &[u8], out: &mut Ve
                 let class_name = container.rsplit('.').next().unwrap_or_default();
                 if !class_name.is_empty() {
                     let (visibility, flags) = modifiers(node, source);
-                    out.push(RawSymbol {
+                    out.symbols.push(RawSymbol {
                         name: class_name.to_owned(),
                         kind: SymbolKind::Constructor,
                         visibility,
@@ -105,7 +105,7 @@ fn visit_declarations(parent: Node, container: &str, source: &[u8], out: &mut Ve
             }
             "enum_entry" => {
                 if let Some(name) = child_of_kind(node, "simple_identifier") {
-                    out.push(symbol(
+                    out.symbols.push(symbol(
                         node,
                         name,
                         SymbolKind::EnumEntry,
@@ -125,7 +125,7 @@ fn visit_declarations(parent: Node, container: &str, source: &[u8], out: &mut Ve
     }
 }
 
-fn visit_class(node: Node, container: &str, source: &[u8], out: &mut Vec<RawSymbol>) {
+fn visit_class(node: Node, container: &str, source: &[u8], out: &mut RawFile) {
     let Some(name) = child_of_kind(node, "type_identifier") else {
         return;
     };
@@ -157,7 +157,14 @@ fn visit_class(node: Node, container: &str, source: &[u8], out: &mut Vec<RawSymb
         source,
     );
     let inner = join_container(container, &symbol.name);
-    out.push(symbol);
+    push_supertypes(
+        Language::Kotlin,
+        node,
+        out.symbols.len(),
+        source,
+        &mut out.supertypes,
+    );
+    out.symbols.push(symbol);
 
     if let Some(constructor) = child_of_kind(node, "primary_constructor") {
         for parameter in named_children(constructor) {
@@ -168,7 +175,7 @@ fn visit_class(node: Node, container: &str, source: &[u8], out: &mut Vec<RawSymb
             }
             if let Some(param_name) = child_of_kind(parameter, "simple_identifier") {
                 let (visibility, flags) = modifiers(parameter, source);
-                out.push(self::symbol(
+                out.symbols.push(self::symbol(
                     parameter,
                     param_name,
                     SymbolKind::Property,
@@ -188,13 +195,7 @@ fn visit_class(node: Node, container: &str, source: &[u8], out: &mut Vec<RawSymb
     }
 }
 
-fn visit_object(
-    node: Node,
-    kind: SymbolKind,
-    container: &str,
-    source: &[u8],
-    out: &mut Vec<RawSymbol>,
-) {
+fn visit_object(node: Node, kind: SymbolKind, container: &str, source: &[u8], out: &mut RawFile) {
     let name_node = child_of_kind(node, "type_identifier");
     let (visibility, flags) = modifiers(node, source);
     let symbol = match name_node {
@@ -217,13 +218,20 @@ fn visit_object(
         None => return,
     };
     let inner = join_container(container, &symbol.name);
-    out.push(symbol);
+    push_supertypes(
+        Language::Kotlin,
+        node,
+        out.symbols.len(),
+        source,
+        &mut out.supertypes,
+    );
+    out.symbols.push(symbol);
     if let Some(body) = child_of_kind(node, "class_body") {
         visit_declarations(body, &inner, source, out);
     }
 }
 
-fn visit_property(node: Node, container: &str, source: &[u8], out: &mut Vec<RawSymbol>) {
+fn visit_property(node: Node, container: &str, source: &[u8], out: &mut RawFile) {
     let (visibility, flags) = modifiers(node, source);
     let receiver = receiver(node, source);
     let mut declarations = Vec::new();
@@ -249,7 +257,7 @@ fn visit_property(node: Node, container: &str, source: &[u8], out: &mut Vec<RawS
                 source,
             );
             symbol.name_pos = position(name, source);
-            out.push(symbol);
+            out.symbols.push(symbol);
         }
     }
 }
@@ -283,7 +291,7 @@ fn receiver(node: Node, source: &[u8]) -> Option<String> {
     Some(normalized_text(receiver, source))
 }
 
-/// Visibility and `expect`/`actual`/`const` flags from the declaration's `modifiers`.
+/// Visibility and `expect`/`actual`/`const`/`override` flags from the declaration's `modifiers`.
 fn modifiers(node: Node, source: &[u8]) -> (Visibility, u8) {
     let mut visibility = Visibility::Public;
     let mut symbol_flags = 0;
@@ -307,6 +315,9 @@ fn modifiers(node: Node, source: &[u8]) -> (Visibility, u8) {
             },
             "property_modifier" if text(modifier, source) == "const" => {
                 symbol_flags |= flags::CONST;
+            }
+            "member_modifier" if text(modifier, source) == "override" => {
+                symbol_flags |= flags::OVERRIDE;
             }
             _ => {}
         }

@@ -3146,11 +3146,13 @@ dependencies = [
  "arborium-kotlin",
  "arborium-tree-sitter",
  "dirs 6.0.0",
+ "hashbrown 0.17.1",
  "ignore",
  "instant",
  "libc",
  "log",
  "rayon",
+ "rustc-hash 2.1.1",
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
@@ -15667,6 +15669,7 @@ dependencies = [
  "warp_web_event_bus",
  "warpium_agent_mcp",
  "warpium_android",
+ "warpium_bottom_panel",
  "warpium_emulator",
  "warpium_project_root",
  "warpium_project_toolbar",
@@ -16475,6 +16478,10 @@ dependencies = [
  "tempfile",
  "unicode-width 0.1.14",
 ]
+
+[[package]]
+name = "warpium_bottom_panel"
+version = "0.1.0"
 
 [[package]]
 name = "warpium_emulator"

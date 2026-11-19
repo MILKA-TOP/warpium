@@ -14868,7 +14868,13 @@ impl Workspace {
             if let Ok(path) = std::fs::canonicalize(&request.path) {
                 request.path = path;
             }
-            code_index::ensure_project_for_file(&request.path, ctx);
+            let locked_roots = self
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .project_root()
+                .roots()
+                .to_vec();
+            code_index::ensure_project_for_file(&request.path, &locked_roots, ctx);
             let window_id = ctx.window_id();
             let handle = ctx
                 .has_singleton_model::<CodeIndexModel>()

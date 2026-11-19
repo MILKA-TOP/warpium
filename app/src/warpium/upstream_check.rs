@@ -14,7 +14,6 @@ use warpium_upstream_check::{CheckOutcome, CheckState, Trigger, UpstreamStatus};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::keymap::EditableBinding;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
-use warpui_extras::user_preferences::UserPreferences as _;
 
 use super::sync_settings::{
     UPSTREAM_CHECK_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent,

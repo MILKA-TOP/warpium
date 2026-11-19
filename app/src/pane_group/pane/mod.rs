@@ -1172,6 +1172,8 @@ pub enum PaneEvent {
     SplitUp(Option<AvailableShell>),
     SplitDown(Option<AvailableShell>),
     ToggleMaximized,
+    /// Warpium: move this pane to the bottom panel or back to the layout.
+    WarpiumBottomPanel(super::BottomPanelPaneRequest),
     /// Make this pane the focused pane.
     FocusSelf,
     FocusActiveSession,
