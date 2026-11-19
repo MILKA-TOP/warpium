@@ -280,6 +280,65 @@ menu), `app/src/workspace/view/warpium_project_toolbar.rs` (running the actions)
   "Enable/Disable project toolbar" in the command palette, next to "Edit project toolbar" and
   "Edit personal toolbar overrides". OSS channel only.
 
+### IDE run configurations
+
+The project's JetBrains (Android Studio, IntelliJ IDEA) run configurations are listed in the
+run-configurations dropdown under an "IDE run configurations" heading, after Warpium's own
+entries. Fork-only code lives in `crates/warpium_ide_run_configs` (protoc-free, unit-tested with
+`cargo test -p warpium_ide_run_configs` on synthetic XML: reading, macro expansion, module
+resolution, mapping, compounds, trust) and `app/src/warpium/project_toolbar_ide.rs` (a child module
+of the toolbar view: loading, the menu section, trust and running).
+
+- **Sources** (only read, never written): shared `<root>/.run/*.run.xml` and
+  `<root>/.idea/runConfigurations/*.xml` (a `ProjectRunConfigurationManager` component or a bare
+  `<configuration>`), and personal configurations in the `RunManager` component of
+  `<root>/.idea/workspace.xml`. Templates (`default="true"`) are skipped; `temporary="true"` ones
+  only appear when the project has no other configuration. A name and type seen twice keeps the
+  first (shared before personal). A `workspace.xml` that is in the git index (a substring check of
+  `.git/index` for the path, which can miss index version 4) counts as shared. Files over 8 MB,
+  invalid XML and configurations without a name or type are skipped with a warning, logged and
+  listed as a disabled entry whose tooltip names them.
+- **Mapping.** `$PROJECT_DIR$`, `$ProjectFileDir$`, `$MODULE_DIR$`, `$MODULE_WORKING_DIR$` and
+  `$USER_HOME$` are expanded. IDE module names (`MyApp.app.main`, `My Project.core.data.unitTest`)
+  map to the Gradle project whose directory has a build script, dropping leading parts and, only
+  when the name doesn't match as written, a trailing source set.
+  - `GradleRunConfiguration`: `./gradlew [-p <externalProjectPath>] <taskNames> <scriptParameters>`
+    plus the `-D` system properties of `vmOptions`, run from the nearest wrapper at or above the
+    project path (inside the root), with its `env`; `gradle` in the project path without one.
+  - `ShConfigurationType`: `[interpreter options] '<script>' <options>` (or the script text when
+    `EXECUTE_SCRIPT_FILE` is false) in `SCRIPT_WORKING_DIRECTORY`, else the script's folder, with
+    `envs`.
+  - `AndroidRunConfigurationType`: the Android run flow (`RunConfigKind::AndroidApp`'s), with the
+    launch option: `default_activity`, `specific_activity` (`am start -n <pkg>/<ACTIVITY_CLASS>`),
+    `deep_link` (`am start -a VIEW -d`) or `do_nothing` (install only). Configurations that don't
+    deploy, or deploy from a bundle, are unsupported. The module has to be one of the Android
+    application modules the toolbar found.
+  - `JUnit` and `AndroidJUnit`: `./gradlew :mod:<task> --tests '<class>[.<method>]'` (or
+    `'<package>.*'`), the task from the source set: `test` (`testDebugUnitTest` for Android JUnit and
+    `unitTest`), or `<name>Test` for KMP targets (not `commonTest`). Other test scopes are
+    unsupported. `AndroidTestRunConfigurationType`: `:mod:connectedDebugAndroidTest` with the
+    runner's `class`/`package` argument.
+  - `CompoundRunConfigurationType`: its members' steps in order, when every member is supported
+    (nesting up to 8 levels). Command members after the first open in a new tab, as each gets its
+    own tab in the IDE.
+  - Kotlin and Java main classes, Kotlin scripts and every other type are listed disabled with the
+    reason in the tooltip.
+  Commands run like a toolbar command with `target = "current"`; `${` is escaped as `$${`, so
+  shell parameter expansions aren't read as toolbar variables.
+- **Trust.** Commands of shared configurations need trust like team toolbar commands: a fingerprint
+  of every shared command (name, command, `cwd`, `env`) is trusted at once, kept in
+  `WarpiumProjectToolbarState` as `trusted_ide_run_configs`/`trusted_ide_commands`, and the prompt
+  lists them with New/Changed marks after a change. Personal configurations never ask. Android runs
+  ask for the project's Gradle build trust as before.
+- **Selection.** Remembered per project like other entries; until the user picks one, the
+  configuration `RunManager`'s `selected` names (`Gradle.detekt`, `Android App.app`) is the default.
+- **Reloading.** `.run/`, `.idea/` and `.idea/runConfigurations/` are watched with the toolbar's
+  watcher (non-recursive); changes to `.run/**`, `.idea/runConfigurations/**` or
+  `.idea/workspace.xml` reread everything on a background thread.
+- **Setting:** `warpium.ide_run_configs` (default on, OSS channel only), in Settings → Features →
+  Warpium and as "Enable/Disable IDE run configurations in the project toolbar" in the command
+  palette.
+
 ## Bottom panel
 
 A per-tab dock below the split layout for panes whose processes should keep running out of the

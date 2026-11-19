@@ -749,6 +749,8 @@ pub enum FeaturesPageAction {
     ToggleCopyOnSelect,
     /// Warpium: toggles the project toolbar.
     ToggleWarpiumProjectToolbar,
+    /// Warpium: toggles importing JetBrains run configurations into the project toolbar.
+    ToggleWarpiumIdeRunConfigs,
     /// Warpium: toggles registering the Logcat MCP server for Warp's agent.
     ToggleWarpiumLogcatMcp,
     ToggleAsyncFind,
@@ -914,6 +916,12 @@ impl FeaturesPageAction {
                 action: "ToggleWarpiumProjectToolbar".to_string(),
                 value: to_string(
                     *crate::warpium::sync_settings::WarpiumSettings::as_ref(ctx).project_toolbar,
+                ),
+            },
+            Self::ToggleWarpiumIdeRunConfigs => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleWarpiumIdeRunConfigs".to_string(),
+                value: to_string(
+                    *crate::warpium::sync_settings::WarpiumSettings::as_ref(ctx).ide_run_configs,
                 ),
             },
             Self::ToggleWarpiumLogcatMcp => TelemetryEvent::FeaturesPageAction {
@@ -1516,6 +1524,14 @@ impl TypedActionView for FeaturesPageView {
                     ctx,
                     |settings, ctx| {
                         report_if_error!(settings.project_toolbar.toggle_and_save_value(ctx));
+                    },
+                );
+            }
+            ToggleWarpiumIdeRunConfigs => {
+                crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.ide_run_configs.toggle_and_save_value(ctx));
                     },
                 );
             }
@@ -3141,6 +3157,7 @@ impl FeaturesPageView {
                 "Warpium",
                 vec![
                     Box::new(WarpiumProjectToolbarWidget::default()),
+                    Box::new(WarpiumIdeRunConfigsWidget::default()),
                     Box::new(WarpiumLogcatMcpWidget::default()),
                     Box::new(WarpiumAgentMcpInstallWidget::default()),
                 ],
@@ -7460,6 +7477,60 @@ impl SettingsWidget for WarpiumProjectToolbarWidget {
             Some(
                 "Buttons from the project's .warpium/toolbar.toml and your personal overrides, \
                  in the top-right corner of the window."
+                    .into(),
+            ),
+        )
+    }
+}
+
+/// Warpium: the project's JetBrains run configurations in the project toolbar.
+#[derive(Default)]
+struct WarpiumIdeRunConfigsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for WarpiumIdeRunConfigsWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "warpium ide jetbrains android studio intellij run configurations project toolbar gradle"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::warpium::sync_settings::{ImportIdeRunConfigs, WarpiumSettings};
+
+        render_body_item::<FeaturesPageAction>(
+            "Import IDE run configurations".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ImportIdeRunConfigs::storage_key(),
+                ImportIdeRunConfigs::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*WarpiumSettings::as_ref(app).ide_run_configs)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleWarpiumIdeRunConfigs);
+                })
+                .finish(),
+            Some(
+                "Adds the project's Android Studio and IntelliJ IDEA run configurations (.run, \
+                 .idea/runConfigurations, .idea/workspace.xml) to the project toolbar's run \
+                 menu. The files are only read."
                     .into(),
             ),
         )

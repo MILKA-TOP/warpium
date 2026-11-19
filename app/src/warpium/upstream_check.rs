@@ -69,7 +69,8 @@ pub(crate) fn init(poll: bool, ctx: &mut AppContext) {
                 | WarpiumSettingsChangedEvent::UpdateCheckIntervalHours { .. }
                 | WarpiumSettingsChangedEvent::ProjectToolbar { .. }
                 | WarpiumSettingsChangedEvent::CodeIndex { .. }
-                | WarpiumSettingsChangedEvent::AndroidTools { .. } => {}
+                | WarpiumSettingsChangedEvent::AndroidTools { .. }
+                | WarpiumSettingsChangedEvent::ImportIdeRunConfigs { .. } => {}
             },
         );
         UpstreamChecker::new(poll, ctx)

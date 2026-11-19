@@ -23,10 +23,12 @@ use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpium_android::project::{AndroidAppModule, find_app_modules};
+use warpium_android::run::LaunchTarget;
+use warpium_ide_run_configs::IdeRunConfigs;
 use warpium_project_toolbar::{
-    ButtonIcon, ConfigError, ConfigSource, EditorModel, Placement, ProjectContext, RunConfigItem,
-    RunConfigKind, SavePlan, TextPosition, ToolbarButton, ToolbarUserState, TrustChange,
-    TrustListing, TrustReview, android_app_run_config, content_hash, detect_project,
+    ButtonIcon, CommandAction, ConfigError, ConfigSource, EditorModel, Placement, ProjectContext,
+    RunConfigItem, RunConfigKind, SavePlan, TextPosition, ToolbarButton, ToolbarUserState,
+    TrustChange, TrustListing, TrustReview, android_app_run_config, content_hash, detect_project,
     inline_buttons, merge, needs_trust, overflow_menu_buttons, parse_config, personal_config_path,
     run_config_items, selected_run_config, team_config_path, trust_review,
 };
@@ -53,7 +55,8 @@ use super::android::{AndroidEvent, AndroidModel, device_menu_items};
 use super::is_warpium_channel;
 use super::project_toolbar_row::ToolbarRow;
 use super::sync_settings::{
-    PROJECT_TOOLBAR_CONTEXT_FLAG, WarpiumSettings, WarpiumSettingsChangedEvent,
+    IDE_RUN_CONFIGS_CONTEXT_FLAG, PROJECT_TOOLBAR_CONTEXT_FLAG, WarpiumSettings,
+    WarpiumSettingsChangedEvent,
 };
 use crate::launch_configs::launch_config::PaneTemplateType;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
@@ -62,6 +65,9 @@ use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::BindingGroup;
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ToastStack, WorkspaceAction};
+
+#[path = "project_toolbar_ide.rs"]
+mod ide;
 
 /// Private-preferences key holding the serialized [`ToolbarUserState`].
 const STATE_KEY: &str = "WarpiumProjectToolbarState";
@@ -146,12 +152,20 @@ pub(crate) fn init_bindings(app: &mut AppContext) {
     ]);
 
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "project toolbar",
-            WorkspaceAction::ToggleProjectToolbar,
-            &id!("Workspace"),
-            PROJECT_TOOLBAR_CONTEXT_FLAG,
-        )],
+        vec![
+            ToggleSettingActionPair::new(
+                "project toolbar",
+                WorkspaceAction::ToggleProjectToolbar,
+                &id!("Workspace"),
+                PROJECT_TOOLBAR_CONTEXT_FLAG,
+            ),
+            ToggleSettingActionPair::new(
+                "IDE run configurations in the project toolbar",
+                WorkspaceAction::ToggleIdeRunConfigs,
+                &id!("Workspace"),
+                IDE_RUN_CONFIGS_CONTEXT_FLAG,
+            ),
+        ],
         app,
     );
     super::project_toolbar_editor::init(app);
@@ -334,12 +348,21 @@ pub(crate) enum ProjectToolbarEvent {
     MenuClosed,
     /// [`ProjectToolbarView::has_content`] changed, so its title-bar slot appears or goes away.
     ContentChanged,
-    /// Build, install and start the Android app module with this Gradle path on the selected
-    /// device.
+    /// Build and install the Android app module on the selected device, then start `launch`
+    /// (nothing when `None`).
     RunAndroidApp {
         root: PathBuf,
         module: AndroidAppModule,
+        launch: Option<LaunchTarget>,
     },
+    /// Run a command of an IDE run configuration for the project at `root`. Trust was already
+    /// checked, and toolbar variables are escaped.
+    RunIdeCommand {
+        root: PathBuf,
+        title: String,
+        command: CommandAction,
+    },
+    ShowError(String),
     OpenLogcat,
     /// Open the toolbar editor for the project at `root`, with the button `select` selected or,
     /// with `add`, a new button.
@@ -386,8 +409,25 @@ enum TrustTarget {
         pending_button_id: String,
         team_hash: String,
     },
-    /// The project's Gradle build, for Android runs; the app module runs afterwards.
-    AndroidBuild { module: AndroidAppModule },
+    /// The project's Gradle build, for Android runs.
+    AndroidBuild { then: PendingRun },
+    /// The commands of the project's shared IDE run configurations, by their fingerprint; the
+    /// configuration `key` runs afterwards.
+    IdeConfigs { fingerprint: String, key: String },
+}
+
+/// What runs once the user trusts the project's Gradle build.
+enum PendingRun {
+    Android(AndroidRunRequest),
+    IdeConfig(String),
+}
+
+/// An Android app module to run, and what to start once it is installed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AndroidRunRequest {
+    gradle_path: String,
+    /// `None` only installs the app.
+    launch: Option<LaunchTarget>,
 }
 
 #[derive(Default)]
@@ -442,8 +482,12 @@ pub(crate) struct ProjectToolbarView {
     android_apps: Vec<AndroidAppModule>,
     /// Bumped per detection, so results for an earlier project are dropped.
     android_generation: u64,
-    /// The Gradle path of an Android run waiting for an emulator to finish booting.
-    pending_android_run: Option<String>,
+    /// An Android run waiting for an emulator to finish booting.
+    pending_android_run: Option<AndroidRunRequest>,
+    /// The project's JetBrains run configurations, read off the main thread.
+    ide_configs: IdeRunConfigs,
+    /// Bumped per read, so results for an earlier project or file version are dropped.
+    ide_generation: u64,
 }
 
 impl ProjectToolbarView {
@@ -471,6 +515,9 @@ impl ProjectToolbarView {
                     if me.is_relevant_change(paths) {
                         me.reload(ctx);
                     }
+                    if me.is_ide_config_change(paths) {
+                        me.reload_ide_configs(ctx);
+                    }
                 }
             },
         );
@@ -482,6 +529,9 @@ impl ProjectToolbarView {
                     me.update_context(pinned_root, location, true, ctx);
                 }
                 WarpiumSettingsChangedEvent::AndroidTools { .. } => me.detect_android_apps(ctx),
+                WarpiumSettingsChangedEvent::ImportIdeRunConfigs { .. } => {
+                    me.reload_ide_configs(ctx)
+                }
                 WarpiumSettingsChangedEvent::SyncFromWarp { .. }
                 | WarpiumSettingsChangedEvent::UpstreamCheck { .. }
                 | WarpiumSettingsChangedEvent::UpstreamCheckIntervalHours { .. }
@@ -503,8 +553,8 @@ impl ProjectToolbarView {
                         let ready = android
                             .selected_device()
                             .is_some_and(|device| device.entry.state.is_online());
-                        if ready && let Some(gradle_path) = me.pending_android_run.take() {
-                            me.run_android_app(gradle_path, ctx);
+                        if ready && let Some(request) = me.pending_android_run.take() {
+                            me.run_android_app(request, ctx);
                         }
                     }
                     AndroidEvent::AvdLaunchFailed => {
@@ -543,6 +593,8 @@ impl ProjectToolbarView {
             android_apps: Vec::new(),
             android_generation: 0,
             pending_android_run: None,
+            ide_configs: IdeRunConfigs::default(),
+            ide_generation: 0,
         }
     }
 
@@ -624,6 +676,7 @@ impl ProjectToolbarView {
         self.trust_prompt = None;
         self.reload(ctx);
         self.detect_android_apps(ctx);
+        self.reload_ide_configs(ctx);
     }
 
     /// Finds the project's Android application modules off the main thread, and starts device
@@ -672,13 +725,10 @@ impl ProjectToolbarView {
 
     /// Asks the workspace to run an Android app module, or waits for an emulator that is
     /// booting.
-    fn run_android_app(&mut self, gradle_path: String, ctx: &mut ViewContext<Self>) {
+    fn run_android_app(&mut self, request: AndroidRunRequest, ctx: &mut ViewContext<Self>) {
         let (Some(root), Some(module)) = (
             self.project_root().map(Path::to_path_buf),
-            self.android_apps
-                .iter()
-                .find(|module| module.gradle_path == gradle_path)
-                .cloned(),
+            self.android_app(&request.gradle_path).cloned(),
         ) else {
             return;
         };
@@ -689,26 +739,7 @@ impl ProjectToolbarView {
             .state()
             .trusts_android_builds(&root)
         {
-            let gradle = if root.join("gradlew").is_file() {
-                "./gradlew"
-            } else {
-                "gradle"
-            };
-            self.trust_prompt = Some(TrustPrompt {
-                review: TrustReview {
-                    listings: vec![TrustListing {
-                        label: module.display_name(),
-                        command: format!("{gradle} {}", module.install_task("debug")),
-                        details: "current session · env ANDROID_SERIAL".to_owned(),
-                        change: TrustChange::New,
-                    }],
-                    is_update: false,
-                    removed: 0,
-                },
-                target: TrustTarget::AndroidBuild { module },
-                list_scroll: ClippedScrollStateHandle::default(),
-            });
-            ctx.notify();
+            self.ask_to_trust_android_build(&root, &[&module], PendingRun::Android(request), ctx);
             return;
         }
         let android = AndroidModel::as_ref(ctx);
@@ -716,12 +747,56 @@ impl ProjectToolbarView {
             .selected_device()
             .is_some_and(|device| device.entry.state.is_online());
         if !device_online && android.is_any_launching() {
-            self.pending_android_run = Some(gradle_path);
+            self.pending_android_run = Some(request);
             ctx.notify();
             return;
         }
         self.pending_android_run = None;
-        ctx.emit(ProjectToolbarEvent::RunAndroidApp { root, module });
+        ctx.emit(ProjectToolbarEvent::RunAndroidApp {
+            root,
+            module,
+            launch: request.launch,
+        });
+        ctx.notify();
+    }
+
+    fn android_app(&self, gradle_path: &str) -> Option<&AndroidAppModule> {
+        self.android_apps
+            .iter()
+            .find(|module| module.gradle_path == gradle_path)
+    }
+
+    /// Asks the user to trust the project's Gradle build, which running `modules` executes;
+    /// `then` runs once they do.
+    fn ask_to_trust_android_build(
+        &mut self,
+        root: &Path,
+        modules: &[&AndroidAppModule],
+        then: PendingRun,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let gradle = if root.join("gradlew").is_file() {
+            "./gradlew"
+        } else {
+            "gradle"
+        };
+        self.trust_prompt = Some(TrustPrompt {
+            review: TrustReview {
+                listings: modules
+                    .iter()
+                    .map(|module| TrustListing {
+                        label: module.display_name(),
+                        command: format!("{gradle} {}", module.install_task("debug")),
+                        details: "current session · env ANDROID_SERIAL".to_owned(),
+                        change: TrustChange::New,
+                    })
+                    .collect(),
+                is_update: false,
+                removed: 0,
+            },
+            target: TrustTarget::AndroidBuild { then },
+            list_scroll: ClippedScrollStateHandle::default(),
+        });
         ctx.notify();
     }
 
@@ -803,9 +878,10 @@ impl ProjectToolbarView {
         })
     }
 
-    /// Watches the project root (to notice `.warpium/` appearing), `.warpium/` and the personal
-    /// directory, whichever exist.
+    /// Watches the project root (to notice `.warpium/` appearing), `.warpium/`, the personal
+    /// directory and the IDE's run configuration folders, whichever exist.
     fn sync_watched_dirs(&mut self, ctx: &mut ViewContext<Self>) {
+        let ide_enabled = ide::is_enabled(ctx);
         let desired = self
             .project_root()
             .map(|root| {
@@ -813,6 +889,9 @@ impl ProjectToolbarView {
                     root.to_path_buf(),
                     root.join(warpium_project_toolbar::PROJECT_CONFIG_DIR),
                 ];
+                if ide_enabled {
+                    dirs.extend(warpium_ide_run_configs::watched_dirs(root));
+                }
                 if let Some(personal_dir) =
                     personal_path(root).and_then(|path| path.parent().map(Path::to_path_buf))
                 {
@@ -850,6 +929,8 @@ impl ProjectToolbarView {
                 .collect();
             self.run_configs.extend(android_items);
         }
+        let ide_items = self.ide_run_config_items(ctx);
+        self.run_configs.extend(ide_items);
         let has_content = self.has_content();
         if has_content != self.had_content {
             self.had_content = has_content;
@@ -859,11 +940,16 @@ impl ProjectToolbarView {
     }
 
     fn selected_run_config<'a>(&'a self, ctx: &AppContext) -> Option<&'a RunConfigItem> {
-        let remembered = self.project_root().and_then(|root| {
-            ProjectToolbarStore::as_ref(ctx)
-                .state()
-                .selected_run_config(root)
-        });
+        // The IDE's own selection stands in until the user picks one in Warpium.
+        let remembered = self
+            .project_root()
+            .and_then(|root| {
+                ProjectToolbarStore::as_ref(ctx)
+                    .state()
+                    .selected_run_config(root)
+            })
+            .filter(|key| self.run_configs.iter().any(|item| item.key == *key))
+            .or(self.ide_configs.default_key.as_deref());
         selected_run_config(&self.run_configs, remembered)
     }
 
@@ -920,11 +1006,17 @@ impl ProjectToolbarView {
                 });
                 self.click_button(&pending_button_id, ctx);
             }
-            TrustTarget::AndroidBuild { module } => {
+            TrustTarget::AndroidBuild { then } => {
                 ProjectToolbarStore::handle(ctx).update(ctx, |store, ctx| {
                     store.update_state(|state| state.trust_android_builds(&root), ctx);
                 });
-                self.run_android_app(module.gradle_path, ctx);
+                match then {
+                    PendingRun::Android(request) => self.run_android_app(request, ctx),
+                    PendingRun::IdeConfig(key) => self.run_ide_config(&key, ctx),
+                }
+            }
+            TrustTarget::IdeConfigs { fingerprint, key } => {
+                self.confirm_ide_trust(&root, &fingerprint, &key, ctx)
             }
         }
     }
@@ -941,7 +1033,17 @@ impl ProjectToolbarView {
             }
             RunConfigKind::AndroidApp(gradle_path) => {
                 self.open_menu = None;
-                self.run_android_app(gradle_path, ctx);
+                self.run_android_app(
+                    AndroidRunRequest {
+                        gradle_path,
+                        launch: Some(LaunchTarget::DefaultActivity),
+                    },
+                    ctx,
+                );
+            }
+            RunConfigKind::IdeConfig(key) => {
+                self.open_menu = None;
+                self.run_ide_config(&key, ctx);
             }
         }
     }
@@ -972,7 +1074,7 @@ impl ProjectToolbarView {
 
     fn set_menu_items(&mut self, menu: OpenMenu, ctx: &mut ViewContext<Self>) {
         let items = match menu {
-            OpenMenu::RunConfigs => self.run_config_menu_items(),
+            OpenMenu::RunConfigs => self.run_config_menu_items(ctx),
             OpenMenu::Overflow => self.overflow_menu_items(),
             OpenMenu::Button => self.button_menu_items(),
             OpenMenu::Devices => {
@@ -1006,23 +1108,26 @@ impl ProjectToolbarView {
         });
     }
 
-    fn run_config_menu_items(&self) -> Vec<MenuItem<ProjectToolbarAction>> {
+    fn run_config_menu_items(&self, ctx: &AppContext) -> Vec<MenuItem<ProjectToolbarAction>> {
         let mut items = vec![MenuItem::Header {
             fields: MenuItemFields::new("Run configurations").with_no_interaction_on_hover(),
             clickable: false,
             right_side_fields: None,
         }];
-        items.extend(self.run_configs.iter().map(|item| {
+        items.extend(self.run_configs.iter().filter_map(|item| {
             let label = match item.kind {
                 RunConfigKind::Button(_) => item.label.clone(),
                 RunConfigKind::LaunchConfig(_) => format!("{} (launch configuration)", item.label),
                 RunConfigKind::AndroidApp(_) => format!("{} (Android app)", item.label),
+                // Listed in their own section.
+                RunConfigKind::IdeConfig(_) => return None,
             };
-            MenuItem::Item(
+            Some(MenuItem::Item(
                 MenuItemFields::new(label)
                     .with_on_select_action(ProjectToolbarAction::SelectRunConfig(item.key.clone())),
-            )
+            ))
         }));
+        items.extend(self.ide_menu_items(ctx));
         items.extend(edit_menu_items());
         items
     }
@@ -1312,7 +1417,10 @@ impl ProjectToolbarView {
             .with_child(
                 ConstrainedBox::new(
                     Text::new_inline(
-                        selected.map(|item| item.label.clone()).unwrap_or_default(),
+                        selected.map_or_else(
+                            || "Run configurations".to_owned(),
+                            |item| item.label.clone(),
+                        ),
                         appearance.ui_font_family(),
                         FONT_SIZE,
                     )
@@ -1489,6 +1597,23 @@ impl ProjectToolbarView {
                 format!(
                     "These commands from {root}/.warpium/toolbar.toml run in your shell. \
                      Warpium asks again whenever the file changes."
+                ),
+            ),
+            TrustTarget::IdeConfigs { .. } if review.is_update => (
+                "Trust this project's IDE run configurations?",
+                format!(
+                    "The shared run configurations of {root} (.run, .idea/runConfigurations) \
+                     changed since you trusted them ({}). Their commands run in your shell. \
+                     Warpium asks again whenever they change.",
+                    trust_change_summary(review)
+                ),
+            ),
+            TrustTarget::IdeConfigs { .. } => (
+                "Trust this project's IDE run configurations?",
+                format!(
+                    "These commands from the shared run configurations of {root} (.run, \
+                     .idea/runConfigurations) run in your shell. Warpium asks again whenever \
+                     they change."
                 ),
             ),
             TrustTarget::AndroidBuild { .. } => (
@@ -2087,7 +2212,7 @@ impl View for ProjectToolbarView {
                 let has_overflow_only = buttons
                     .iter()
                     .any(|button| button.overflow_only && !button.run_config);
-                if toolbar_buttons.is_empty() && !has_overflow_only && self.run_configs.is_empty() {
+                if toolbar_buttons.is_empty() && !has_overflow_only && !self.shows_run_widget() {
                     self.render_add_button(true, appearance)
                 } else {
                     self.render_button_row(
@@ -2133,7 +2258,7 @@ impl ProjectToolbarView {
                     .with_margin_left(2.)
                     .finish(),
             );
-        if !self.run_configs.is_empty() {
+        if self.shows_run_widget() {
             let theme = appearance.theme();
             trailing.add_child(
                 Container::new(

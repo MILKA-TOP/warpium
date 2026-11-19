@@ -25112,6 +25112,15 @@ impl TypedActionView for Workspace {
                 );
                 ctx.notify();
             }
+            ToggleIdeRunConfigs => {
+                crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.ide_run_configs.toggle_and_save_value(ctx));
+                    },
+                );
+                ctx.notify();
+            }
             ToggleCodeIndex => {
                 crate::warpium::sync_settings::WarpiumSettings::handle(ctx).update(
                     ctx,
@@ -27476,6 +27485,11 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::PROJECT_TOOLBAR_CONTEXT_FLAG);
+        }
+        if *crate::warpium::sync_settings::WarpiumSettings::as_ref(app).ide_run_configs {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::IDE_RUN_CONFIGS_CONTEXT_FLAG);
         }
         if *crate::warpium::sync_settings::WarpiumSettings::as_ref(app).code_index {
             context

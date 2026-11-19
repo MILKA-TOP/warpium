@@ -312,6 +312,7 @@ wgpu.workspace = true
 code_index.workspace = true
 warpium_android.workspace = true
 warpium_agent_mcp.workspace = true
+warpium_ide_run_configs.workspace = true
 app-installation-detection.workspace = true
 async-io.workspace = true
 axum.workspace = true

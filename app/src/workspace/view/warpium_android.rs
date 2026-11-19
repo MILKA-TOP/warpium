@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use warpium_android::project::AndroidAppModule;
+use warpium_android::run::LaunchTarget;
 use warpium_project_toolbar::{CommandAction, CommandTarget};
 use warpui::{SingletonEntity as _, ViewContext};
 
@@ -90,11 +91,12 @@ impl Workspace {
 
     /// Runs `module` on the selected device: `./gradlew :<module>:installDebug` visibly in the
     /// active session (with `ANDROID_SERIAL` set), then, once the device reports the new
-    /// install, starts its launcher activity. Logcat follows the app.
+    /// install, starts `launch` (nothing when `None`). Logcat follows the app.
     pub(super) fn run_android_app(
         &mut self,
         root: &Path,
         module: &AndroidAppModule,
+        launch: Option<&LaunchTarget>,
         ctx: &mut ViewContext<Self>,
     ) {
         let serial = AndroidModel::as_ref(ctx)
@@ -113,11 +115,11 @@ impl Workspace {
         let package = module.package_for_variant(RUN_VARIANT);
         // Waiting for the install starts first, so it reads the install time before the build
         // can replace it.
-        if let Some(package) = &package {
-            let (serial, package) = (serial.clone(), package.clone());
+        if let (Some(package), Some(launch)) = (&package, launch) {
+            let (serial, package, launch) = (serial.clone(), package.clone(), launch.clone());
             let metadata = Some(module.output_metadata_path(RUN_VARIANT));
             AndroidModel::handle(ctx).update(ctx, |android, ctx| {
-                android.launch_after_install(serial, package, metadata, ctx)
+                android.launch_after_install(serial, package, metadata, launch, ctx)
             });
         }
         let gradle = if root.join("gradlew").is_file() {
@@ -135,6 +137,9 @@ impl Workspace {
         self.run_project_toolbar_command(root, &command, &title, ctx);
 
         let Some(package) = package else {
+            if launch.is_none() {
+                return;
+            }
             self.show_project_toolbar_error(
                 format!(
                     "Couldn't find the application id of {}; it is installed but not started.",

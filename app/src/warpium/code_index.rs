@@ -143,7 +143,8 @@ pub(crate) fn init(ctx: &mut AppContext) {
                 | WarpiumSettingsChangedEvent::UpdateCheck { .. }
                 | WarpiumSettingsChangedEvent::UpdateCheckIntervalHours { .. }
                 | WarpiumSettingsChangedEvent::ProjectToolbar { .. }
-                | WarpiumSettingsChangedEvent::AndroidTools { .. } => {}
+                | WarpiumSettingsChangedEvent::AndroidTools { .. }
+                | WarpiumSettingsChangedEvent::ImportIdeRunConfigs { .. } => {}
             },
         );
         CodeIndexModel {

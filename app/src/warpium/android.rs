@@ -17,7 +17,9 @@ use warpium_android::adb::server_port_from_env;
 use warpium_android::avd::{
     Avd, avd_dirs_from_env, launch_avd, list_avds, list_avds_with_emulator, wait_for_avd_boot,
 };
-use warpium_android::run::{LaunchOutcome, LaunchRequest, spawn_launch_after_install};
+use warpium_android::run::{
+    LaunchOutcome, LaunchRequest, LaunchTarget, spawn_launch_after_install,
+};
 use warpium_android::sdk::{AndroidSdk, SdkEnv, find_sdk};
 use warpium_android::tracker::{TrackerEvent, spawn_device_tracker};
 use warpium_android::{AdbClient, Device, WorkerHandle};
@@ -115,7 +117,8 @@ pub(crate) fn init(ctx: &mut AppContext) {
                 | WarpiumSettingsChangedEvent::UpdateCheck { .. }
                 | WarpiumSettingsChangedEvent::UpdateCheckIntervalHours { .. }
                 | WarpiumSettingsChangedEvent::ProjectToolbar { .. }
-                | WarpiumSettingsChangedEvent::CodeIndex { .. } => {}
+                | WarpiumSettingsChangedEvent::CodeIndex { .. }
+                | WarpiumSettingsChangedEvent::ImportIdeRunConfigs { .. } => {}
             },
         );
         let selected_serial = ctx
@@ -485,6 +488,7 @@ impl AndroidModel {
         serial: String,
         package: String,
         metadata: Option<PathBuf>,
+        target: LaunchTarget,
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(client) = self.client.clone() else {
@@ -497,6 +501,7 @@ impl AndroidModel {
             metadata,
             timeout: INSTALL_TIMEOUT,
             poll: INSTALL_POLL,
+            target,
         };
         match spawn_launch_after_install(client, request, move |outcome| {
             let _ = sender.send(outcome);

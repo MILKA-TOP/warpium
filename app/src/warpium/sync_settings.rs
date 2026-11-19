@@ -111,7 +111,20 @@ define_settings_group!(WarpiumSettings, settings: [
         toml_path: "warpium.android",
         description: "Whether Warpium offers its Android tools: the device picker, running apps on an emulator or device, and the Logcat pane. adb is only contacted once one of them is used.",
     },
+    ide_run_configs: ImportIdeRunConfigs {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: ::settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "warpium.ide_run_configs",
+        description: "Whether the project toolbar's run configurations include the project's JetBrains (Android Studio, IntelliJ IDEA) run configurations from .run, .idea/runConfigurations and .idea/workspace.xml. The files are only read.",
+    },
 ]);
+
+/// Keymap context flag present while [`WarpiumSettings::ide_run_configs`] is on.
+pub(crate) const IDE_RUN_CONFIGS_CONTEXT_FLAG: &str = "WarpiumIdeRunConfigs";
 
 /// Keymap context flag present while [`WarpiumAgentSettings::logcat_mcp`] is on.
 pub(crate) const LOGCAT_MCP_CONTEXT_FLAG: &str = "WarpiumLogcatMcp";
