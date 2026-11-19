@@ -547,6 +547,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CloudAgentShellRespawn,
         #[cfg(feature = "acp_harness")]
         FeatureFlag::AcpHarness,
+        #[cfg(feature = "warpium_embedded_emulator")]
+        FeatureFlag::WarpiumEmbeddedEmulator,
     ]);
 
     flags

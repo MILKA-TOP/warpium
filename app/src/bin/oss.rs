@@ -23,6 +23,10 @@ fn main() -> Result<()> {
     );
     if cfg!(debug_assertions) {
         state = state.with_additional_features(warp_core::features::DEBUG_FLAGS);
+        // Warpium has no dogfood channel: its debug builds (pull request artifacts) stand in for
+        // one, so features still in development are on there.
+        state = state
+            .with_additional_features(&[warp_core::features::FeatureFlag::WarpiumEmbeddedEmulator]);
     }
     ChannelState::set(state);
 

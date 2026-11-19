@@ -11,6 +11,8 @@ pub(crate) mod code_index;
 pub(crate) mod code_index_palette;
 pub(crate) mod code_navigation;
 #[cfg(not(target_family = "wasm"))]
+pub(crate) mod emulator;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod logcat;
 #[cfg(not(target_family = "wasm"))]
 mod logcat_list;
@@ -46,6 +48,18 @@ use warpui::{Entity, ModelContext, SingletonEntity as _};
 use crate::view_components::DismissibleToast;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::{ToastStack, WorkspaceAction};
+
+/// A fake Android emulator that debug builds can start in-process, to try the Devices pane
+/// without a real emulator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+pub(crate) enum FakeEmulatorKind {
+    Working,
+    /// Its discovery entry advertises a token the fake rejects.
+    StaleToken,
+    /// Its discovery entry says the endpoint requires TLS.
+    TlsOnly,
+}
 
 /// Shows an ephemeral toast in the active window, or else the first open one.
 #[cfg(not(target_family = "wasm"))]

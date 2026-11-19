@@ -15670,6 +15670,7 @@ dependencies = [
  "warpium_agent_mcp",
  "warpium_android",
  "warpium_bottom_panel",
+ "warpium_emulator",
  "warpium_ide_run_configs",
  "warpium_project_root",
  "warpium_project_toolbar",
@@ -16494,6 +16495,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "dirs 6.0.0",
+ "instant",
  "libc",
  "log",
  "prost",

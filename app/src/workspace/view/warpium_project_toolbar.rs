@@ -274,6 +274,9 @@ impl Workspace {
             ProjectToolbarEvent::OpenLogcat => {
                 self.open_android_logcat(None, true, ctx);
             }
+            ProjectToolbarEvent::ShowEmulator(serial) => {
+                self.show_running_emulator(Some(serial.clone()), ctx);
+            }
             ProjectToolbarEvent::Customize { root, select, add } => {
                 self.open_project_toolbar_editor(root.clone(), select.clone(), *add, ctx)
             }

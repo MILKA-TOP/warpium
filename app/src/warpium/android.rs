@@ -98,6 +98,7 @@ impl SingletonEntity for AndroidModel {}
 
 pub(crate) fn init(ctx: &mut AppContext) {
     ctx.add_singleton_model(|_| super::logcat::LogcatPaneManager::default());
+    ctx.add_singleton_model(|_| super::emulator::DevicesPaneManager::default());
     ctx.add_singleton_model(|ctx: &mut ModelContext<AndroidModel>| {
         ctx.subscribe_to_model(
             &WarpiumSettings::handle(ctx),

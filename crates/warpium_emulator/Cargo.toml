@@ -14,10 +14,11 @@ test-support = ["tonic/router", "tonic/server", "tokio/net", "tokio-stream/net"]
 [dependencies]
 bytes.workspace = true
 dirs.workspace = true
+instant.workspace = true
 log.workspace = true
 prost.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-stream = "0.1.17"
 tonic = { version = "0.14.8", default-features = false, features = ["channel", "codegen"] }
 tonic-prost = "0.14.8"

@@ -396,6 +396,12 @@ pub struct StaticImage {
 }
 
 impl StaticImage {
+    /// An image from raw row-major RGBA8 pixels, outside the asset cache (for frames streamed at
+    /// runtime). `None` when `pixels` isn't `width * height * 4` bytes.
+    pub fn from_rgba(width: u32, height: u32, pixels: Vec<u8>) -> Option<Self> {
+        image::RgbaImage::from_vec(width, height, pixels).map(|img| Self { img })
+    }
+
     pub fn size(&self) -> Vector2I {
         Vector2I::new(self.width() as i32, self.height() as i32)
     }
