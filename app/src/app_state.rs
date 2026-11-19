@@ -87,6 +87,8 @@ pub struct TabSnapshot {
     /// Warpium: the tab's project root, following its terminals or locked to folders (see
     /// `PaneGroup::project_root`).
     pub project_root: warpium_project_root::ProjectRoot,
+    /// Warpium: the tab's bottom panel (docked panes and its state), if anything is docked.
+    pub warpium_bottom_panel: Option<warpium_bottom_panel::PanelSnapshot>,
 }
 
 impl TabSnapshot {

@@ -5,6 +5,7 @@ cfg_if::cfg_if! {
         pub mod agent;
         mod block_list;
         mod sqlite;
+        mod warpium_bottom_panel;
         pub mod commands;
     }
 }

@@ -24,6 +24,7 @@ pub(crate) mod tests;
 mod vertical_tabs;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_android;
+mod warpium_bottom_panel;
 mod warpium_project_root;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_project_toolbar;
@@ -4250,6 +4251,13 @@ impl Workspace {
                                 ctx,
                             );
                         }
+
+                        self.restore_warpium_bottom_panel_for_tab(
+                            &pane_group,
+                            saved_tab.warpium_bottom_panel.as_ref(),
+                            &block_lists,
+                            ctx,
+                        );
                     });
 
                 if self.tab_count() == 0 {
@@ -12050,6 +12058,7 @@ impl Workspace {
                     pinned: FeatureFlag::PinnedTabs.is_enabled()
                         && self.tabs.get(tab_index).is_some_and(|tab| tab.pinned),
                     project_root: pane_group.project_root().clone(),
+                    warpium_bottom_panel: pane_group.warpium_bottom_panel_snapshot(app),
                 }
             })
             .filter(|tab| {
@@ -16951,6 +16960,9 @@ impl Workspace {
             }
             pane_group::Event::MaximizePaneToggled => {
                 ctx.notify();
+            }
+            pane_group::Event::WarpiumBottomPanel(event) => {
+                self.handle_warpium_bottom_panel_event(&pane_group, event, ctx)
             }
             pane_group::Event::FocusPaneGroup => {
                 for (index, tab) in self.tabs.iter().enumerate() {
@@ -25122,6 +25134,8 @@ impl TypedActionView for Workspace {
                 ctx.notify();
             }
             WarpiumProjectRoot(action) => self.handle_project_root_action(action, ctx),
+            WarpiumBottomPanel(action) => self.handle_warpium_bottom_panel_action(action, ctx),
+            ToggleWarpiumBottomPanelSetting => self.toggle_warpium_bottom_panel_setting(ctx),
             OpenAndroidLogcat => {
                 #[cfg(not(target_family = "wasm"))]
                 self.open_android_logcat(None, true, ctx);
@@ -27486,6 +27500,11 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::ANDROID_CONTEXT_FLAG);
+        }
+        if crate::warpium::bottom_panel::is_enabled(app) {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::BOTTOM_PANEL_CONTEXT_FLAG);
         }
         if *crate::warpium::sync_settings::WarpiumAgentSettings::as_ref(app).logcat_mcp {
             context

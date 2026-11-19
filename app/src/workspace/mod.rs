@@ -124,6 +124,7 @@ pub fn init(app: &mut AppContext) {
     #[cfg(not(target_family = "wasm"))]
     crate::warpium::android::init_bindings(app);
     crate::warpium::project_root::init_bindings(app);
+    crate::warpium::bottom_panel::init_bindings(app);
     #[cfg(not(target_family = "wasm"))]
     crate::warpium::logcat::init(app);
     #[cfg(not(target_family = "wasm"))]

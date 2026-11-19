@@ -1026,8 +1026,6 @@ tab_configs = []
 grouped_tabs = []
 pinned_tabs = []
 warp_control_cli = []
-# Warpium: the bottom panel (FeatureFlag::WarpiumBottomPanel). CI enables it for non-release builds.
-warpium_bottom_panel = []
 agent_harness = []
 oz_handoff = []
 restore_local_subtree = []
