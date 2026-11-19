@@ -1085,7 +1085,10 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                     parent_pane_node_id: None,
                 });
 
-                if tab.left_panel.is_some() || tab.right_panel.is_some() {
+                if tab.left_panel.is_some()
+                    || tab.right_panel.is_some()
+                    || tab.warpium_bottom_panel.is_some()
+                {
                     let new_panel = model::NewPanel {
                         tab_id: *tab_id,
                         left_panel: tab
@@ -1096,6 +1099,10 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                             .right_panel
                             .as_ref()
                             .and_then(|p| serde_json::to_string(p).ok()),
+                        warpium_bottom_panel: tab
+                            .warpium_bottom_panel
+                            .as_ref()
+                            .and_then(|p| p.to_json()),
                     };
                     diesel::insert_into(schema::panels::dsl::panels)
                         .values(new_panel)
@@ -2593,6 +2600,11 @@ fn read_sqlite_data(
                                 .and_then(|p| p.right_panel.as_ref())
                                 .and_then(|s| serde_json::from_str::<RightPanelSnapshot>(s).ok());
 
+                            let warpium_bottom_panel = panel
+                                .and_then(|p| p.warpium_bottom_panel.as_deref())
+                                .and_then(warpium_bottom_panel::PanelSnapshot::from_json)
+                                .filter(|snapshot| !snapshot.is_empty());
+
                             let group_id = tab
                                 .tab_group_id
                                 .and_then(|row_id| tab_group_id_by_row_id.get(&row_id).copied());
@@ -2622,6 +2634,7 @@ fn read_sqlite_data(
                                     tab.pinned_explorer_root.map(decode_path),
                                     tab.project_extra_roots.as_deref(),
                                 ),
+                                warpium_bottom_panel,
                             })
                         })
                         .collect();
@@ -2722,7 +2735,12 @@ fn read_sqlite_data(
             )
             .collect();
 
-        let restored_blocks = get_all_restored_blocks(conn)?;
+        let mut restored_blocks = get_all_restored_blocks(conn)?;
+        super::warpium_bottom_panel::add_docked_terminal_blocks(
+            conn,
+            &saved_windows,
+            &mut restored_blocks,
+        )?;
 
         // Load active MCP servers from database
         let running_mcp_servers = load_active_mcp_servers(conn)?;

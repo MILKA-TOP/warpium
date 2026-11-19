@@ -139,6 +139,8 @@ pub enum SearchBarEvent<T: Action + Clone> {
     /// The user pressed enter while the zero state was state. If `cmd_enter` is true, the user
     /// pressed `cmd-enter`.
     EnterInZeroState { modified_enter: bool },
+    /// Warpium: the user pressed tab (or shift-tab, `backward`) while a filter was applied.
+    TabWithActiveFilter { backward: bool },
 }
 
 impl<T: Action + Clone> SearchBarState<T> {
@@ -263,10 +265,22 @@ impl<T: Action + Clone> SearchBarState<T> {
             (SelectionUpdate::Top, _, Some(query_result_renderers)) => {
                 if !query_result_renderers.is_empty() {
                     // Adjust the index, wrapping around if necessary.
-                    let new_index = self
+                    let mut new_index = self
                         .offset_initial_selection_by
                         .rem_euclid(query_result_renderers.len() as isize)
                         as usize;
+                    // Results may start with a section heading, which can't be accepted.
+                    if query_result_renderers[new_index]
+                        .search_result
+                        .is_static_separator()
+                        && let Some(index) = self.find_next_interactable_index(
+                            new_index,
+                            MoveDirection::Down,
+                            query_result_renderers,
+                        )
+                    {
+                        new_index = index;
+                    }
                     if self.selected_index != Some(new_index) {
                         self.selected_index = Some(new_index);
                         ctx.emit(SearchBarEvent::ResultSelected { index: new_index });
@@ -470,7 +484,16 @@ impl<T: Action + Clone> SearchBar<T> {
                 self.set_query_filter(None, ctx);
             }
             EditorEvent::Navigate(NavigationKey::Tab) => {
-                self.handle_editor_tab(ctx);
+                if self.state.as_ref(ctx).query_filter.is_some() {
+                    ctx.emit(SearchBarEvent::TabWithActiveFilter { backward: false });
+                } else {
+                    self.handle_editor_tab(ctx);
+                }
+            }
+            EditorEvent::Navigate(NavigationKey::ShiftTab)
+                if self.state.as_ref(ctx).query_filter.is_some() =>
+            {
+                ctx.emit(SearchBarEvent::TabWithActiveFilter { backward: true });
             }
             _ => {}
         }

@@ -24,6 +24,7 @@ fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
                 group_id: None,
                 pinned: false,
                 project_root: Default::default(),
+                warpium_bottom_panel: None,
             }],
             active_tab_index: 0,
             team_uid: None,
@@ -393,6 +394,7 @@ fn test_config_with_active_tab_index() {
                 group_id: None,
                 pinned: false,
                 project_root: Default::default(),
+                warpium_bottom_panel: None,
             };
             3
         ],
@@ -430,6 +432,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                 group_id: None,
                 pinned: false,
                 project_root: Default::default(),
+                warpium_bottom_panel: None,
             },
             TabSnapshot {
                 custom_title: None,
@@ -462,6 +465,7 @@ fn test_config_with_active_tab_index_and_filtered_tabs() {
                 group_id: None,
                 pinned: false,
                 project_root: Default::default(),
+                warpium_bottom_panel: None,
             },
         ],
     );
@@ -506,6 +510,7 @@ fn test_config_with_active_tab_being_filtered() {
                 group_id: None,
                 pinned: false,
                 project_root: Default::default(),
+                warpium_bottom_panel: None,
             },
             TabSnapshot {
                 custom_title: None,
@@ -530,6 +535,7 @@ fn test_config_with_active_tab_being_filtered() {
                 group_id: None,
                 pinned: false,
                 project_root: Default::default(),
+                warpium_bottom_panel: None,
             },
         ],
     );
@@ -568,6 +574,7 @@ fn terminal_tab(cwd: &str, group_id: Option<TabGroupId>) -> TabSnapshot {
         group_id,
         pinned: false,
         project_root: Default::default(),
+        warpium_bottom_panel: None,
     }
 }
 
@@ -591,6 +598,7 @@ fn unsaveable_tab(group_id: Option<TabGroupId>) -> TabSnapshot {
         group_id,
         pinned: false,
         project_root: Default::default(),
+        warpium_bottom_panel: None,
     }
 }
 

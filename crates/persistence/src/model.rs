@@ -1872,6 +1872,8 @@ pub struct NewPanel {
     pub tab_id: i32,
     pub left_panel: Option<String>,
     pub right_panel: Option<String>,
+    /// Warpium: the tab's bottom panel, as JSON (`warpium_bottom_panel::PanelSnapshot`).
+    pub warpium_bottom_panel: Option<String>,
 }
 
 #[derive(Identifiable, Queryable, Selectable)]
@@ -1881,4 +1883,5 @@ pub struct Panel {
     pub tab_id: i32,
     pub left_panel: Option<String>,
     pub right_panel: Option<String>,
+    pub warpium_bottom_panel: Option<String>,
 }

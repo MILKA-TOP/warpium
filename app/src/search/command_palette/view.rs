@@ -46,6 +46,7 @@ use crate::settings::CtrlTabBehavior;
 use crate::terminal::keys_settings::KeysSettings;
 use crate::themes::theme::WarpTheme;
 use crate::view_components::DismissibleToast;
+use crate::warpium::search_everywhere::{self, SearchTab, SearchTabs, SearchTabsEvent};
 use crate::workspace::{ForkedConversationDestination, WorkspaceAction, active_terminal_in_window};
 use crate::{ToastStack, send_telemetry_from_ctx};
 
@@ -140,6 +141,9 @@ pub struct View {
     /// Whether the active session is a shared session viewer.
     /// This is set by the workspace when opening the palette.
     is_shared_session_viewer: bool,
+
+    /// Warpium: the project search's tabs (All, Classes, Symbols, Files).
+    warpium_search_tabs: ViewHandle<SearchTabs>,
 }
 
 impl Entity for View {
@@ -184,6 +188,14 @@ impl warpui::View for View {
         if matches!(self.navigation_mode, NavigationMode::Normal) {
             // Don't show the search bar when navigating with ctrl-tab.
             palette.add_child(self.render_search_bar());
+            if let Some(tabs) = SearchTabs::render_strip(
+                &self.warpium_search_tabs,
+                self.active_query_filter(app),
+                styles::RESULT_PADDING_HORIZONTAL,
+                app,
+            ) {
+                palette.add_child(tabs);
+            }
         }
         palette.add_child(Shrinkable::new(1., body).finish());
 
@@ -298,6 +310,12 @@ impl View {
             me.handle_search_bar_event(event, ctx);
         });
 
+        let warpium_search_tabs = ctx.add_typed_action_view(SearchTabs::new);
+        ctx.subscribe_to_view(&warpium_search_tabs, |me, _, event, ctx| {
+            let SearchTabsEvent::Selected(tab) = event;
+            me.show_warpium_search_tab(*tab, ctx);
+        });
+
         let placeholder_element = QueryResultRenderer::new(
             MatchedBinding::placeholder("No results found".into()).into(),
             "command_palette:no_results".into(),
@@ -320,7 +338,23 @@ impl View {
             suggested_binding_ids,
             zero_state_items,
             is_shared_session_viewer: false,
+            warpium_search_tabs,
         }
+    }
+
+    /// Warpium: shows the project search's tabs with `tab` active, keeping the query.
+    pub fn show_warpium_search_tab(&mut self, tab: SearchTab, ctx: &mut ViewContext<Self>) {
+        self.warpium_search_tabs.update(ctx, |tabs, ctx| {
+            tabs.set_enabled(true, ctx);
+            tabs.select(tab, ctx);
+        });
+        self.set_active_query_filter(search_everywhere::tab_filter(tab), ctx);
+        ctx.focus(&self.search_bar);
+    }
+
+    /// Warpium: whether the palette shows the project search's tabs.
+    pub fn shows_warpium_search_tabs(&self, app: &AppContext) -> bool {
+        self.warpium_search_tabs.as_ref(app).is_enabled()
     }
 
     #[cfg(feature = "integration_tests")]
@@ -395,7 +429,10 @@ impl View {
             (PaletteMode::Command, QueryFilter::Actions)
                 | (PaletteMode::Navigation, QueryFilter::Sessions)
                 | (PaletteMode::LaunchConfig, QueryFilter::LaunchConfigurations)
-                | (PaletteMode::Files, QueryFilter::Files)
+                | (
+                    PaletteMode::Files,
+                    QueryFilter::Files | QueryFilter::CodeAll
+                )
                 | (PaletteMode::Conversations, QueryFilter::Conversations)
                 | (PaletteMode::WarpDrive, QueryFilter::Drive)
                 | (PaletteMode::CodeClasses, QueryFilter::CodeClasses)
@@ -559,6 +596,16 @@ impl View {
             // async file search without re-running it, leaving the palette
             // empty.
             SearchBarEvent::QueryFilterChanged { .. } => {}
+            SearchBarEvent::TabWithActiveFilter { backward } => {
+                let active = self.active_query_filter(ctx);
+                if let Some(tab) = self
+                    .warpium_search_tabs
+                    .as_ref(ctx)
+                    .cycled_tab(active, *backward)
+                {
+                    self.show_warpium_search_tab(tab, ctx);
+                }
+            }
             SearchBarEvent::SelectionUpdateInZeroState { selection_update } => {
                 self.zero_state_items.update(ctx, |items, ctx| {
                     items.handle_selection_update(*selection_update, ctx);
@@ -645,6 +692,8 @@ impl View {
 
     pub fn reset(&mut self, ctx: &mut ViewContext<Self>) {
         self.state.clipped_scroll_state.scroll_to(Pixels::zero());
+        self.warpium_search_tabs
+            .update(ctx, |tabs, ctx| tabs.set_enabled(false, ctx));
         self.search_bar.update(ctx, |search_bar, ctx| {
             search_bar.reset(
                 None, /* initial_query */

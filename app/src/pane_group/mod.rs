@@ -36,7 +36,7 @@ use warp_util::remote_path::RemotePath;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::elements::{
     ChildView, Clipped, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
-    MainAxisSize, ParentElement, Shrinkable, Stack,
+    MainAxisSize, ParentElement, Stack,
 };
 use warpui::keymap::{Context, EditableBinding, FixedBinding};
 use warpui::notification::NotificationSendError;
@@ -220,7 +220,10 @@ pub use pane::{
 };
 pub use tree::{Direction, PaneData, PaneFlex, PaneNode, SplitDirection};
 use warp_errors::report_error;
-pub use warpium_bottom_dock::{BottomPanelAction, BottomPanelPaneRequest};
+pub use warpium_bottom_dock::{
+    BottomPanelAction, BottomPanelChipDrop, BottomPanelEvent, BottomPanelPaneRequest,
+    BottomPanelTabTarget,
+};
 pub use working_directories::{WorkingDirectoriesEvent, WorkingDirectoriesModel};
 
 use self::pane::{DetachType, PaneViewEvent};
@@ -700,6 +703,8 @@ pub enum Event {
         initial_content: Option<String>,
     },
     OpenAddRulePane,
+    /// Warpium: requests of the bottom panel (moving a docked pane to another tab).
+    WarpiumBottomPanel(BottomPanelEvent),
     OpenEnvironmentManagementPane,
     OpenFilesPalette {
         source: PaletteSource,
@@ -1254,7 +1259,7 @@ impl PaneGroup {
         event: &PaneViewEvent,
         ctx: &mut ViewContext<PaneGroup>,
     ) {
-        if self.warpium_ignores_pane_view_event(pane_id, event) {
+        if self.warpium_handle_pane_view_event(pane_id, event, ctx) {
             return;
         }
         if self.pane_contents.contains_key(&pane_id) {
@@ -7785,7 +7790,7 @@ impl PaneGroup {
         self.focus_state.update(ctx, |focus_state, ctx| {
             focus_state.set_focused_pane(id, ctx);
         });
-        self.warpium_on_pane_focused(id);
+        self.warpium_on_pane_focused(id, ctx);
 
         ctx.emit(Event::PaneTitleUpdated);
         // Update the active session if the newly focused pane is a terminal pane.
@@ -8415,10 +8420,7 @@ impl View for PaneGroup {
                 })
                 .finish()
         };
-        column.add_child(Shrinkable::new(1., main_content).finish());
-        if let Some(bottom_dock) = self.render_warpium_bottom_dock(app) {
-            column.add_child(bottom_dock);
-        }
+        self.add_warpium_layout_and_bottom_dock(&mut column, main_content, app);
 
         let mut stack = Stack::new().with_child(column.finish());
 

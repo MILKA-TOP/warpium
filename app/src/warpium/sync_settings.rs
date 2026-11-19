@@ -138,3 +138,27 @@ mod agent {
         },
     ]);
 }
+
+/// Keymap context flag present while [`WarpiumBottomPanelSettings::bottom_panel`] is on.
+pub(crate) const BOTTOM_PANEL_CONTEXT_FLAG: &str = "WarpiumBottomPanel";
+
+pub(crate) use bottom_panel::{BottomPanel, WarpiumBottomPanelSettings};
+
+// Its own group for the same reason as `agent` above.
+mod bottom_panel {
+    use ::settings::{SupportedPlatforms, SyncToCloud};
+    use warp_core::define_settings_group;
+
+    define_settings_group!(WarpiumBottomPanelSettings, settings: [
+        bottom_panel: BottomPanel {
+            type: bool,
+            default: true,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            surface: ::settings::SettingSurfaces::GUI,
+            private: false,
+            toml_path: "warpium.bottom_panel",
+            description: "Whether Warpium offers the bottom panel: a per-tab dock below the split layout where terminals and Logcat keep running out of the way, collapsible to a strip of status chips (cmd-j).",
+        },
+    ]);
+}

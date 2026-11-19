@@ -32,7 +32,7 @@ pub const TEAM_TEMPLATE: &str = r#"# Warpium project toolbar. Commit this file t
 # icon = "test"
 # tooltip = "Run unit tests"
 # command = "./gradlew test"
-# target = "new_tab"            # current (default) | new_tab | split_right | split_down
+# target = "new_tab"            # current (default) | new_tab | split_right | split_down | panel
 # cwd = "."                     # relative to the project root (the default)
 # env = { GRADLE_OPTS = "-Xmx4g" }
 

@@ -152,6 +152,35 @@ fn adding_a_button_appends_it_after_the_others() {
 }
 
 #[test]
+fn a_panel_command_is_written_with_its_target() {
+    let mut model = model(Some(TEAM), None);
+    let mut spec = ButtonSpec::new_command(model.unique_id("Logcat"));
+    spec.action = SpecAction::Command {
+        command: "adb logcat".to_owned(),
+        target: CommandTarget::Panel,
+        cwd: None,
+        env: Vec::new(),
+    };
+    model.add(spec, Scope::Project);
+
+    let plan = model.plan_save(Some(TEAM), None).unwrap();
+
+    assert!(
+        plan.team
+            .as_deref()
+            .is_some_and(|team| team.contains("command = \"adb logcat\"\ntarget = \"panel\"\n"))
+    );
+    let buttons = merged(&plan, Some(TEAM), None);
+    assert!(matches!(
+        &buttons[2].action,
+        ButtonAction::Command(CommandAction {
+            target: CommandTarget::Panel,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn reordering_moves_tables_with_their_comments() {
     let mut model = model(Some(TEAM), None);
 

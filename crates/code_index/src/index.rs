@@ -169,6 +169,11 @@ impl CodeIndex {
         &self.root
     }
 
+    /// Number of indexed source files, without walking them as [`CodeIndex::stats`] does.
+    pub fn file_count(&self) -> usize {
+        self.by_path.len()
+    }
+
     /// `(mtime, size)` of every indexed file, keyed by relative path, for [`refresh_in_batches`].
     pub fn stamps(&self) -> HashMap<String, (u64, u64)> {
         self.live_files()

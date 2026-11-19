@@ -115,11 +115,12 @@ impl ActionKind {
     }
 }
 
-const TARGETS: [(CommandTarget, &str); 4] = [
+const TARGETS: [(CommandTarget, &str); 5] = [
     (CommandTarget::Current, "Current session"),
     (CommandTarget::NewTab, "New tab"),
     (CommandTarget::SplitRight, "Split right"),
     (CommandTarget::SplitDown, "Split down"),
+    (CommandTarget::Panel, "Bottom panel"),
 ];
 
 const PLACEMENTS: [(Placement, &str); 3] = [
