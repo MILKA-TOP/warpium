@@ -12,6 +12,8 @@ pub enum RunConfigKind {
     LaunchConfig(String),
     /// An Android application module to build, install and start, by Gradle path (`:app`).
     AndroidApp(String),
+    /// A JetBrains run configuration of the project, by its key.
+    IdeConfig(String),
 }
 
 /// One entry of the run-configurations dropdown.

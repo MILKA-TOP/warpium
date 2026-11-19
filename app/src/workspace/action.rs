@@ -908,6 +908,9 @@ pub enum WorkspaceAction {
     CustomizeProjectToolbar,
     /// Warpium: toggles the project toolbar.
     ToggleProjectToolbar,
+    /// Warpium: toggles importing the project's JetBrains run configurations into the project
+    /// toolbar.
+    ToggleIdeRunConfigs,
     /// Warpium: toggles the Kotlin/Java code index behind Go to Class and Go to Symbol.
     ToggleCodeIndex,
     /// Warpium: changes the active tab's project root (lock, unlock, change or add folders).
@@ -1287,6 +1290,7 @@ impl WorkspaceAction {
             | EditPersonalToolbarOverrides
             | CustomizeProjectToolbar
             | ToggleProjectToolbar
+            | ToggleIdeRunConfigs
             | ToggleCodeIndex
             // Saved by the handler once the project root has changed (some actions wait for a
             // folder picker).

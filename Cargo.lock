@@ -15671,6 +15671,7 @@ dependencies = [
  "warpium_android",
  "warpium_bottom_panel",
  "warpium_emulator",
+ "warpium_ide_run_configs",
  "warpium_project_root",
  "warpium_project_toolbar",
  "warpium_search_everywhere",
@@ -16516,6 +16517,16 @@ dependencies = [
  "instant",
  "log",
  "tempfile",
+]
+
+[[package]]
+name = "warpium_ide_run_configs"
+version = "0.1.0"
+dependencies = [
+ "roxmltree 0.21.1",
+ "serde_json",
+ "tempfile",
+ "warpium_project_toolbar",
 ]
 
 [[package]]

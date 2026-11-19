@@ -32,6 +32,14 @@ pub struct ToolbarUserState {
     /// Project roots whose Gradle build the user allowed Android runs to execute.
     #[serde(default)]
     trusted_android_builds: BTreeSet<String>,
+    /// The fingerprint of the shared IDE run configuration commands the user trusted, per
+    /// project root.
+    #[serde(default)]
+    trusted_ide_run_configs: BTreeMap<String, String>,
+    /// The per-configuration signatures behind that fingerprint, per project root, so the prompt
+    /// after a change can tell what differs.
+    #[serde(default)]
+    trusted_ide_commands: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl ToolbarUserState {
@@ -97,6 +105,32 @@ impl ToolbarUserState {
 
     pub fn trust_android_builds(&mut self, root: &Path) {
         self.trusted_android_builds.insert(key(root));
+    }
+
+    /// Whether the user trusted exactly this set of the project's shared IDE run configuration
+    /// commands.
+    pub fn trusts_ide_run_configs(&self, root: &Path, fingerprint: &str) -> bool {
+        self.trusted_ide_run_configs
+            .get(&key(root))
+            .is_some_and(|trusted| trusted == fingerprint)
+    }
+
+    /// Trusts the shared IDE run configuration commands with this fingerprint, made of these
+    /// per-configuration signatures.
+    pub fn trust_ide_run_configs(
+        &mut self,
+        root: &Path,
+        fingerprint: &str,
+        signatures: BTreeMap<String, String>,
+    ) {
+        self.trusted_ide_run_configs
+            .insert(key(root), fingerprint.to_owned());
+        self.trusted_ide_commands.insert(key(root), signatures);
+    }
+
+    /// The signatures recorded with the last trusted IDE run configurations, if any.
+    pub fn trusted_ide_commands(&self, root: &Path) -> Option<&BTreeMap<String, String>> {
+        self.trusted_ide_commands.get(&key(root))
     }
 
     pub fn selected_run_config(&self, root: &Path) -> Option<&str> {

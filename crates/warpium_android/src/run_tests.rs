@@ -85,6 +85,7 @@ fn request(package: &str, metadata: Option<PathBuf>, timeout: Duration) -> Launc
         metadata,
         timeout,
         poll: Duration::from_millis(1),
+        target: LaunchTarget::DefaultActivity,
     }
 }
 
@@ -120,6 +121,30 @@ fn launches_once_the_install_time_changes() {
             .last()
             .is_some_and(|request| request.contains("resolve-activity"))
     );
+}
+
+#[test]
+fn launches_the_requested_activity() {
+    let server = device(
+        "com.example",
+        0,
+        1,
+        "Starting: Intent
+",
+    );
+
+    let outcome = run(
+        &server,
+        LaunchRequest {
+            target: LaunchTarget::Activity(".debug.MenuActivity".to_owned()),
+            ..request("com.example", None, Duration::from_secs(10))
+        },
+    );
+
+    assert_eq!(outcome, LaunchOutcome::Launched("com.example".to_owned()));
+    assert!(server.requests().last().is_some_and(|request| {
+        request.contains("am start -n com.example/.debug.MenuActivity")
+    }));
 }
 
 #[test]

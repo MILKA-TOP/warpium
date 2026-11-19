@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::*;
@@ -57,6 +58,34 @@ fn state_survives_a_json_round_trip() {
         restored.selected_run_config(Path::new("/work/app")),
         Some("button:assemble")
     );
+}
+
+#[test]
+fn ide_run_config_trust_is_per_project_and_fingerprint() {
+    let mut state = ToolbarUserState::default();
+    let root = Path::new("/work/app");
+    let signatures = BTreeMap::from([("ide:Gradle:lint".to_owned(), "sha256:sig".to_owned())]);
+
+    assert!(!state.trusts_ide_run_configs(root, "sha256:one"));
+    assert_eq!(state.trusted_ide_commands(root), None);
+
+    state.trust_ide_run_configs(root, "sha256:one", signatures.clone());
+
+    assert!(state.trusts_ide_run_configs(root, "sha256:one"));
+    assert!(!state.trusts_ide_run_configs(root, "sha256:two"));
+    assert!(!state.trusts_ide_run_configs(Path::new("/work/other"), "sha256:one"));
+    assert_eq!(state.trusted_ide_commands(root), Some(&signatures));
+    // The toolbar file's own trust is separate.
+    assert!(!state.is_trusted(root, "sha256:one"));
+    assert_eq!(ToolbarUserState::from_json(&state.to_json()), state);
+}
+
+#[test]
+fn state_saved_before_ide_run_configs_still_loads() {
+    let state = ToolbarUserState::from_json(r#"{"trusted":{"/work/app":"sha256:one"}}"#);
+
+    assert!(state.is_trusted(Path::new("/work/app"), "sha256:one"));
+    assert!(!state.trusts_ide_run_configs(Path::new("/work/app"), "sha256:one"));
 }
 
 #[test]
