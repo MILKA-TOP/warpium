@@ -9,7 +9,10 @@ use std::time::{Duration, SystemTime};
 use instant::Instant;
 
 use crate::adb::{AdbClient, shell_quote};
-use crate::project::{application_id_from_metadata, launch_app_command};
+use crate::project::{
+    application_id_from_metadata, launch_activity_command, launch_app_command,
+    launch_deep_link_command,
+};
 use crate::worker::WorkerHandle;
 
 /// The shell command that prints the package's `lastUpdateTime` line (nothing when it isn't
@@ -51,6 +54,28 @@ pub enum LaunchOutcome {
     Failed(String),
 }
 
+/// What to start once the app is installed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum LaunchTarget {
+    /// The launcher activity.
+    #[default]
+    DefaultActivity,
+    /// This activity, fully qualified or relative to the package (`.MainActivity`).
+    Activity(String),
+    DeepLink(String),
+}
+
+impl LaunchTarget {
+    /// The device shell command that starts it in `package`.
+    pub fn command(&self, package: &str) -> String {
+        match self {
+            LaunchTarget::DefaultActivity => launch_app_command(package),
+            LaunchTarget::Activity(activity) => launch_activity_command(package, activity),
+            LaunchTarget::DeepLink(link) => launch_deep_link_command(package, link),
+        }
+    }
+}
+
 /// What [`spawn_launch_after_install`] waits for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchRequest {
@@ -63,10 +88,11 @@ pub struct LaunchRequest {
     pub metadata: Option<PathBuf>,
     pub timeout: Duration,
     pub poll: Duration,
+    pub target: LaunchTarget,
 }
 
 /// Waits (on a background thread) until the requested package is (re)installed, then starts
-/// its launcher activity and calls `done`. The install time is read first, so start this before
+/// its [`LaunchTarget`] and calls `done`. The install time is read first, so start this before
 /// the install begins. Dropping the handle cancels the wait.
 pub fn spawn_launch_after_install(
     client: AdbClient,
@@ -80,6 +106,7 @@ pub fn spawn_launch_after_install(
             metadata,
             timeout,
             poll,
+            target,
         } = request;
         let deadline = Instant::now() + timeout;
         // `None` when the device didn't answer; `Some(None)` when the package isn't installed.
@@ -134,7 +161,7 @@ pub fn spawn_launch_after_install(
         if control.is_stopped() {
             return;
         }
-        let outcome = match client.shell(&serial, &launch_app_command(&package)) {
+        let outcome = match client.shell(&serial, &target.command(&package)) {
             Ok(output) if launch_failed(&output) => LaunchOutcome::Failed(output.trim().to_owned()),
             Ok(_) => LaunchOutcome::Launched(package),
             Err(err) => LaunchOutcome::Failed(err.to_string()),

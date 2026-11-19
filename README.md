@@ -73,6 +73,7 @@ Buttons for your project's everyday commands sit in the top-right corner of the 
 - Run **Edit personal toolbar overrides** to add, change or hide buttons just for yourself. These are kept in `~/.warp-oss/projects/`, never in the project.
 - A button can run a command in the current tab, a new tab or a split, run a saved workflow, open a launch configuration or tab config, open a link, or trigger a Warpium action such as opening the Project Explorer.
 - Commands from a committed `toolbar.toml` only run after you confirm that you trust it. Warpium lists them first, and asks again whenever the file changes. Your personal buttons never ask.
+- The run menu also lists the project's Android Studio and IntelliJ IDEA run configurations (Gradle, shell script, Android app, JUnit and compound ones from `.run/`, `.idea/runConfigurations/` and `.idea/workspace.xml`) under **IDE run configurations**, starting with the one selected in the IDE. Shared ones ask for your trust like `toolbar.toml`; turn them off with `warpium.ide_run_configs = false`.
 - Turn the toolbar off in **Settings → Features → Warpium**, from the command palette, or with `warpium.project_toolbar = false` in `settings.toml`.
 
 ## Android: run on a device, and Logcat

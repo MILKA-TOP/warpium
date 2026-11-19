@@ -211,3 +211,18 @@ fn launch_app_command_quotes_the_package() {
     assert!(command.contains("monkey -p com.example.app"));
     assert!(launch_app_command("evil;reboot").contains("'evil;reboot'"));
 }
+
+#[test]
+fn activity_and_deep_link_commands_quote_their_arguments() {
+    assert_eq!(
+        launch_activity_command("com.example", ".MainActivity"),
+        "am start -n com.example/.MainActivity -a android.intent.action.MAIN -c \
+         android.intent.category.LAUNCHER"
+    );
+    assert!(launch_activity_command("com.example", "A;reboot").contains("'com.example/A;reboot'"));
+    assert_eq!(
+        launch_deep_link_command("com.example", "app://home?tab=1&x=2"),
+        "am start -a android.intent.action.VIEW -c android.intent.category.BROWSABLE -d \
+         'app://home?tab=1&x=2' com.example"
+    );
+}

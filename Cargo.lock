@@ -15672,6 +15672,7 @@ dependencies = [
  "warpium_bottom_panel",
  "warpium_container_paste",
  "warpium_emulator",
+ "warpium_ide_run_configs",
  "warpium_project_root",
  "warpium_project_toolbar",
  "warpium_search_everywhere",
@@ -16520,6 +16521,16 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "warpium_ide_run_configs"
+version = "0.1.0"
+dependencies = [
+ "roxmltree 0.21.1",
+ "serde_json",
+ "tempfile",
+ "warpium_project_toolbar",
 ]
 
 [[package]]

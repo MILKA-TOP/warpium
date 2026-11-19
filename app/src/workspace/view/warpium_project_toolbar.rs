@@ -255,8 +255,21 @@ impl Workspace {
             }
             ProjectToolbarEvent::MenuClosed => self.focus_active_tab(ctx),
             ProjectToolbarEvent::ContentChanged => ctx.notify(),
-            ProjectToolbarEvent::RunAndroidApp { root, module } => {
-                self.run_android_app(root, module, ctx)
+            ProjectToolbarEvent::RunAndroidApp {
+                root,
+                module,
+                launch,
+            } => self.run_android_app(root, module, launch.as_ref(), ctx),
+            ProjectToolbarEvent::RunIdeCommand {
+                root,
+                title,
+                command,
+            } => {
+                let panel_key = format!("ide:{title}");
+                self.run_project_toolbar_command(root, command, title, &panel_key, ctx)
+            }
+            ProjectToolbarEvent::ShowError(message) => {
+                self.show_project_toolbar_error(message.clone(), ctx)
             }
             ProjectToolbarEvent::OpenLogcat => {
                 self.open_android_logcat(None, true, ctx);

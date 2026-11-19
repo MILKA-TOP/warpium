@@ -1,0 +1,16 @@
+[package]
+name = "warpium_ide_run_configs"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: reads JetBrains (Android Studio, IntelliJ IDEA) run configurations and maps them to what the project toolbar can run"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+roxmltree = "0.21.1"
+serde_json.workspace = true
+warpium_project_toolbar.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
