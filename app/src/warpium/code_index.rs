@@ -23,6 +23,7 @@ use parking_lot::RwLock;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
 use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate, RepositoryWatchMode};
 use warp_util::standardized_path::StandardizedPath;
+use warpium_search_everywhere::{IndexStatus, ProjectSignals};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::keymap::EditableBinding;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WeakModelHandle};
@@ -252,6 +253,50 @@ pub(crate) fn ensure_project(
     CodeIndexModel::handle(ctx).update(ctx, |model, ctx| model.open_project(root, ctx));
 }
 
+/// Whether the cmd-O project search shows its code index tabs for the project at `root`; see
+/// [`ensure_project`] for `require_build_files`. Only a Gradle or Maven project, or one indexed
+/// before, is indexed (in the background) and gets tabs, unless its index turns out to hold no
+/// Kotlin or Java sources.
+pub(crate) fn open_project_for_search_everywhere(
+    root: Option<PathBuf>,
+    require_build_files: bool,
+    ctx: &mut AppContext,
+) -> bool {
+    let Some(root) = root else {
+        return false;
+    };
+    if !is_enabled(ctx) || !ctx.has_singleton_model::<CodeIndexModel>() {
+        return false;
+    }
+    // The index root and its snapshot path are canonical.
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
+    if !is_indexable_root(&root, require_build_files) {
+        return false;
+    }
+    let signals = ProjectSignals {
+        has_build_files: has_build_files(&root),
+        has_snapshot: code_index::default_snapshot_path(&root).is_some_and(|path| path.is_file()),
+    };
+    if !warpium_search_everywhere::should_index(signals) {
+        return false;
+    }
+    ensure_project(Some(root.clone()), require_build_files, ctx);
+    let Some(handle) = CodeIndexModel::as_ref(ctx)
+        .handle_for_search()
+        .filter(|handle| handle.root == root)
+    else {
+        return false;
+    };
+    let status = match handle.state {
+        IndexState::Indexing => IndexStatus::Indexing,
+        IndexState::Ready => IndexStatus::Ready {
+            // Never wait for a batch being applied on the main thread.
+            files: handle.index.try_read().map(|index| index.file_count()),
+        },
+    };
+    warpium_search_everywhere::offers_code_tabs(signals, status)
+}
+
 /// Makes sure the project holding `file` is indexed, when the current project doesn't hold it.
 /// `locked_roots` are the folders the active tab's project is locked to (empty when it follows
 /// its terminals); see [`code_index::project_root_for_file`] for the precedence.
@@ -453,6 +498,11 @@ fn usage_items(usages: Vec<Usage>) -> Vec<NavigationItem> {
 }
 
 fn is_indexable_root(root: &Path, require_build_files: bool) -> bool {
+    let too_broad = root.parent().is_none() || dirs::home_dir().is_some_and(|home| home == root);
+    !too_broad && (!require_build_files || has_build_files(root))
+}
+
+fn has_build_files(root: &Path) -> bool {
     const BUILD_FILES: &[&str] = &[
         "settings.gradle.kts",
         "settings.gradle",
@@ -460,8 +510,7 @@ fn is_indexable_root(root: &Path, require_build_files: bool) -> bool {
         "build.gradle",
         "pom.xml",
     ];
-    let too_broad = root.parent().is_none() || dirs::home_dir().is_some_and(|home| home == root);
-    !too_broad && (!require_build_files || BUILD_FILES.iter().any(|file| root.join(file).is_file()))
+    BUILD_FILES.iter().any(|file| root.join(file).is_file())
 }
 
 impl CodeIndexModel {

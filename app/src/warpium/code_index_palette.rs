@@ -11,7 +11,7 @@ use warpui::elements::{Align, ConstrainedBox, Flex, Highlight, ParentElement, Sh
 use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Element, Entity, SingletonEntity};
 
-use super::code_index::{CodeIndexModel, IndexState, NavigationItem};
+use super::code_index::{CodeIndexModel, IndexHandle, IndexState, NavigationItem};
 use crate::appearance::Appearance;
 use crate::search::action::search_item::styles;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
@@ -23,7 +23,7 @@ use crate::search::result_renderer::ItemHighlightState;
 use crate::ui_components::icons::Icon as UiIcon;
 
 /// Results shown per query.
-const MAX_RESULTS: usize = 100;
+pub(super) const MAX_RESULTS: usize = 100;
 
 /// Searches the current project's code index.
 pub(crate) struct CodeSymbolDataSource {
@@ -48,10 +48,7 @@ impl AsyncDataSource for CodeSymbolDataSource {
         query: &Query,
         app: &AppContext,
     ) -> BoxFuture<'static, Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper>> {
-        let handle = app
-            .has_singleton_model::<CodeIndexModel>()
-            .then(|| CodeIndexModel::as_ref(app).handle_for_search())
-            .flatten();
+        let handle = search_handle(app);
         let scope = self.scope;
         let text = query.text.clone();
         async move {
@@ -60,37 +57,61 @@ impl AsyncDataSource for CodeSymbolDataSource {
                     "Open a project folder to use Go to Class and Go to Symbol".to_owned(),
                 ))]);
             };
-            // Runs on a background executor; the read lock is shared with other searches and
-            // only waits for a batch being applied.
-            let results = handle.index.read().search(&text, scope, MAX_RESULTS);
-            let count = results.len();
-            let mut items: Vec<QueryResult<CommandPaletteItemAction>> = results
-                .into_iter()
-                .enumerate()
-                .map(|(rank, result)| {
-                    QueryResult::from(SymbolSearchItem {
-                        root: handle.root.clone(),
-                        // The mixer sorts by score, so the score keeps the index's ranking.
-                        score: (count - rank) as f64,
-                        matched_indices: char_indices(&result.symbol.name, &result.matched_indices),
-                        symbol: result.symbol,
-                    })
-                })
-                .collect();
-            if handle.state == IndexState::Indexing {
-                let project = handle
-                    .root
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                items.push(QueryResult::from(StatusItem::footer(format!(
-                    "Indexing {project}… results may be incomplete"
-                ))));
-            }
+            let mut items: Vec<QueryResult<CommandPaletteItemAction>> =
+                search_symbols(&handle, &text, scope)
+                    .into_iter()
+                    .map(QueryResult::from)
+                    .collect();
+            items.extend(indexing_footer(&handle).map(QueryResult::from));
             Ok(items)
         }
         .boxed()
     }
+}
+
+/// The current project's index, if there is one.
+pub(super) fn search_handle(app: &AppContext) -> Option<IndexHandle> {
+    app.has_singleton_model::<CodeIndexModel>()
+        .then(|| CodeIndexModel::as_ref(app).handle_for_search())
+        .flatten()
+}
+
+/// Up to [`MAX_RESULTS`] rows for `text`, best first. Blocks on the index's read lock, so call it
+/// on a background executor; the lock is shared with other searches and only waits for a batch
+/// being applied.
+pub(super) fn search_symbols(
+    handle: &IndexHandle,
+    text: &str,
+    scope: SearchScope,
+) -> Vec<SymbolSearchItem> {
+    let results = handle.index.read().search(text, scope, MAX_RESULTS);
+    let count = results.len();
+    results
+        .into_iter()
+        .enumerate()
+        .map(|(rank, result)| SymbolSearchItem {
+            root: handle.root.clone(),
+            // The mixer sorts by score, so the score keeps the index's ranking.
+            score: (count - rank) as f64,
+            matched_indices: char_indices(&result.symbol.name, &result.matched_indices),
+            symbol: result.symbol,
+        })
+        .collect()
+}
+
+/// A footer saying results may be incomplete, while the project is being indexed.
+pub(super) fn indexing_footer(handle: &IndexHandle) -> Option<StatusItem> {
+    if handle.state != IndexState::Indexing {
+        return None;
+    }
+    let project = handle
+        .root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Some(StatusItem::footer(format!(
+        "Indexing {project}… results may be incomplete"
+    )))
 }
 
 /// Lists the results of the last Go to Definition or Find Usages, filtered by the query.
@@ -209,9 +230,9 @@ fn char_indices(name: &str, byte_offsets: &[usize]) -> Vec<usize> {
 }
 
 #[derive(Debug)]
-struct SymbolSearchItem {
+pub(super) struct SymbolSearchItem {
     root: PathBuf,
-    symbol: SymbolInfo,
+    pub(super) symbol: SymbolInfo,
     score: f64,
     matched_indices: Vec<usize>,
 }
@@ -472,14 +493,14 @@ fn kind_name(kind: SymbolKind) -> &'static str {
 /// A disabled row: why results are missing or incomplete (at the bottom), or a heading over a
 /// group of rows (placed by its score).
 #[derive(Debug)]
-struct StatusItem {
+pub(super) struct StatusItem {
     message: String,
     score: f64,
 }
 
 impl StatusItem {
     /// A message below every result, whose scores are positive.
-    fn footer(message: String) -> Self {
+    pub(super) fn footer(message: String) -> Self {
         Self {
             message,
             score: -1.,

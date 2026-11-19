@@ -462,9 +462,11 @@ fn refresh_without_changes_parses_nothing() {
 fn stats_count_files_and_symbols() {
     let dir = fixture("kmp");
 
-    let stats = CodeIndex::build(dir.path(), 2).stats();
+    let index = CodeIndex::build(dir.path(), 2);
+    let stats = index.stats();
 
     assert_eq!(stats.files, 5);
+    assert_eq!(index.file_count(), 5);
     assert_eq!(stats.symbols, 23);
     assert!(stats.heap_bytes > 0);
 }

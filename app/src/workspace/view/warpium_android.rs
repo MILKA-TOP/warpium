@@ -32,8 +32,9 @@ impl Workspace {
             .update(ctx, |model, ctx| model.set_project_root(root, ctx));
     }
 
-    /// Opens the Logcat pane below the active pane, or shows the window's existing one, and
-    /// optionally opens one of its menus. `focus` moves the focus to it.
+    /// Opens the Logcat pane in the active tab's bottom panel (below the active pane when the
+    /// panel is off), or shows the window's existing one, and optionally opens one of its menus.
+    /// `focus` moves the focus to it.
     pub(super) fn open_android_logcat(
         &mut self,
         menu: Option<LogcatMenu>,
@@ -47,6 +48,17 @@ impl Workspace {
         AndroidModel::handle(ctx).update(ctx, |android, ctx| {
             android.ensure_started(project_root.as_deref(), ctx)
         });
+
+        if let Some(view) = self.open_android_logcat_in_bottom_panel(
+            project_root.clone(),
+            focus || menu.is_some(),
+            ctx,
+        ) {
+            if let (Some(view), Some(menu)) = (&view, menu) {
+                view.update(ctx, |view, ctx| view.show_menu(menu, ctx));
+            }
+            return view;
+        }
 
         let existing = LogcatPaneManager::as_ref(ctx).find_pane(ctx.window_id());
         let view = match existing {
@@ -89,9 +101,10 @@ impl Workspace {
         view
     }
 
-    /// Runs `module` on the selected device: `./gradlew :<module>:installDebug` visibly in the
-    /// active session (with `ANDROID_SERIAL` set), then, once the device reports the new
-    /// install, starts `launch` (nothing when `None`). Logcat follows the app.
+    /// Runs `module` on the selected device: `./gradlew :<module>:installDebug` visibly (with
+    /// `ANDROID_SERIAL` set) in the module's bottom panel sub-tab (reused while idle) or, with the
+    /// panel off, in the active session; then, once the device reports the new install, starts
+    /// `launch` (nothing when `None`). Logcat follows the app.
     pub(super) fn run_android_app(
         &mut self,
         root: &Path,
@@ -127,14 +140,20 @@ impl Workspace {
         } else {
             "gradle"
         };
+        let target = if crate::warpium::bottom_panel::is_enabled(ctx) {
+            CommandTarget::Panel
+        } else {
+            CommandTarget::Current
+        };
         let command = CommandAction {
             command: format!("{gradle} {}", module.install_task(RUN_VARIANT)),
-            target: CommandTarget::Current,
+            target,
             cwd: None,
             env: BTreeMap::from([("ANDROID_SERIAL".to_owned(), serial)]),
         };
         let title = format!("Run {}", module.display_name());
-        self.run_project_toolbar_command(root, &command, &title, ctx);
+        let panel_key = format!("android-run:{}", module.display_name());
+        self.run_project_toolbar_command(root, &command, &title, &panel_key, ctx);
 
         let Some(package) = package else {
             if launch.is_none() {

@@ -753,6 +753,8 @@ pub enum FeaturesPageAction {
     ToggleWarpiumIdeRunConfigs,
     /// Warpium: toggles registering the Logcat MCP server for Warp's agent.
     ToggleWarpiumLogcatMcp,
+    /// Warpium: toggles the bottom panel.
+    ToggleWarpiumBottomPanel,
     ToggleAsyncFind,
     ToggleNotifications,
     ToggleRestoreSession,
@@ -917,6 +919,10 @@ impl FeaturesPageAction {
                 value: to_string(
                     *crate::warpium::sync_settings::WarpiumSettings::as_ref(ctx).project_toolbar,
                 ),
+            },
+            Self::ToggleWarpiumBottomPanel => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleWarpiumBottomPanel".to_string(),
+                value: to_string(crate::warpium::bottom_panel::is_enabled(ctx)),
             },
             Self::ToggleWarpiumIdeRunConfigs => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleWarpiumIdeRunConfigs".to_string(),
@@ -1524,6 +1530,14 @@ impl TypedActionView for FeaturesPageView {
                     ctx,
                     |settings, ctx| {
                         report_if_error!(settings.project_toolbar.toggle_and_save_value(ctx));
+                    },
+                );
+            }
+            ToggleWarpiumBottomPanel => {
+                crate::warpium::sync_settings::WarpiumBottomPanelSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        report_if_error!(settings.bottom_panel.toggle_and_save_value(ctx));
                     },
                 );
             }
@@ -3157,6 +3171,7 @@ impl FeaturesPageView {
                 "Warpium",
                 vec![
                     Box::new(WarpiumProjectToolbarWidget::default()),
+                    Box::new(WarpiumBottomPanelWidget::default()),
                     Box::new(WarpiumIdeRunConfigsWidget::default()),
                     Box::new(WarpiumLogcatMcpWidget::default()),
                     Box::new(WarpiumAgentMcpInstallWidget::default()),
@@ -7477,6 +7492,59 @@ impl SettingsWidget for WarpiumProjectToolbarWidget {
             Some(
                 "Buttons from the project's .warpium/toolbar.toml and your personal overrides, \
                  in the top-right corner of the window."
+                    .into(),
+            ),
+        )
+    }
+}
+
+/// Warpium: the per-tab bottom panel below the split layout.
+#[derive(Default)]
+struct WarpiumBottomPanelWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for WarpiumBottomPanelWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "warpium bottom panel dock tool window hide running terminals logcat chips cmd-j"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        use crate::warpium::sync_settings::BottomPanel;
+
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Bottom panel".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                BottomPanel::storage_key(),
+                BottomPanel::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(crate::warpium::bottom_panel::is_enabled(app))
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleWarpiumBottomPanel);
+                })
+                .finish(),
+            Some(
+                "A dock below each tab's panes where terminals and Logcat keep running out of \
+                 the way; cmd-j shows it or collapses it to a strip of status chips."
                     .into(),
             ),
         )

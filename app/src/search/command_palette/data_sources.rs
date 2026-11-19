@@ -122,6 +122,12 @@ impl DataSourceStore {
                 );
             }
 
+            // Warpium: the project search's All tab also lists files.
+            #[cfg_attr(
+                target_family = "wasm",
+                allow(unused_mut, unused_variables, unused_assignments)
+            )]
+            let mut warpium_files_source = None;
             if FeatureFlag::CommandPaletteFileSearch.is_enabled() && !is_shared_session_viewer {
                 let file_search_model = FileSearchModel::as_ref(ctx);
                 let is_in_git_repo = file_search_model.repo_root_location(ctx).is_some();
@@ -131,6 +137,7 @@ impl DataSourceStore {
                 } else {
                     ctx.add_model(|ctx| files::data_source::FileDataSource::new_current_folder(ctx))
                 };
+                warpium_files_source = Some(files_data_source.clone());
                 mixer.add_async_source(
                     files_data_source,
                     HashSet::from([QueryFilter::Files]),
@@ -143,7 +150,8 @@ impl DataSourceStore {
                 );
             }
 
-            // Warpium: Go to Class / Go to Symbol, only while their filter is active.
+            // Warpium: Go to Class / Go to Symbol and the project search's All tab, only while
+            // their filter is active.
             #[cfg(not(target_family = "wasm"))]
             if crate::warpium::code_index::is_enabled(ctx) && !is_shared_session_viewer {
                 use code_index::SearchScope;
@@ -168,6 +176,28 @@ impl DataSourceStore {
                         ctx,
                     );
                 }
+                let source = ctx.add_model(|_| {
+                    crate::warpium::search_everywhere::AllTabDataSource::new(
+                        warpium_files_source.map(|source| {
+                            Box::new(source)
+                                as Box<
+                                    dyn crate::search::mixer::AsyncDataSource<
+                                            Action = CommandPaletteItemAction,
+                                        >,
+                                >
+                        }),
+                    )
+                });
+                mixer.add_async_source(
+                    source,
+                    HashSet::from([QueryFilter::CodeAll]),
+                    AddAsyncSourceOptions {
+                        debounce_interval: None,
+                        run_in_zero_state: true,
+                        run_when_unfiltered: false,
+                    },
+                    ctx,
+                );
                 let source = ctx.add_model(|_| CodeNavigationDataSource);
                 mixer.add_async_source(
                     source,

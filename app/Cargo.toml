@@ -276,6 +276,7 @@ warpium_self_update.workspace = true
 warpium_bottom_panel.workspace = true
 warpium_project_toolbar.workspace = true
 warpium_project_root.workspace = true
+warpium_search_everywhere.workspace = true
 warpium_upstream_check.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -1027,8 +1028,6 @@ tab_configs = []
 grouped_tabs = []
 pinned_tabs = []
 warp_control_cli = []
-# Warpium: the bottom panel (FeatureFlag::WarpiumBottomPanel). CI enables it for non-release builds.
-warpium_bottom_panel = []
 agent_harness = []
 oz_handoff = []
 restore_local_subtree = []

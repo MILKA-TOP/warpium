@@ -373,6 +373,13 @@ pub struct PaneDropTargetData {
     id: PaneId,
 }
 
+impl PaneDropTargetData {
+    /// Warpium: the pane under a drop, for bottom panel sub-tabs dropped onto the layout.
+    pub(crate) fn pane_id(&self) -> PaneId {
+        self.id
+    }
+}
+
 impl<P: BackingView> View for PaneView<P> {
     fn ui_name() -> &'static str {
         "PaneView"

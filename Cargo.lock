@@ -15673,6 +15673,7 @@ dependencies = [
  "warpium_ide_run_configs",
  "warpium_project_root",
  "warpium_project_toolbar",
+ "warpium_search_everywhere",
  "warpium_self_update",
  "warpium_upstream_check",
  "warpui",
@@ -16482,6 +16483,10 @@ dependencies = [
 [[package]]
 name = "warpium_bottom_panel"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "warpium_emulator"
@@ -16544,6 +16549,10 @@ dependencies = [
  "toml 0.8.23",
  "toml_edit 0.25.6+spec-1.1.0",
 ]
+
+[[package]]
+name = "warpium_search_everywhere"
+version = "0.1.0"
 
 [[package]]
 name = "warpium_self_update"

@@ -238,8 +238,9 @@ jobs:
           # schema, so the bundle ships without settings_schema.json.
           SKIP_SETTINGS_SCHEMA: '1'
           # Features still in development (dogfood) are built into branch and PR artifacts so
-          # they can be tested, never into releases.
-          DOGFOOD_FEATURES: ${{ needs.preflight.outputs.release_tag == '' && ',warpium_bottom_panel' || '' }}
+          # they can be tested, never into releases: list them, comma-prefixed (such as
+          # ',my_feature'), in the first string. None right now.
+          DOGFOOD_FEATURES: ${{ needs.preflight.outputs.release_tag == '' && '' || '' }}
           PROFILE: ${{ matrix.profile }}
           # Debug builds: no debuginfo at all (smaller objects, faster links, a smaller
           # cache). Panics still print symbolized backtraces from the symbol table.

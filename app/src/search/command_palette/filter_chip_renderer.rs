@@ -118,7 +118,8 @@ impl FilterChipRenderer for QueryFilter {
             | QueryFilter::CurrentDirectoryConversations
             | QueryFilter::CodeClasses
             | QueryFilter::CodeSymbols
-            | QueryFilter::CodeNavigation => appearance
+            | QueryFilter::CodeNavigation
+            | QueryFilter::CodeAll => appearance
                 .theme()
                 .main_text_color(appearance.theme().surface_2())
                 .into_solid(),
