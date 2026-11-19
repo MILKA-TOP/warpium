@@ -93,11 +93,14 @@ jobs:
             crates+=(-p "$(basename "$dir")")
           done
           echo "FORK_CRATES=${crates[*]}" >> "$GITHUB_ENV"
-          cargo nextest run --locked "${crates[@]}" -p warp --no-run
+          # --lib: only the app's unit-test binary, not its seven binaries. nice: keep the runner
+          # agent responsive (the previous run starved it and the runner was lost).
+          nice -n 15 cargo nextest run --locked "${crates[@]}" --no-run
+          nice -n 15 cargo nextest run --locked -p warp --lib --no-run
           df -h /
 
       - name: Run fork crate tests
         run: cargo nextest run --locked --no-fail-fast $FORK_CRATES
 
       - name: Run Warpium tests in the app crate
-        run: cargo nextest run --locked --no-fail-fast -p warp -E 'test(/warpium/)'
+        run: cargo nextest run --locked --no-fail-fast -p warp --lib -E 'test(/warpium/)'

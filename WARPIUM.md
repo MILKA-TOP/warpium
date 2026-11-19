@@ -747,7 +747,7 @@ gated to `warpdotdev` and don't run here. Don't change whether workflows are ena
 - **Unit tests:** `.github/workflows/warpium-tests.yml` ("Warpium Tests") runs on
   `ubuntu-latest` for the same triggers, in parallel with the macOS build: all tests of the
   fork crates (`crates/warpium_*`, `crates/code_index`) plus the `warp` crate's tests whose path
-  contains `warpium` (`cargo nextest run -p warp -E 'test(/warpium/)'`). Name fork test modules
+  contains `warpium` (`cargo nextest run -p warp --lib -E 'test(/warpium/)'`). Name fork test modules
   so they match (e.g. `warpium_*` files, `app/src/warpium/**`). Upstream's suite isn't run.
 - **Cross-compile caveat:** the Intel runner can't run the arm64 binary that generates
   `settings_schema.json`, so CI builds lack the bundled `modify-settings` agent skill. Local
