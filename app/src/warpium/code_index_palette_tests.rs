@@ -20,6 +20,7 @@ fn usage(exact: bool) -> Usage {
         line_text: "val items = repository.getNewsResources()".to_owned(),
         origin: code_index::Origin::Main,
         exact,
+        via: false,
     }
 }
 
@@ -59,4 +60,42 @@ fn navigation_filter_matches_the_path_or_the_line() {
     assert!(matches_filter(&item, "newsviewmodel"));
     assert!(matches_filter(&item, "getnews"));
     assert!(!matches_filter(&item, "settings"));
+}
+
+#[test]
+fn filtering_out_every_grouped_row_drops_the_heading() {
+    let items = vec![
+        NavigationItem::Usage(usage(true)),
+        NavigationItem::Group("Via implementations/overrides (1)".to_owned()),
+        NavigationItem::Usage(Usage {
+            rel_path: "core/data/FakeRepository.kt".to_owned(),
+            ..usage(true)
+        }),
+    ];
+
+    let kept: Vec<usize> = visible_items(&items, "newsviewmodel")
+        .into_iter()
+        .map(|(rank, _)| rank)
+        .collect();
+
+    assert_eq!(kept, vec![0]);
+}
+
+#[test]
+fn a_heading_stays_while_a_grouped_row_matches() {
+    let items = vec![
+        NavigationItem::Usage(usage(true)),
+        NavigationItem::Group("Via implementations/overrides (1)".to_owned()),
+        NavigationItem::Usage(Usage {
+            rel_path: "core/data/FakeRepository.kt".to_owned(),
+            ..usage(true)
+        }),
+    ];
+
+    let kept: Vec<usize> = visible_items(&items, "fakerepository")
+        .into_iter()
+        .map(|(rank, _)| rank)
+        .collect();
+
+    assert_eq!(kept, vec![1, 2]);
 }

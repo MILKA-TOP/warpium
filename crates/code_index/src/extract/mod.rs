@@ -10,6 +10,7 @@ use arborium_tree_sitter::{Node, Parser, Tree};
 
 use crate::lex::{for_each_identifier, is_keyword};
 use crate::model::{Language, Position, SymbolKind, Visibility};
+use crate::resolve::{TypeNode, supertypes, type_path};
 
 /// A declaration before its strings are interned.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,8 +39,12 @@ pub(crate) struct RawFile {
     pub package: String,
     pub imports: Vec<RawImport>,
     pub symbols: Vec<RawSymbol>,
-    /// Every distinct identifier used in the file's code, for finding usages.
-    pub identifiers: Vec<String>,
+    /// `(index in symbols, dotted name as written)` of every supertype a type declares.
+    pub supertypes: Vec<(u32, String)>,
+    /// Every distinct identifier used in the file's code, for finding usages, one per line.
+    /// One string rather than one per identifier: a file has hundreds, and their allocations
+    /// (made on parse threads, freed after interning) fragmented the heap of a cold build.
+    pub identifiers: String,
 }
 
 thread_local! {
@@ -53,13 +58,13 @@ pub(crate) fn extract(language: Language, source: &[u8]) -> Option<RawFile> {
     let tree = parse(language, source)?;
     let mut file = extract_from_tree(language, &tree, source);
     if let Ok(text) = std::str::from_utf8(source) {
-        let mut seen = HashSet::new();
+        let mut seen: HashSet<&str> = HashSet::new();
         for_each_identifier(text, language, |name, _| {
-            if !is_keyword(name, language) && !seen.contains(name) {
-                seen.insert(name.to_owned());
+            if !is_keyword(name, language) && seen.insert(name) {
+                file.identifiers.push_str(name);
+                file.identifiers.push('\n');
             }
         });
-        file.identifiers = seen.into_iter().collect();
     }
     Some(file)
 }
@@ -113,6 +118,22 @@ fn normalized_text(node: Node, source: &[u8]) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Records the supertypes the type declaration `node` declares, for the symbol at `symbol`.
+fn push_supertypes(
+    language: Language,
+    node: Node,
+    symbol: usize,
+    source: &[u8],
+    out: &mut Vec<(u32, String)>,
+) {
+    for type_node in supertypes(language, node) {
+        let path = type_path(TypeNode::Type(type_node), source);
+        if !path.is_empty() {
+            out.push((symbol as u32, path.join(".")));
+        }
+    }
 }
 
 /// Indexed child access is linear in tree-sitter, so children are collected with a cursor.

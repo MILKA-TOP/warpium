@@ -7,12 +7,18 @@ use std::collections::HashSet;
 use rayon::prelude::*;
 
 use crate::extract::join_container;
+use crate::hierarchy::sort_and_dedup;
 use crate::index::{CodeIndex, SymbolInfo, worker_pool};
+use crate::interner::Sym;
 use crate::layout::place;
 use crate::lex::{for_each_identifier, line_starts, position_of};
 use crate::model::{FileData, Language, Origin, Position, Symbol, Visibility, flags};
 use crate::resolve::{ParsedFile, Resolution, Resolver, SourceFile, same_declaration};
 
+/// Most overriding members and counterparts whose usages a query also lists.
+const MAX_VIA_TARGETS: usize = 200;
+/// Overrides are looked up for at most this many targets.
+const MAX_OVERRIDDEN_TARGETS: usize = 4;
 /// Files whose mentions are resolved one by one, at most; past this, mentions in files that see
 /// the declaration count as approximate usages without resolving.
 const MAX_RESOLVED_FILES: usize = 400;
@@ -35,14 +41,22 @@ pub struct Usage {
     pub origin: Origin,
     /// Resolved to the declaration, rather than a matching name in a file that can see it.
     pub exact: bool,
+    /// A usage of an overriding member or an `expect`/`actual` counterpart (one of
+    /// [`UsagesResult::via`]) rather than of the declaration itself.
+    pub via: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UsagesResult {
     pub name: String,
-    /// The declarations whose usages these are (`expect`/`actual` counterparts included).
+    /// The declarations whose usages these are.
     pub targets: Vec<SymbolInfo>,
-    /// Project code first, then tests and generated code; by path and position.
+    /// Members overriding a member target, and the `expect`/`actual` counterparts of the
+    /// targets, whose usages are listed too, marked [`Usage::via`], as the JetBrains IDEs list
+    /// usages "via implementations".
+    pub via: Vec<SymbolInfo>,
+    /// Usages of the targets, then those of [`UsagesResult::via`]; within each, project code
+    /// first, then tests and generated code; by path and position.
     pub usages: Vec<Usage>,
     /// Files whose text was scanned.
     pub files_scanned: usize,
@@ -70,15 +84,15 @@ impl CodeIndex {
         threads: usize,
     ) -> Option<UsagesResult> {
         let definition = self.find_definition(file, position)?;
-        let targets: Vec<SymbolInfo> = definition
-            .definitions
-            .iter()
+        let mut targets: Vec<SymbolInfo> = definition
+            .primary()
             .map(|definition| definition.symbol.clone())
             .collect();
         if targets.is_empty() {
             return Some(UsagesResult {
                 name: definition.name,
                 targets,
+                via: Vec::new(),
                 usages: Vec::new(),
                 files_scanned: 0,
                 complete: true,
@@ -88,10 +102,43 @@ impl CodeIndex {
             || targets.iter().all(|target| {
                 target.visibility == Visibility::Private && target.rel_path == file.rel_path
             });
+        let mut via: Vec<SymbolInfo> = definition
+            .definitions
+            .iter()
+            .filter(|definition| definition.counterpart)
+            .map(|definition| definition.symbol.clone())
+            .collect();
+        // A name matched by many declarations (an unresolved call) is too vague for overrides.
+        if !only_local && targets.len() <= MAX_OVERRIDDEN_TARGETS {
+            for target in targets.iter().filter(|target| !target.kind.is_type()) {
+                let room = MAX_VIA_TARGETS.saturating_sub(via.len());
+                if room == 0 {
+                    break;
+                }
+                via.extend(self.overriding_members(target, room).0);
+            }
+        }
+        via.retain(|found| !targets.iter().any(|target| same_declaration(target, found)));
+        sort_and_dedup(&mut via);
+        via.truncate(MAX_VIA_TARGETS);
+        let primary = targets.len();
+        targets.extend(via.iter().cloned());
         let search = Search {
             index: self,
             name: &definition.name,
+            target_classes: targets
+                .iter()
+                .map(|target| {
+                    let class = target
+                        .container
+                        .rsplit('.')
+                        .next()
+                        .filter(|class| !class.is_empty());
+                    self.interner.get(class.unwrap_or(&target.name))
+                })
+                .collect(),
             targets: &targets,
+            primary,
             target_reach: targets.iter().map(Reach::of).collect(),
             current: file,
         };
@@ -125,19 +172,29 @@ impl CodeIndex {
             None => jobs.iter().flat_map(run).collect(),
         };
         usages.sort_by(|a, b| {
-            (a.origin, &a.rel_path, a.position.line, a.position.column).cmp(&(
-                b.origin,
-                &b.rel_path,
-                b.position.line,
-                b.position.column,
-            ))
+            (
+                a.via,
+                a.origin,
+                &a.rel_path,
+                a.position.line,
+                a.position.column,
+            )
+                .cmp(&(
+                    b.via,
+                    b.origin,
+                    &b.rel_path,
+                    b.position.line,
+                    b.position.column,
+                ))
         });
         usages.dedup_by(|a, b| a.rel_path == b.rel_path && a.position == b.position);
         let complete = usages.len() <= limit;
         usages.truncate(limit);
+        targets.truncate(primary);
         Some(UsagesResult {
             name: definition.name,
             targets,
+            via,
             usages,
             files_scanned,
             complete,
@@ -154,7 +211,13 @@ enum Job<'a> {
 struct Search<'a> {
     index: &'a CodeIndex,
     name: &'a str,
+    /// The declarations searched for: the query's own first, then [`UsagesResult::via`].
     targets: &'a [SymbolInfo],
+    /// How many of `targets` are the query's own.
+    primary: usize,
+    /// Per target, the name a file must use to resolve a mention to it: its enclosing class
+    /// for a member, else its own name (`None` when no file uses it).
+    target_classes: Vec<Option<Sym>>,
     target_reach: Vec<Reach>,
     current: &'a SourceFile<'a>,
 }
@@ -284,17 +347,24 @@ impl<'a> Search<'a> {
     /// Whether `file` uses the name of a target's enclosing class (a member target) or of the
     /// target itself.
     fn mentions_target_class(&self, file: &FileData) -> bool {
-        self.targets.iter().any(|target| {
-            let class = target
-                .container
-                .rsplit('.')
-                .next()
-                .filter(|class| !class.is_empty());
-            self.index
-                .interner
-                .get(class.unwrap_or(&target.name))
-                .is_some_and(|class| file.identifiers.binary_search(&class).is_ok())
-        })
+        self.mentions_class_of(file, &self.target_classes)
+    }
+
+    /// [`Self::mentions_target_class`] for the query's own targets only.
+    fn mentions_primary_class(&self, file: &FileData) -> bool {
+        self.mentions_class_of(file, &self.target_classes[..self.primary])
+    }
+
+    fn mentions_class_of(&self, file: &FileData, classes: &[Option<Sym>]) -> bool {
+        classes
+            .iter()
+            .flatten()
+            .any(|class| file.identifiers.binary_search(class).is_ok())
+    }
+
+    /// Whether `target` (an index into `targets`) is one of [`UsagesResult::via`].
+    fn is_via(&self, target: usize) -> bool {
+        target >= self.primary
     }
 
     fn sees_any_target(&self, file: &FileData) -> bool {
@@ -367,7 +437,37 @@ impl<'a> Search<'a> {
             return Vec::new();
         }
         let starts = line_starts(&text);
-        let usage = |offset: usize, exact: bool| {
+        // Mentions that are the indexed declarations of the name (overrides, overloads, the
+        // targets themselves) are never usages. Dropping them first spares parsing files that
+        // only declare the name, such as the implementations of an interface. Only when the file
+        // is unchanged since it was indexed, so positions still match.
+        if let Job::Indexed(file) = job
+            && file.size == text.len() as u64
+            && let Some(name) = self.index.interner.get(self.name)
+        {
+            let declared: Vec<Position> = file
+                .symbols
+                .iter()
+                .filter(|symbol| symbol.name == name)
+                .map(|symbol| symbol.name_pos)
+                .collect();
+            if !declared.is_empty() {
+                offsets.retain(|offset| !declared.contains(&position_of(&text, &starts, *offset)));
+                if offsets.is_empty() {
+                    return Vec::new();
+                }
+            }
+        }
+        // In files resolved one by one the declaration a mention resolves to decides; elsewhere
+        // a mention counts as a usage of an override only where the file never names the
+        // classes of the query's own targets.
+        let via_by_file = match job {
+            Job::Current => false,
+            Job::Indexed(file) => {
+                self.primary < self.targets.len() && !self.mentions_primary_class(file)
+            }
+        };
+        let usage = |offset: usize, exact: bool, via: bool| {
             let position = position_of(&text, &starts, offset);
             Usage {
                 rel_path: rel_path.clone(),
@@ -375,6 +475,7 @@ impl<'a> Search<'a> {
                 line_text: line_text(&text, &starts, position.line),
                 origin,
                 exact,
+                via,
             }
         };
         // A mention that looks like a declaration or a named argument may not be a usage at all
@@ -392,7 +493,7 @@ impl<'a> Search<'a> {
         match scan {
             Scan::All { exact } => offsets
                 .into_iter()
-                .map(|offset| usage(offset, exact))
+                .map(|offset| usage(offset, exact, via_by_file))
                 .filter(|usage| !self.is_target_declaration(usage))
                 .collect(),
             Scan::Resolve => {
@@ -418,17 +519,30 @@ impl<'a> Search<'a> {
                         if result.at_declaration {
                             return None;
                         }
-                        let hit = result.definitions.iter().find(|definition| {
-                            self.targets
-                                .iter()
-                                .any(|target| is_same_target(&definition.symbol, target))
-                        })?;
+                        // What the mention resolves to decides over its `expect`/`actual`
+                        // counterparts, and the query's own targets over overrides.
+                        let (target, hit) = result
+                            .definitions
+                            .iter()
+                            .filter_map(|definition| {
+                                let target = self.targets.iter().position(|target| {
+                                    is_same_target(&definition.symbol, target)
+                                })?;
+                                Some((target, definition))
+                            })
+                            .min_by_key(|(target, definition)| {
+                                (definition.counterpart, self.is_via(*target))
+                            })?;
                         let ambiguous =
                             hit.resolution == Resolution::Name && result.primary().count() > 1;
                         if ambiguous && !plausible {
                             return None;
                         }
-                        Some(usage(offset, hit.resolution.is_exact() && !ambiguous))
+                        Some(usage(
+                            offset,
+                            hit.resolution.is_exact() && !ambiguous,
+                            self.is_via(target),
+                        ))
                     })
                     .collect()
             }
