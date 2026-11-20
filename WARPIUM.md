@@ -8,6 +8,10 @@ should stay free of this material.
 
 ## Fork conventions
 
+- The plan, the status of every roadmap item and the owner's decisions are in
+  [docs/warpium/roadmap.md](docs/warpium/roadmap.md); how agents coordinate, use the dev container
+  and the test VM is in [docs/warpium/agent-workflow.md](docs/warpium/agent-workflow.md). Read both
+  before starting roadmap work, and update the roadmap when an item lands or a decision is made.
 - Pull requests always target `MILKA-TOP/warpium` `master`, or a stacked `claude/*` branch.
   Never open them against `warpdotdev/warp`: pass `--repo MILKA-TOP/warpium` to `gh`.
 - Never push to `master` directly. Work on a branch (`claude/<topic>` for agents).
