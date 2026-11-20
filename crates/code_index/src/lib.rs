@@ -40,7 +40,10 @@ pub use persist::{FORMAT_VERSION, PersistError, write_snapshot};
 pub use project_root::{
     FileProjectRoot, FsRootMarkers, ProjectRootKind, RootMarkers, project_root_for_file,
 };
-pub use resolve::{Definition, DefinitionResult, Resolution, SourceFile};
+pub use resolve::{
+    CompletionItem, CompletionResult, CompletionSource, Definition, DefinitionResult, Resolution,
+    SourceFile,
+};
 pub use usages::{Usage, UsagesResult};
 
 /// Whether `position` (zero-based line and character column) is on an identifier in code: not a

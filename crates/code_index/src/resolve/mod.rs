@@ -3,6 +3,7 @@
 //! imports — and member accesses through receivers whose type is written down nearby. What
 //! can't be pinned down falls back to every declaration with the name, marked as such.
 
+mod complete;
 mod syntax;
 
 use std::cell::Cell;
@@ -16,6 +17,7 @@ use crate::layout::{Placement, place};
 use crate::lex::{line_starts, offset_of};
 use crate::model::{Language, Origin, Position, SymbolKind, Visibility, flags};
 
+pub use complete::{CompletionItem, CompletionResult, CompletionSource};
 use syntax::{
     EnclosingClass, LocalDecl, Lookup, Receiver, classify, dotted_name, enclosing_classes,
     find_local, property_type, receiver_shape,
@@ -268,6 +270,7 @@ impl<'a> Resolver<'a> {
                 // methods and variables in separate namespaces.
                 Want::Call => local.is_function || local.is_function_typed,
                 Want::Value | Want::Type => !local.is_function,
+                Want::Any => true,
             }
         {
             let candidates = keep(vec![self.local_decl_candidate(&local)]);
@@ -934,6 +937,7 @@ fn wants(kind: SymbolKind, want: Want) -> bool {
             | SymbolKind::EnumEntry => false,
         },
         Want::Value => !matches!(kind, SymbolKind::Function | SymbolKind::Constructor),
+        Want::Any => kind != SymbolKind::Constructor,
     }
 }
 
