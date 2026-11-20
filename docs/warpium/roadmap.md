@@ -38,7 +38,7 @@ Status: **done** (merged), **review** (PR open), **wip** (in progress), **planne
 | --- | --- | --- |
 | 1 | "Open in new tab" in the Project Explorer opened the repo root, not the chosen folder | done (#8) |
 | 2 | Global search: `.gitignore` toggle and include/exclude globs | planned, together with 22 |
-| 3 | Git log / graph view, identical to IDEA | review (#42) |
+| 3 | Git log / graph view, identical to IDEA | done (#42); follow-ups below |
 | 4 | Notification when upstream Warp has new commits | done (#9, plus the Upstream Watch workflow) |
 | 5 | Paste images into CLI agents inside Docker containers and SSH sessions | done (#41) |
 | 6 | Rebrand to Warpium (name, logo, icon, onboarding, README) | done |
@@ -54,8 +54,8 @@ Status: **done** (merged), **review** (PR open), **wip** (in progress), **planne
 | 16 | Android Studio colors, starting with syntax highlighting | later |
 | 17 | JetBrains "Islands" UI redesign | later |
 | 18 | Code completion and hints in the editor | research done (#43); phase 1 wip |
-| 19 | Git blame / Annotate | review (#42) |
-| 20 | Change markers in the gutter and Rollback, like IDEA | review (#42) |
+| 19 | Git blame / Annotate | done (#42) |
+| 20 | Change markers in the gutter and Rollback, like IDEA | done (#42); follow-ups below |
 | 21 | Search Everywhere on `cmd-O` (All / Classes / Symbols / Files) | done (#39) |
 | 22 | Find in Files on `cmd-shift-F`, plus a Text tab in `cmd-O` | planned |
 
@@ -64,7 +64,8 @@ workflows, the test VM MCP server (`tools/mac-mcp`).
 
 ## Queue
 
-1. Item 3 + 19 + 20 (#42): verify in the test VM against IDEA, fix, merge.
+1. Git tools follow-ups (below) and the rest of IDEA parity from
+   [research/git-tools.md](research/git-tools.md) "Next steps".
 2. Item 18 phase 1: completion from the code index (branch `claude/code-completion`).
 3. Item 18 next phase: library symbols in the index (Kotlin stdlib, AndroidX, Android SDK sources).
 4. Item 22 (with item 2).
@@ -72,8 +73,16 @@ workflows, the test VM MCP server (`tools/mac-mcp`).
 6. Item 13 phase B, remaining PRs (input, launching, stable texture, physical devices).
 7. Items 16 and 17.
 
+Git tools follow-ups found in the VM check of #42: in a narrow pane the commit subject column
+collapses before author and date (IDEA shrinks author and date first); the filter fields collapse to
+empty boxes when narrow; clicking the 2 px gutter marker doesn't open the change (the palette's "Show
+change at cursor" does; IDEA's marker is wider and opens a popup); after Rollback the editor still
+shows the unsaved dot although the text equals HEAD; the hunk bar stays after Esc; the Git Log opens
+as a small split instead of a tool window (dock it in the bottom panel).
+
 Small follow-ups found in VM checks: the Classes tab of `cmd-O` says "No Results Found" on an empty
-query; the Devices pane header shows `DevicesFake AVD 5900` without a separator.
+query; the Devices pane header shows `DevicesFake AVD 5900` and the Git Log header `Git Logkt` without a
+separator.
 
 ## Item details and decisions
 
