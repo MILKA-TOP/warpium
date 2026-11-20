@@ -14,6 +14,11 @@ pub(crate) mod container_paste;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod emulator;
 #[cfg(not(target_family = "wasm"))]
+pub(crate) mod git_log;
+#[cfg(not(target_family = "wasm"))]
+mod git_log_graph;
+pub(crate) mod git_tools;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod logcat;
 #[cfg(not(target_family = "wasm"))]
 mod logcat_list;

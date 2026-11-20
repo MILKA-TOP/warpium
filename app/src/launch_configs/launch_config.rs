@@ -256,6 +256,7 @@ impl TryFrom<PaneNodeSnapshot> for PaneTemplateType {
                 | LeafContents::NetworkLog
                 | LeafContents::WarpiumLogcat
                 | LeafContents::WarpiumDevices
+                | LeafContents::WarpiumGitLog
                 | LeafContents::AIDocument(_)
                 | LeafContents::EnvironmentManagement(_)
                 | LeafContents::AmbientAgent(_) => {

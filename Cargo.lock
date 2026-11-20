@@ -15672,6 +15672,7 @@ dependencies = [
  "warpium_bottom_panel",
  "warpium_container_paste",
  "warpium_emulator",
+ "warpium_git",
  "warpium_ide_run_configs",
  "warpium_project_root",
  "warpium_project_toolbar",
@@ -16521,6 +16522,17 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "warpium_git"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "command",
+ "instant",
+ "log",
+ "tempfile",
 ]
 
 [[package]]

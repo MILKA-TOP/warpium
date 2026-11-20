@@ -162,6 +162,8 @@ pub enum LeafContents {
     WarpiumLogcat,
     /// Warpium's Devices pane. Not persisted: it shows emulators that are running now.
     WarpiumDevices,
+    /// Warpium's Git Log pane. Not persisted: it reopens from the palette in a moment.
+    WarpiumGitLog,
 }
 
 #[cfg(feature = "local_fs")]
@@ -184,6 +186,7 @@ impl LeafContents {
             // Warpium's Logcat pane streams from a device; there is nothing to restore.
             | LeafContents::WarpiumLogcat
             | LeafContents::WarpiumDevices
+            | LeafContents::WarpiumGitLog
             // Environment management panes are opened on-demand via workspace
             // actions and have no persistable state.
             | LeafContents::EnvironmentManagement(_) => false,

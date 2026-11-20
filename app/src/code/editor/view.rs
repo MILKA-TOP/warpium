@@ -283,6 +283,8 @@ pub struct CodeEditorView {
     /// The offset where find references card is anchored (if showing).
     find_references_anchor_offset: Option<CharOffset>,
     window_id: WindowId,
+    /// Warpium: Git Blame annotations shown left of the gutter.
+    warpium_line_annotations: Option<super::warpium_blame_column::LineAnnotations>,
 }
 
 impl CodeEditorView {
@@ -430,7 +432,32 @@ impl CodeEditorView {
             show_find_references_provider: render_options.show_find_references_provider,
             find_references_anchor_offset: None,
             window_id: ctx.window_id(),
+            warpium_line_annotations: None,
         }
+    }
+
+    /// Warpium: shows (or with `None`, hides) Git Blame annotations left of the gutter.
+    pub(crate) fn set_warpium_line_annotations(
+        &mut self,
+        annotations: Option<super::warpium_blame_column::LineAnnotations>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.warpium_line_annotations = annotations;
+        ctx.notify();
+    }
+
+    /// Warpium: lets file editors expand a change from its gutter marker, with a revert button
+    /// (labelled `revert_label`) on hover and in the change bar.
+    pub(crate) fn enable_warpium_change_markers(
+        &mut self,
+        revert_label: &'static str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.display_options.collapsible_diffs = true;
+        self.display_options.revert_diff_hunk =
+            Some(RevertHunkButton::new(true /* is_enabled */));
+        self.nav_bar
+            .update(ctx, |nav_bar, _| nav_bar.set_revert_label(revert_label));
     }
 
     pub fn set_find_references_anchor_offset(&mut self, offset: Option<CharOffset>) {
@@ -586,6 +613,11 @@ impl CodeEditorView {
     pub fn set_base(&self, base: &str, recompute_diff: bool, ctx: &mut ViewContext<Self>) {
         self.model
             .update(ctx, |model, ctx| model.set_base(base, recompute_diff, ctx));
+    }
+
+    /// Removes the diff base, so the content shows no changes.
+    pub fn clear_base(&self, ctx: &mut ViewContext<Self>) {
+        self.model.update(ctx, |model, ctx| model.clear_base(ctx));
     }
 
     pub fn lens_for_line_range(
@@ -2343,6 +2375,15 @@ impl View for CodeEditorView {
         .with_vertical_scrollbar(self.display_options.vertical_scrollbar_appearance)
         .with_propagate_mousewheel_if_not_handled(true)
         .finish();
+        let scrollable = match &self.warpium_line_annotations {
+            Some(annotations) => super::warpium_blame_column::BlameColumn::new(
+                scrollable,
+                render_state.clone(),
+                annotations.clone(),
+            )
+            .finish(),
+            None => scrollable,
+        };
 
         let inner = match self.display_options.vertical_expansion_behavior {
             VerticalExpansionBehavior::InfiniteHeight => scrollable,

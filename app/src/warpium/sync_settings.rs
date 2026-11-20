@@ -210,3 +210,40 @@ mod container_paste {
         },
     ]);
 }
+
+/// Keymap context flag present while [`WarpiumGitSettings::git_gutter_markers`] is on.
+pub(crate) const GIT_GUTTER_MARKERS_CONTEXT_FLAG: &str = "WarpiumGitGutterMarkers";
+
+/// Keymap context flag present while [`WarpiumGitSettings::inline_blame`] is on.
+pub(crate) const INLINE_BLAME_CONTEXT_FLAG: &str = "WarpiumInlineBlame";
+
+pub(crate) use git::WarpiumGitSettings;
+
+// Its own group for the same reason as `agent` above.
+mod git {
+    use ::settings::{SupportedPlatforms, SyncToCloud};
+    use warp_core::define_settings_group;
+
+    define_settings_group!(WarpiumGitSettings, settings: [
+        git_gutter_markers: GitGutterMarkers {
+            type: bool,
+            default: true,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            surface: ::settings::SettingSurfaces::GUI,
+            private: false,
+            toml_path: "warpium.git_gutter_markers",
+            description: "Whether Warpium's code editor marks lines added, changed or deleted since the last commit in its gutter, with Rollback for each change.",
+        },
+        inline_blame: InlineBlame {
+            type: bool,
+            default: false,
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            surface: ::settings::SettingSurfaces::GUI,
+            private: false,
+            toml_path: "warpium.inline_blame",
+            description: "Whether Warpium's code editor shows who last changed the cursor's line, and when, at the right of that line.",
+        },
+    ]);
+}

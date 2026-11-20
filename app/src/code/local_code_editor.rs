@@ -218,6 +218,8 @@ pub enum LocalCodeEditorAction {
     CodeIndexDefinitionAtDeferred {
         offset: CharOffset,
     },
+    /// Warpium: git (blame, history, rollback, change navigation).
+    WarpiumGit(crate::warpium::git_tools::EditorGitAction),
 }
 
 #[derive(Default)]
@@ -333,6 +335,8 @@ pub struct LocalCodeEditorView {
     pub(super) diagnostic_decorations: Vec<Decoration>,
     /// View for the find references feature.
     find_references_view: Option<ViewHandle<FindReferencesView>>,
+    /// Warpium: change markers against `HEAD`, Rollback and Git Blame.
+    pub(super) warpium_git: super::warpium_git::WarpiumGitEditorState,
 }
 
 impl LocalCodeEditorView {
@@ -556,6 +560,7 @@ impl LocalCodeEditorView {
             processed_diagnostics: Vec::new(),
             diagnostic_decorations: Vec::new(),
             find_references_view: None,
+            warpium_git: Default::default(),
         };
 
         if let Some(display_mode) = display_mode {
@@ -1397,6 +1402,7 @@ impl LocalCodeEditorView {
     fn on_file_loaded(&mut self, ctx: &mut ViewContext<Self>) {
         self.apply_diffs_if_any(ctx);
         self.file_loaded.set();
+        self.warpium_on_file_loaded(ctx);
 
         // Apply any pending scroll position that was set before the file finished loading.
         if let Some(position) = self.pending_scroll_on_load.take() {
@@ -1707,6 +1713,7 @@ impl LocalCodeEditorView {
                         ctx.notify();
                     } else {
                         me.base_content_version = Some(*content_version);
+                        me.warpium_on_disk_change(ctx);
                     }
                 }
                 GlobalBufferModelEvent::FileSaved {
@@ -1717,6 +1724,7 @@ impl LocalCodeEditorView {
                     let auto_saved = std::mem::take(&mut me.auto_save_in_flight);
                     me.base_content_version = Some(*content_version);
                     me.has_remote_conflict = false;
+                    me.warpium_on_disk_change(ctx);
                     ctx.emit(LocalCodeEditorEvent::FileSaved { auto_saved });
                 }
                 GlobalBufferModelEvent::FailedToSave { error, .. } => {
@@ -2414,6 +2422,7 @@ impl View for LocalCodeEditorView {
         if focus_ctx.is_self_focused() {
             self.editor.update(ctx, |editor, ctx| editor.focus(ctx));
         }
+        self.warpium_on_focus(ctx);
     }
 
     fn on_blur(&mut self, _blur_ctx: &warpui::BlurContext, ctx: &mut ViewContext<Self>) {
@@ -2543,6 +2552,7 @@ impl View for LocalCodeEditorView {
         ) {
             stack.add_positioned_overlay_child(hover_tooltip, positioning);
         }
+        self.warpium_render_overlays(&mut stack, app);
 
         if let Some(footer) = &self.footer {
             let mut col = Flex::column();
@@ -2617,14 +2627,21 @@ impl TypedActionView for LocalCodeEditorView {
             LocalCodeEditorAction::OpenContextMenu => {
                 // Only show context menu if LSP (or, for Kotlin and Java, the code index) is
                 // available.
-                let menu_items = if self.is_lsp_server_available(ctx) {
-                    Some(self.context_menu_items())
+                let mut menu_items = if self.is_lsp_server_available(ctx) {
+                    self.context_menu_items()
                 } else if self.is_code_index_navigable(ctx) {
-                    Some(self.code_index_context_menu_items())
+                    self.code_index_context_menu_items()
                 } else {
-                    None
+                    Vec::new()
                 };
-                if let Some(menu_items) = menu_items {
+                let git_items = self.warpium_git_context_menu_items();
+                if !git_items.is_empty() {
+                    if !menu_items.is_empty() {
+                        menu_items.push(MenuItem::Separator);
+                    }
+                    menu_items.extend(git_items);
+                }
+                if !menu_items.is_empty() {
                     self.context_menu_state.is_open = true;
                     self.context_menu.update(ctx, move |menu, ctx| {
                         menu.set_items(menu_items, ctx);
@@ -2658,6 +2675,10 @@ impl TypedActionView for LocalCodeEditorView {
                     Some(*offset),
                     ctx,
                 );
+            }
+            LocalCodeEditorAction::WarpiumGit(action) => {
+                self.context_menu_state.is_open = false;
+                self.handle_warpium_git_action(action, ctx);
             }
         }
     }

@@ -58,6 +58,7 @@ pub enum NavBarBehavior {
 pub struct NavBar {
     model: ModelHandle<CodeEditorModel>,
     behavior: NavBarBehavior,
+    revert_label: &'static str,
     mouse_state_handles: MouseStateHandles,
     up_label_button: ViewHandle<ActionButton>,
     down_label_button: ViewHandle<ActionButton>,
@@ -88,6 +89,7 @@ impl NavBar {
         Self {
             model,
             behavior: NavBarBehavior::Closable,
+            revert_label: "Reject",
             mouse_state_handles: Default::default(),
             up_label_button,
             down_label_button,
@@ -96,6 +98,10 @@ impl NavBar {
 
     pub fn set_behavior(&mut self, behavior: NavBarBehavior) {
         self.behavior = behavior;
+    }
+
+    pub fn set_revert_label(&mut self, label: &'static str) {
+        self.revert_label = label;
     }
 
     fn diff_hunk_count(&self, app: &AppContext) -> usize {
@@ -200,7 +206,7 @@ impl NavBar {
                     ButtonVariant::Outlined,
                     self.mouse_state_handles.revert_mouse_state.clone(),
                 )
-                .with_text_label("Reject".to_string())
+                .with_text_label(self.revert_label.to_string())
                 .build()
                 .on_click(|ctx, _, _| ctx.dispatch_typed_action(NavBarAction::Revert))
                 .finish(),

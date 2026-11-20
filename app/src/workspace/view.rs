@@ -27,6 +27,8 @@ mod warpium_android;
 mod warpium_bottom_panel;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_emulator;
+#[cfg(not(target_family = "wasm"))]
+mod warpium_git;
 mod warpium_project_root;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_project_toolbar;
@@ -25204,6 +25206,12 @@ impl TypedActionView for Workspace {
                         .update(ctx, |model, ctx| model.install_into_agents(install, ctx));
                 }
             }
+            WarpiumGit(git_action) => {
+                #[cfg(not(target_family = "wasm"))]
+                self.handle_warpium_git_action(git_action, ctx);
+                #[cfg(target_family = "wasm")]
+                let _ = git_action;
+            }
             OpenLocalToCloudHandoffPane {
                 launch,
                 environment_id,
@@ -27537,6 +27545,16 @@ impl View for Workspace {
             context
                 .set
                 .insert(crate::warpium::sync_settings::BOTTOM_PANEL_CONTEXT_FLAG);
+        }
+        if crate::warpium::git_tools::gutter_markers_enabled(app) {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::GIT_GUTTER_MARKERS_CONTEXT_FLAG);
+        }
+        if crate::warpium::git_tools::inline_blame_enabled(app) {
+            context
+                .set
+                .insert(crate::warpium::sync_settings::INLINE_BLAME_CONTEXT_FLAG);
         }
         if crate::warpium::container_paste::is_enabled(app) {
             context

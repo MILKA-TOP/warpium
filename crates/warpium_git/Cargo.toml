@@ -1,0 +1,17 @@
+[package]
+name = "warpium_git"
+authors = ["Warp Team <dev@warp.dev>"]
+version = "0.1.0"
+edition = "2024"
+description = "Warpium: git log streaming and commit graph layout, blame, commit details and diffs, rollback plans"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+command.workspace = true
+instant.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

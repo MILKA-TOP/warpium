@@ -4473,6 +4473,7 @@ impl PaneGroup {
             | IPaneType::NetworkLog
             | IPaneType::WarpiumLogcat
             | IPaneType::WarpiumDevices
+            | IPaneType::WarpiumGitLog
             | IPaneType::DeferredPlaceholder => TypedPane::Other,
             #[cfg(test)]
             IPaneType::Dummy => TypedPane::Other,
