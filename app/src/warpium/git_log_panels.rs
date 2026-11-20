@@ -1086,9 +1086,7 @@ fn render_side_row(row: &SideBySideRow, appearance: &Appearance) -> Box<dyn Elem
             };
             Flex::row()
                 .with_child(Expanded::new(1., side(left, style.removed)).finish())
-                .with_child(
-                    Container::new(Expanded::new(1., side(right, style.added)).finish()).finish(),
-                )
+                .with_child(Expanded::new(1., side(right, style.added)).finish())
                 .finish()
         }
     }
