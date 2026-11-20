@@ -1371,6 +1371,11 @@ impl GitLogView {
         };
         let list = UniformList::new(self.list_state.clone(), self.rows.len(), build_items)
             .notify_visible_items(self.visible_tx.clone());
+        // An empty `UniformList` reports zero visible and total size, which makes `Scrollable`
+        // compute a NaN scrollbar thumb and trip the scene's rect validation.
+        if self.rows.is_empty() {
+            return list.finish();
+        }
         Scrollable::vertical(
             self.scroll_state.clone(),
             list.finish_scrollable(),
