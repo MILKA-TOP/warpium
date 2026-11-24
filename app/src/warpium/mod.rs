@@ -18,6 +18,7 @@ pub(crate) mod git_log;
 #[cfg(not(target_family = "wasm"))]
 mod git_log_graph;
 pub(crate) mod git_tools;
+pub(crate) mod jb_syntax_theme;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod logcat;
 #[cfg(not(target_family = "wasm"))]
