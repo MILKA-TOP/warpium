@@ -92,8 +92,14 @@ impl Default for WarpiumStashTabState {
 }
 
 impl WarpiumStashTabState {
-    /// Replaces the list and rebuilds the per-row mouse states with it.
+    /// Replaces the list and rebuilds the per-row mouse states with it. The
+    /// selection and loaded patch are dropped: indices shift when the list
+    /// changes (a pop/drop removes entries).
     pub(crate) fn set_entries(&mut self, entries: Vec<warpium_git::stash::StashEntry>) {
+        self.selected_stash = None;
+        self.files = Vec::new();
+        self.selected_file = None;
+        self.loading_patch = false;
         self.row_interactions = entries
             .iter()
             .map(|_| StashRowInteraction {
