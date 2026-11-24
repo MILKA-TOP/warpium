@@ -6,6 +6,10 @@
         "-y",
         "@modelcontextprotocol/server-github"
       ]
+    },
+    "warpium-mac": {
+      "url": "http://host.docker.internal:17654/mcp",
+      "bearerTokenEnvVar": "WARPIUM_MAC_MCP_TOKEN"
     }
   }
 }
