@@ -40,7 +40,10 @@ fn args_builders_name_the_stash() {
         apply_args(3),
         ["stash", "apply", "stash@{3}"].map(str::to_owned)
     );
-    assert_eq!(pop_args(0), ["stash", "pop", "stash@{0}"].map(str::to_owned));
+    assert_eq!(
+        pop_args(0),
+        ["stash", "pop", "stash@{0}"].map(str::to_owned)
+    );
     assert_eq!(
         drop_args(12),
         ["stash", "drop", "stash@{12}"].map(str::to_owned)
@@ -143,7 +146,11 @@ fn list_create_apply_pop_drop_against_real_repo() {
         "edited\n"
     );
     assert!(path.join("untracked.txt").exists());
-    assert_eq!(list_stashes(path).unwrap().len(), 1, "apply keeps the stash");
+    assert_eq!(
+        list_stashes(path).unwrap().len(),
+        1,
+        "apply keeps the stash"
+    );
 
     // Applying again would conflict with the restored working tree; reset it
     // before popping, which applies the stash and drops it.

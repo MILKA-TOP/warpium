@@ -61,9 +61,7 @@ pub fn list_stashes(repo: &Path) -> Result<Vec<StashEntry>, GitError> {
 
 /// Arguments stashing the working tree (including untracked files) with `msg`.
 pub fn push_args(msg: &str) -> Vec<String> {
-    let mut args: Vec<String> = ["stash", "push", "-u", "-m"]
-        .map(str::to_owned)
-        .to_vec();
+    let mut args: Vec<String> = ["stash", "push", "-u", "-m"].map(str::to_owned).to_vec();
     args.push(msg.to_owned());
     args.push("--".to_owned());
     args
@@ -171,7 +169,10 @@ pub fn parse_patch(output: &str) -> Vec<StashFilePatch> {
         if current.kind.is_some() || !current.patch.is_empty() {
             files.push(StashFilePatch {
                 path,
-                kind: current.kind.clone().unwrap_or(crate::diff::FileChangeKind::Modified),
+                kind: current
+                    .kind
+                    .clone()
+                    .unwrap_or(crate::diff::FileChangeKind::Modified),
                 patch: std::mem::take(&mut current.patch),
             });
             *current = Section::default();

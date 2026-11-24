@@ -345,10 +345,14 @@ fn create_loaded_state_with_editors(
     let file_states = file_editors
         .into_iter()
         .map(|(file_path, editor)| {
-            let open_in_tab_button = Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
-            let discard_button = Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
-            let add_context_button = Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
-            let copy_path_button = Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
+            let open_in_tab_button =
+                Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
+            let discard_button =
+                Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
+            let add_context_button =
+                Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
+            let copy_path_button =
+                Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
 
             let state = FileState {
                 file_diff: FileDiff {

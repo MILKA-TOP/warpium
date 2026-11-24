@@ -431,7 +431,8 @@ impl CodeReviewView {
         if let CodeReviewViewState::Loaded(state) = self.state()
             && let Some(row_index) = state.row_index_for_file(path)
         {
-            self.viewported_list_state.invalidate_height_for_index(row_index);
+            self.viewported_list_state
+                .invalidate_height_for_index(row_index);
         }
         ctx.notify();
         true

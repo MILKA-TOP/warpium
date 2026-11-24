@@ -101,8 +101,6 @@ use crate::code_review::diff_state::{
 };
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::find_model::CodeReviewFindModel;
-use crate::code_review::warpium_file_groups::{FileRow, GroupBy, build_rows};
-use crate::code_review::warpium_stash_tab::{PanelTab, WarpiumStashTabState};
 use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusEvent, GitRepoStatusModel};
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 use crate::code_review::hidden_lines::calculate_hidden_lines;
@@ -112,6 +110,8 @@ use crate::code_review::telemetry_event::{
     AddToContextOrigin, CodeReviewContextDestination, CodeReviewTelemetryEvent, GitButtonKind,
     PaneStateChange,
 };
+use crate::code_review::warpium_file_groups::{FileRow, GroupBy, build_rows};
+use crate::code_review::warpium_stash_tab::{PanelTab, WarpiumStashTabState};
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::{EditorOptions, EditorView, InteractionState, TextOptions};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
@@ -133,7 +133,6 @@ use crate::themes::theme::WarpTheme;
 use crate::ui_components::blended_colors::{neutral_2, neutral_3};
 use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::dialog::{Dialog, dialog_styles};
-use warp_core::ui::color::blend::Blend;
 use crate::ui_components::icons::Icon;
 use crate::ui_components::render_file_search_row::{FileSearchRowOptions, render_file_search_row};
 use crate::util::bindings::{
@@ -154,6 +153,7 @@ use crate::view_components::action_button::{
 use crate::view_components::find::{Event as FindViewEvent, Find, FindEvent, FindWithinBlockState};
 use crate::workspace::view::right_panel::{ReviewDestination, ReviewSubmissionResult};
 use crate::workspace::{ToastStack, Workspace, WorkspaceAction};
+use warp_core::ui::color::blend::Blend;
 
 pub struct CodeReviewHeaderFields {
     pub is_in_split_pane: bool,
@@ -450,7 +450,9 @@ impl LoadedState {
             .enumerate()
             .filter_map(|(index, row)| match row {
                 FileRow::File { path, .. } => Some((path.clone(), index)),
-                FileRow::Repository { .. } | FileRow::Directory { .. } | FileRow::UnversionedNode { .. } => None,
+                FileRow::Repository { .. }
+                | FileRow::Directory { .. }
+                | FileRow::UnversionedNode { .. } => None,
             })
             .collect();
     }
@@ -1485,9 +1487,7 @@ impl CodeReviewView {
                 .with_size(ButtonSize::XSmall)
                 .with_icon(Icon::Plus)
                 .with_tooltip("Stash all local changes")
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(CodeReviewAction::OpenCreateStashDialog)
-                })
+                .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::OpenCreateStashDialog))
         });
         let stash_refresh_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Refresh", NakedTheme)
@@ -2842,11 +2842,7 @@ impl CodeReviewView {
             if file.interactive_created {
                 return;
             }
-            (
-                index,
-                file.file_diff.clone(),
-                file.content_at_head.clone(),
-            )
+            (index, file.file_diff.clone(), file.content_at_head.clone())
         };
         let (index, file_diff, content_at_head) = pending;
 
@@ -2889,7 +2885,8 @@ impl CodeReviewView {
         file.1.copy_path_button = Some(buttons.3);
         file.1.interactive_created = true;
         if let Some(row_index) = state.row_index_for_file(path) {
-            self.viewported_list_state.invalidate_height_for_index(row_index);
+            self.viewported_list_state
+                .invalidate_height_for_index(row_index);
         }
         ctx.notify();
     }
@@ -2925,7 +2922,8 @@ impl CodeReviewView {
             _ => 0,
         };
         for index in 0..row_count {
-            self.viewported_list_state.invalidate_height_for_index(index);
+            self.viewported_list_state
+                .invalidate_height_for_index(index);
         }
         ctx.notify();
     }
@@ -3187,7 +3185,6 @@ impl CodeReviewView {
         .finish()
     }
 
-
     /// The Changes | Stashes sub-tab strip at the top of the panel content
     /// (design doc §5.6). Stashes are a local-repo surface.
     fn render_panel_tab_strip(&self, appearance: &Appearance) -> Box<dyn Element> {
@@ -3202,9 +3199,7 @@ impl CodeReviewView {
                     .finish(),
             );
         }
-        Container::new(row.finish())
-            .with_margin_bottom(8.)
-            .finish()
+        Container::new(row.finish()).with_margin_bottom(8.).finish()
     }
 
     /// The Stashes sub-tab: the stash list with per-row apply/pop/drop, and
@@ -3247,7 +3242,11 @@ impl CodeReviewView {
                 .finish(),
             );
         }
-        content.add_child(Container::new(toolbar.finish()).with_margin_bottom(8.).finish());
+        content.add_child(
+            Container::new(toolbar.finish())
+                .with_margin_bottom(8.)
+                .finish(),
+        );
 
         if self.stash_state.loading {
             content.add_child(
@@ -3325,13 +3324,9 @@ impl CodeReviewView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min);
         column.add_child(
-            Text::new(
-                text.to_string(),
-                appearance.ui_font_family(),
-                14.,
-            )
-            .with_color(theme.sub_text_color(theme.surface_2()).into())
-            .finish(),
+            Text::new(text.to_string(), appearance.ui_font_family(), 14.)
+                .with_color(theme.sub_text_color(theme.surface_2()).into())
+                .finish(),
         );
         Shrinkable::new(1., column.finish()).finish()
     }
@@ -3353,19 +3348,22 @@ impl CodeReviewView {
 
         let label = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(Shrinkable::new(
-                1.,
-                Text::new(
-                    entry.message.clone(),
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size() + 1.,
+            .with_child(
+                Shrinkable::new(
+                    1.,
+                    Text::new(
+                        entry.message.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size() + 1.,
+                    )
+                    .with_style(Properties::default().weight(Weight::Semibold))
+                    .with_color(theme.main_text_color(theme.surface_2()).into())
+                    .with_clip(ClipConfig::start())
+                    .soft_wrap(false)
+                    .finish(),
                 )
-                .with_style(Properties::default().weight(Weight::Semibold))
-                .with_color(theme.main_text_color(theme.surface_2()).into())
-                .with_clip(ClipConfig::start())
-                .soft_wrap(false)
                 .finish(),
-            ).finish())
+            )
             .with_child(
                 Container::new(
                     Text::new(
@@ -3385,8 +3383,7 @@ impl CodeReviewView {
 
         let buttons = if let Some((apply, pop, drop)) = self.stash_state.row_buttons.get(row_index)
         {
-            let mut row = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center);
+            let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
             row.add_child(ChildView::new(apply).finish());
             row.add_child(
                 Container::new(ChildView::new(pop).finish())
@@ -3414,9 +3411,7 @@ impl CodeReviewView {
         let index = entry.index;
         let row_bg = move |hovered: bool| -> warp_core::ui::theme::Fill {
             if selected {
-                theme
-                    .background()
-                    .blend(&theme.accent().with_opacity(20))
+                theme.background().blend(&theme.accent().with_opacity(20))
             } else if hovered {
                 neutral_3(theme).into()
             } else {
@@ -3437,9 +3432,7 @@ impl CodeReviewView {
         })
         .finish();
 
-        Container::new(inner)
-            .with_margin_bottom(2.)
-            .finish()
+        Container::new(inner).with_margin_bottom(2.).finish()
     }
 
     /// The selected stash's changed files; clicking one shows its patch.
@@ -3488,7 +3481,9 @@ impl CodeReviewView {
         let (letter, color) = match &file.kind {
             warpium_git::diff::FileChangeKind::Added => ("A", add_color(appearance)),
             warpium_git::diff::FileChangeKind::Deleted => ("D", remove_color(appearance)),
-            warpium_git::diff::FileChangeKind::Renamed { .. } => ("R", theme.sub_text_color(theme.background()).into_solid()),
+            warpium_git::diff::FileChangeKind::Renamed { .. } => {
+                ("R", theme.sub_text_color(theme.background()).into_solid())
+            }
             _ => ("M", theme.sub_text_color(theme.background()).into_solid()),
         };
         let selected = self.stash_state.selected_file == Some(index);
@@ -3524,11 +3519,7 @@ impl CodeReviewView {
                 .finish(),
             )
             .with_child(
-                Shrinkable::new(
-                    1.,
-                    self.render_stash_patch_preview(file, appearance),
-                )
-                .finish(),
+                Shrinkable::new(1., self.render_stash_patch_preview(file, appearance)).finish(),
             )
             .finish();
 
@@ -3561,9 +3552,15 @@ impl CodeReviewView {
             let (prefix, color) = match line.kind {
                 warpium_git::diff::DiffLineKind::Added => ("+", add_color(appearance)),
                 warpium_git::diff::DiffLineKind::Removed => ("-", remove_color(appearance)),
-                warpium_git::diff::DiffLineKind::Hunk => (" ", theme.sub_text_color(theme.background()).into_solid()),
-                warpium_git::diff::DiffLineKind::Info => (" ", theme.sub_text_color(theme.background()).into_solid()),
-                warpium_git::diff::DiffLineKind::Context => (" ", theme.main_text_color(theme.background()).into_solid()),
+                warpium_git::diff::DiffLineKind::Hunk => {
+                    (" ", theme.sub_text_color(theme.background()).into_solid())
+                }
+                warpium_git::diff::DiffLineKind::Info => {
+                    (" ", theme.sub_text_color(theme.background()).into_solid())
+                }
+                warpium_git::diff::DiffLineKind::Context => {
+                    (" ", theme.main_text_color(theme.background()).into_solid())
+                }
             };
             column.add_child(
                 Text::new(
@@ -3593,9 +3590,7 @@ impl CodeReviewView {
             .with_horizontal_padding(8.)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
             .with_background(theme.background())
-            .with_border(
-                Border::new(1.).with_border_fill(theme.surface_3()),
-            )
+            .with_border(Border::new(1.).with_border_fill(theme.surface_3()))
             .finish()
     }
 
@@ -3649,11 +3644,7 @@ impl CodeReviewView {
     }
 
     /// The drop-stash confirmation, like JetBrains' "Drop 1 stash?".
-    fn render_stash_drop_dialog(
-        &self,
-        index: usize,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
+    fn render_stash_drop_dialog(&self, index: usize, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let message = self
             .stash_state
@@ -3673,7 +3664,9 @@ impl CodeReviewView {
 
         let dialog = Dialog::new(
             "Drop stash?".to_string(),
-            Some(format!("\u{201c}{message}\u{201d} will be permanently removed.")),
+            Some(format!(
+                "\u{201c}{message}\u{201d} will be permanently removed."
+            )),
             UiComponentStyles {
                 width: Some(460.),
                 padding: Some(Coords::uniform(24.).bottom(12.)),
@@ -3690,7 +3683,8 @@ impl CodeReviewView {
             .with_background_color(theme.blurred_background_overlay().into())
             .finish()
     }
-\n    fn should_auto_expand_file(&self, file_path: &str) -> bool {
+
+    fn should_auto_expand_file(&self, file_path: &str) -> bool {
         self.active_repo
             .as_ref()
             .map(|repo| repo.should_auto_expand_file(file_path))
@@ -6476,7 +6470,10 @@ impl CodeReviewView {
                 self.discard_dialog_state.operation_type,
                 DiscardOperationType::RollbackSelectedFiles
             ) {
-                format!("Rollback {} files?", self.discard_dialog_state.discard_file_paths.len())
+                format!(
+                    "Rollback {} files?",
+                    self.discard_dialog_state.discard_file_paths.len()
+                )
             } else {
                 self.discard_dialog_state.operation_type.title()
             },
@@ -6661,7 +6658,6 @@ impl CodeReviewView {
         ctx.notify();
     }
 
-
     // -- Stashes sub-tab (design doc §5.6) -----------------------------------
 
     fn stash_repo_path(&self) -> Option<PathBuf> {
@@ -6806,9 +6802,7 @@ impl CodeReviewView {
         let confirm = ctx.add_typed_action_view(|_| {
             ActionButton::new("Create stash", SecondaryTheme)
                 .with_size(ButtonSize::XSmall)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(CodeReviewAction::ConfirmCreateStash)
-                })
+                .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::ConfirmCreateStash))
         });
         let cancel = ctx.add_typed_action_view(|_| {
             ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
@@ -8425,8 +8419,7 @@ impl TypedActionView for CodeReviewView {
                     self.viewported_list_state
                         .invalidate_height_for_index(row_index);
                     // If the file gets collapsed and had a sticky header, then we scroll to make the header in view.
-                    if !now_expanded && self.viewported_list_state.is_scrolled_to_item(row_index)
-                    {
+                    if !now_expanded && self.viewported_list_state.is_scrolled_to_item(row_index) {
                         self.viewported_list_state.scroll_to(row_index);
                     }
                 }
@@ -8789,7 +8782,11 @@ impl TypedActionView for CodeReviewView {
                             Ok(files) => me.stash_state.files = files,
                             Err(err) => {
                                 log::warn!("Failed to load stash patch: {err:#}");
-                                me.stash_toast(format!("Couldn\u{2019}t load the stash diff"), true, ctx);
+                                me.stash_toast(
+                                    format!("Couldn\u{2019}t load the stash diff"),
+                                    true,
+                                    ctx,
+                                );
                             }
                         }
                         ctx.notify();
@@ -8803,7 +8800,10 @@ impl TypedActionView for CodeReviewView {
             }
             CodeReviewAction::OpenCreateStashDialog => {
                 if self.stash_state.busy.is_some()
-                    || self.diff_state_model.as_ref(ctx).is_git_operation_blocked(ctx)
+                    || self
+                        .diff_state_model
+                        .as_ref(ctx)
+                        .is_git_operation_blocked(ctx)
                 {
                     self.stash_toast(
                         "Another git operation is in progress".to_string(),
@@ -8837,7 +8837,10 @@ impl TypedActionView for CodeReviewView {
                     .trim()
                     .to_owned();
                 let message = if message.is_empty() {
-                    format!("Warpium: stash {}", chrono::Local::now().format("%Y-%m-%d %H:%M"))
+                    format!(
+                        "Warpium: stash {}",
+                        chrono::Local::now().format("%Y-%m-%d %H:%M")
+                    )
                 } else {
                     message
                 };
@@ -8865,7 +8868,11 @@ impl TypedActionView for CodeReviewView {
                             }
                             Err(err) => {
                                 log::warn!("Failed to create stash: {err:#}");
-                                me.stash_toast("Couldn\u{2019}t create the stash".to_string(), true, ctx);
+                                me.stash_toast(
+                                    "Couldn\u{2019}t create the stash".to_string(),
+                                    true,
+                                    ctx,
+                                );
                             }
                         }
                         ctx.notify();
@@ -8881,7 +8888,11 @@ impl TypedActionView for CodeReviewView {
                 let Some(repo_path) = self.stash_repo_path() else {
                     return;
                 };
-                let label = if pop { "Popping stash\u{2026}" } else { "Applying stash\u{2026}" };
+                let label = if pop {
+                    "Popping stash\u{2026}"
+                } else {
+                    "Applying stash\u{2026}"
+                };
                 self.stash_state.busy = Some(label.to_string());
                 let index = *index;
                 ctx.spawn(
@@ -8910,9 +8921,15 @@ impl TypedActionView for CodeReviewView {
                                 me.reload_changes_after_stash_op(ctx);
                             }
                             Err(err) => {
-                                log::warn!("Failed to {} stash: {err:#}", if pop { "pop" } else { "apply" });
+                                log::warn!(
+                                    "Failed to {} stash: {err:#}",
+                                    if pop { "pop" } else { "apply" }
+                                );
                                 me.stash_toast(
-                                    format!("Couldn\u{2019}t {} the stash", if pop { "pop" } else { "apply" }),
+                                    format!(
+                                        "Couldn\u{2019}t {} the stash",
+                                        if pop { "pop" } else { "apply" }
+                                    ),
                                     true,
                                     ctx,
                                 );
@@ -8961,7 +8978,11 @@ impl TypedActionView for CodeReviewView {
                             }
                             Err(err) => {
                                 log::warn!("Failed to drop stash: {err:#}");
-                                me.stash_toast("Couldn\u{2019}t drop the stash".to_string(), true, ctx);
+                                me.stash_toast(
+                                    "Couldn\u{2019}t drop the stash".to_string(),
+                                    true,
+                                    ctx,
+                                );
                             }
                         }
                         ctx.notify();
