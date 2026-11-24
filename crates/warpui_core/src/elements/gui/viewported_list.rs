@@ -612,7 +612,14 @@ impl<T> ListStateInner<T> {
         // and we still want to scroll to an approximate position in the list instead of just to the end.
         // If the new position is within the measured range, we can directly seek into the sum tree
         // to get an exact location to scroll to.
-        let approximate_item = (absolute_pixels / self.average_height_per_measured_item()).as_f32();
+        // Zero measured items make the average zero; dividing absolute pixels by
+        // it would produce NaN scroll offsets that poison every rendered rect.
+        let average_height = self.average_height_per_measured_item();
+        let approximate_item = if average_height > Pixels::zero() {
+            (absolute_pixels / average_height).as_f32()
+        } else {
+            0.
+        };
         let approximate_item = approximate_item.min(self.content.summary().count as f32);
 
         let approximate_scroll_item = approximate_item.floor() as usize;
@@ -671,6 +678,9 @@ impl<T> ListStateInner<T> {
         let total_height = summary.height;
         let measured_items = summary.measured_count;
 
+        if measured_items == 0 {
+            return Pixels::zero();
+        }
         (total_height.as_f32() / measured_items as f32).into_pixels()
     }
 
