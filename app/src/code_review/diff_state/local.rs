@@ -446,6 +446,16 @@ impl LocalDiffStateModel {
         false
     }
     /// Returns `true` once the repository has at least one commit.
+    /// Whether `HEAD` is already pushed to an upstream, i.e. amending it
+    /// would rewrite published history (the commit dialog warns, JB-style).
+    pub fn is_head_pushed(&self) -> bool {
+        self.metadata.as_ref().is_some_and(|metadata| {
+            metadata.has_head_commit
+                && metadata.upstream_ref.is_some()
+                && metadata.unpushed_commits.is_empty()
+        })
+    }
+
     pub(super) fn has_head(&self) -> bool {
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
@@ -1483,6 +1493,7 @@ impl LocalDiffStateModel {
         mode: CommitChainMode,
         message: String,
         include_unstaged: bool,
+        amend: bool,
         branch: String,
         autogenerate_pr_content: bool,
         ctx: &mut ModelContext<Self>,
@@ -1507,6 +1518,7 @@ impl LocalDiffStateModel {
                     mode,
                     &message,
                     include_unstaged,
+                    amend,
                     &branch,
                     ai_client.as_deref(),
                     path_env.as_deref(),

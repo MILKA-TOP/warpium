@@ -677,12 +677,15 @@ pub async fn get_diff_for_commit_message(
 }
 
 /// Commits changes. If `include_unstaged` is true, stages all changes first via `git add -A`.
-/// `path_env` is forwarded so commit hooks can find tools on the user's `PATH`.
+/// With `amend`, the previous commit is replaced (`git commit --amend`), which
+/// git allows with an empty staged set for a message-only amend. `path_env` is
+/// forwarded so commit hooks can find tools on the user's `PATH`.
 #[cfg(feature = "local_fs")]
 pub async fn run_commit(
     repo_path: &Path,
     message: &str,
     include_unstaged: bool,
+    amend: bool,
     path_env: Option<&str>,
 ) -> Result<String> {
     if include_unstaged {
@@ -693,20 +696,25 @@ pub async fn run_commit(
     // stdout is how it tolerates `git diff`). Guard explicitly so an empty
     // commit surfaces as an error toast instead of a phantom "committed"
     // success — this is the authoritative backstop now that the dialog no
-    // longer pre-gates on a synced staged-changes bit.
+    // longer pre-gates on a synced staged-changes bit. Amend skips the guard:
+    // a message-only amend is legitimate.
     let staged = run_git_command_with_env(
         repo_path,
         &["--no-optional-locks", "diff", "--cached", "--name-only"],
         path_env,
     )
     .await?;
-    if staged.trim().is_empty() {
+    if staged.trim().is_empty() && !amend {
         if include_unstaged {
             anyhow::bail!("nothing to commit, working tree clean");
         }
         anyhow::bail!("no changes added to commit");
     }
-    run_git_command_with_env(repo_path, &["commit", "-m", message], path_env).await
+    if amend {
+        run_git_command_with_env(repo_path, &["commit", "--amend", "-m", message], path_env).await
+    } else {
+        run_git_command_with_env(repo_path, &["commit", "-m", message], path_env).await
+    }
 }
 
 #[cfg(not(feature = "local_fs"))]
@@ -714,8 +722,21 @@ pub async fn run_commit(
     _repo_path: &Path,
     _message: &str,
     _include_unstaged: bool,
+    _amend: bool,
     _path_env: Option<&str>,
 ) -> Result<String> {
+    Err(anyhow!("Not supported on wasm"))
+}
+
+/// The current `HEAD` commit's full message, prefilled into the commit
+/// dialog when Amend is checked (design doc §5.7).
+#[cfg(feature = "local_fs")]
+pub async fn head_commit_message(repo_path: &Path) -> Result<String> {
+    run_git_command(repo_path, &["log", "-1", "--format=%B"]).await
+}
+
+#[cfg(not(feature = "local_fs"))]
+pub async fn head_commit_message(_repo_path: &Path) -> Result<String> {
     Err(anyhow!("Not supported on wasm"))
 }
 

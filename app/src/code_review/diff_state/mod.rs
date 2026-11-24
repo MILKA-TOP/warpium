@@ -798,6 +798,7 @@ impl DiffStateModel {
         mode: CommitChainMode,
         message: String,
         include_unstaged: bool,
+        amend: bool,
         branch: String,
         autogenerate_pr_content: bool,
         ctx: &mut ModelContext<Self>,
@@ -808,12 +809,18 @@ impl DiffStateModel {
                     mode,
                     message,
                     include_unstaged,
+                    amend,
                     branch,
                     autogenerate_pr_content,
                     ctx,
                 );
             }),
             Self::Remote(remote) => remote.update(ctx, |remote, ctx| {
+                if amend {
+                    // Amend is local-only: the wire protocol has no amend bit.
+                    log::debug!("Amend is not supported for remote repositories");
+                    return;
+                }
                 remote.git_commit_chain(
                     mode,
                     message,
@@ -823,6 +830,14 @@ impl DiffStateModel {
                     ctx,
                 );
             }),
+        }
+    }
+
+    /// Whether `HEAD` is already pushed (local repos; false for remote).
+    pub(crate) fn is_head_pushed(&self, ctx: &AppContext) -> bool {
+        match self {
+            Self::Local(local) => local.as_ref(ctx).is_head_pushed(),
+            Self::Remote(_) => false,
         }
     }
 

@@ -3248,6 +3248,7 @@ impl ServerModel {
                     chain_mode,
                     &message,
                     include_unstaged,
+                    false,
                     &branch,
                     ai_client.as_deref(),
                     path_env,

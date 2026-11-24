@@ -15,6 +15,7 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
+use crate::code::editor::diff::remove_color;
 use crate::code_review::diff_state::CommitChainMode;
 use crate::code_review::git_dialog::pr::show_pr_created_toast;
 use crate::code_review::git_dialog::{
@@ -38,6 +39,8 @@ pub enum CommitSubAction {
     SetIntent(CommitChainMode),
     ToggleIncludeUnstaged,
     ToggleChangesExpanded,
+    /// Amend the previous commit (design doc §5.7).
+    ToggleAmend,
 }
 
 const EDITOR_FONT_SIZE: f32 = 12.;
@@ -62,6 +65,17 @@ pub struct CommitState {
     switch_state: SwitchStateHandle,
     summary_mouse_state: MouseStateHandle,
     changes_scroll_state: ClippedScrollStateHandle,
+    /// Amend the previous commit (design doc §5.7): the message editor is
+    /// prefilled with `git log -1 --format=%B`, and confirm runs
+    /// `git commit --amend`.
+    amend: bool,
+    amend_checkbox_mouse_state: MouseStateHandle,
+    /// Whether the "already pushed" warning has been acknowledged; the
+    /// first confirm shows it, the second proceeds (JB warns).
+    amend_pushed_acknowledged: bool,
+    /// Base intent-button labels (without the Amend prefix).
+    push_label: String,
+    create_pr_label: String,
     pub(super) message_editor: ViewHandle<EditorView>,
     commit_button: ViewHandle<ActionButton>,
     commit_and_push_button: ViewHandle<ActionButton>,
@@ -89,6 +103,8 @@ pub(super) fn new_state(
     } else {
         ("Commit and publish", Icon::UploadCloud)
     };
+    let push_label = push_label.to_string();
+    let create_pr_label = "Commit and create PR".to_string();
     // If AI autogen is on, the dialog opens with "Generating\u{2026}" and a
     // background request fills the editor when it resolves. Otherwise, we
     // land on the manual-type prompt immediately.
@@ -191,6 +207,11 @@ pub(super) fn new_state(
         switch_state: SwitchStateHandle::default(),
         summary_mouse_state: MouseStateHandle::default(),
         changes_scroll_state: ClippedScrollStateHandle::default(),
+        amend: false,
+        amend_checkbox_mouse_state: MouseStateHandle::default(),
+        amend_pushed_acknowledged: false,
+        push_label,
+        create_pr_label,
         message_editor,
         commit_button,
         commit_and_push_button,
@@ -208,8 +229,9 @@ pub(super) fn is_ready_to_confirm(state: &CommitState, app: &AppContext) -> bool
     // Confirm requires committable changes and a non-empty commit message.
     // While open-time autogen is in flight the editor is still empty, so this
     // keeps the button disabled until the draft lands (or the user types
-    // something).
-    has_committable_changes(state) && commit_message(state, app).is_some()
+    // something). Amending skips the changes requirement: a message-only
+    // amend with an empty working tree is legitimate (JB allows it).
+    (has_committable_changes(state) || state.amend) && commit_message(state, app).is_some()
 }
 
 /// Whether there's at least one change to commit — the guard that keeps
@@ -357,6 +379,91 @@ pub(super) fn handle_sub_action(
             }
             ctx.notify();
         }
+        CommitSubAction::ToggleAmend => {
+            let now_amend = if let GitDialogMode::Commit(state) = me.mode_mut() {
+                state.amend = !state.amend;
+                if state.amend {
+                    // A fresh warning gate for this amend attempt.
+                    state.amend_pushed_acknowledged = false;
+                }
+                state.amend
+            } else {
+                return;
+            };
+            if let GitDialogMode::Commit(state) = me.mode() {
+                update_intent_labels(state, ctx);
+            }
+            me.refresh_confirm_enabled(ctx);
+            if now_amend {
+                // Prefill the previous commit's message unless the user has
+                // typed one (design doc §5.7).
+                let message_editor = match me.mode() {
+                    GitDialogMode::Commit(state) => state.message_editor.clone(),
+                    _ => return,
+                };
+                let Some(repo_path) = me.repo_location().to_local_path().map(Path::to_path_buf)
+                else {
+                    ctx.notify();
+                    return;
+                };
+                ctx.spawn(
+                    async move { crate::util::git::head_commit_message(&repo_path).await },
+                    move |me, result, ctx| {
+                        let GitDialogMode::Commit(state) = &mut me.mode else {
+                            return;
+                        };
+                        if !state.amend {
+                            return;
+                        }
+                        match result {
+                            Ok(message) => {
+                                let user_typed = !message_editor
+                                    .as_ref(ctx)
+                                    .buffer_text(ctx)
+                                    .trim()
+                                    .is_empty();
+                                if !user_typed {
+                                    message_editor.update(ctx, |editor, ctx| {
+                                        editor.system_reset_buffer_text(message.trim(), ctx);
+                                    });
+                                    me.refresh_confirm_enabled(ctx);
+                                }
+                            }
+                            Err(err) => {
+                                log::warn!("Failed to load the previous commit message: {err}")
+                            }
+                        }
+                        ctx.notify();
+                    },
+                );
+            }
+            ctx.notify();
+        }
+    }
+}
+
+/// Rewrites the intent buttons' labels for the current amend state
+/// ("Commit and push" -> "Amend and push", design doc §5.7).
+fn update_intent_labels(state: &CommitState, ctx: &mut ViewContext<GitDialog>) {
+    let amend = state.amend;
+    state.commit_button.update(ctx, |button, ctx| {
+        button.set_label(crate::code_review::warpium_amend::amend_intent_label("Commit", amend), ctx);
+    });
+    let push_label = state.push_label.clone();
+    state.commit_and_push_button.update(ctx, |button, ctx| {
+        button.set_label(
+            crate::code_review::warpium_amend::amend_intent_label(&push_label, amend),
+            ctx,
+        );
+    });
+    if let Some(button) = &state.commit_and_create_pr_button {
+        let create_pr_label = state.create_pr_label.clone();
+        button.update(ctx, |button, ctx| {
+            button.set_label(
+                crate::code_review::warpium_amend::amend_intent_label(&create_pr_label, amend),
+                ctx,
+            );
+        });
     }
 }
 
@@ -372,11 +479,26 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     };
     let intent = state.intent;
     let include_unstaged = state.include_unstaged;
+    let amend = state.amend;
     let message_editor = state.message_editor.clone();
     let branch_name = me.branch_name().to_string();
     // When the chain includes create-PR, AI-generate the PR title/body when the
     // user has it enabled (ignored for commit-only / commit-and-push).
     let autogenerate_pr_content = should_send_git_ops_ai_request(ctx);
+
+    // Amending an already-pushed commit rewrites published history: warn
+    // once and require a second confirm, like JetBrains (design doc §5.7).
+    if crate::code_review::warpium_amend::needs_pushed_amend_warning(
+        amend,
+        me.diff_state_model().read(ctx, |model, ctx| model.is_head_pushed(ctx)),
+        state.amend_pushed_acknowledged,
+    ) {
+        if let GitDialogMode::Commit(state) = me.mode_mut() {
+            state.amend_pushed_acknowledged = true;
+        }
+        ctx.notify();
+        return;
+    }
 
     me.set_loading(LOADING_LABEL, ctx);
 
@@ -390,6 +512,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
             intent,
             message,
             include_unstaged,
+            amend,
             branch_name,
             autogenerate_pr_content,
             ctx,
@@ -508,16 +631,18 @@ fn commit_message(state: &CommitState, app: &AppContext) -> Option<String> {
 pub(super) fn render_body(
     state: &CommitState,
     branch_name: &str,
+    has_head: bool,
+    head_pushed: bool,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
 
     let branch_section = render_branch_section(branch_name, appearance);
     let changes_section = render_changes_section(state, appearance);
-    let message_section = render_message_editor(state, appearance, app);
+    let message_section = render_message_editor(state, has_head, appearance, app);
     let intent_section = render_intent_buttons(state);
 
-    Flex::column()
+    let mut body = Flex::column()
         .with_child(
             Container::new(branch_section)
                 .with_margin_bottom(16.)
@@ -532,9 +657,25 @@ pub(super) fn render_body(
             Container::new(message_section)
                 .with_margin_bottom(16.)
                 .finish(),
-        )
-        .with_child(intent_section)
-        .finish()
+        );
+    if state.amend && head_pushed {
+        // Shown after the first confirm on an already-pushed HEAD; the
+        // second confirm proceeds (design doc §5.7).
+        body.add_child(
+            Container::new(
+                Text::new(
+                    "The previous commit has already been pushed. Amending rewrites published history — press the amend button again to proceed.",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(remove_color(appearance))
+                .finish(),
+            )
+            .with_margin_bottom(16.)
+            .finish(),
+        );
+    }
+    body.with_child(intent_section).finish()
 }
 
 fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<dyn Element> {
@@ -601,6 +742,7 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
 
 fn render_message_editor(
     state: &CommitState,
+    has_head: bool,
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
@@ -634,10 +776,46 @@ fn render_message_editor(
         .build()
         .finish();
 
-    Flex::column()
+    let mut column = Flex::column()
         .with_child(Container::new(label).with_margin_bottom(8.).finish())
-        .with_child(editor_element)
-        .finish()
+        .with_child(editor_element);
+
+    // Amending needs a previous commit; without HEAD the checkbox is hidden
+    // (design doc §5.7).
+    if has_head {
+        let amend_checkbox = appearance
+            .ui_builder()
+            .checkbox(state.amend_checkbox_mouse_state.clone(), Some(16.))
+            .check(state.amend)
+            .with_label(
+                appearance.ui_builder().span("Amend").with_style(
+                    UiComponentStyles {
+                        font_size: Some(appearance.ui_font_size()),
+                        font_color: Some(
+                            appearance
+                                .theme()
+                                .main_text_color(appearance.theme().background())
+                                .into(),
+                        ),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(GitDialogAction::Commit(
+                    CommitSubAction::ToggleAmend,
+                ));
+            })
+            .finish();
+        column.add_child(
+            Container::new(amend_checkbox)
+                .with_margin_top(8.)
+                .finish(),
+        );
+    }
+
+    column.finish()
 }
 
 fn render_intent_buttons(state: &CommitState) -> Box<dyn Element> {

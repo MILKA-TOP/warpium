@@ -32,11 +32,12 @@ pub async fn run_commit_chain(
     mode: CommitChainMode,
     message: &str,
     include_unstaged: bool,
+    amend: bool,
     branch: &str,
     ai_client: Option<&dyn AIClient>,
     path_env: Option<&str>,
 ) -> anyhow::Result<(Vec<Commit>, Option<String>, Option<PrInfo>)> {
-    git::run_commit(repo_path, message, include_unstaged, path_env).await?;
+    git::run_commit(repo_path, message, include_unstaged, amend, path_env).await?;
     let pr_info = match mode {
         CommitChainMode::CommitOnly => None,
         CommitChainMode::CommitAndPush => {
