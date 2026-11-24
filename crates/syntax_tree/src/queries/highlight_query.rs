@@ -10,16 +10,31 @@ use warp_editor::content::text::Bytes;
 use warpui_core::color::ColorU;
 
 /// Color mapping from parsed syntax token name to its corresponding highlighting color.
+///
+/// The fields follow the semantic roles of JetBrains' default IDE color schemes
+/// (IntelliJ Light / new-UI Dark): roles the schemes leave at the default text color
+/// (`plain_default`, operators, brackets, annotations, namespaces, labels) get their own
+/// field so themes can still customize them.
 #[derive(Clone, Copy)]
 pub struct ColorMap {
     pub keyword_color: ColorU,
-    pub function_color: ColorU,
     pub string_color: ColorU,
-    pub type_color: ColorU,
     pub number_color: ColorU,
     pub comment_color: ColorU,
-    pub property_color: ColorU,
-    pub tag_color: ColorU,
+    pub doc_comment_color: ColorU,
+    pub type_color: ColorU,
+    pub function_declaration_color: ColorU,
+    pub function_call_color: ColorU,
+    pub field_color: ColorU,
+    pub plain_default_color: ColorU,
+    pub string_escape_color: ColorU,
+    pub boolean_color: ColorU,
+    pub punctuation_delimiter_color: ColorU,
+    pub punctuation_bracket_color: ColorU,
+    pub annotation_color: ColorU,
+    pub namespace_color: ColorU,
+    pub operator_color: ColorU,
+    pub label_color: ColorU,
 }
 
 /// Query for retrieving syntax highlighting information on the tokens.
@@ -80,22 +95,100 @@ impl HighlightQuery {
 
 fn convert_capture_name_to_color(name: &str, color_map: &ColorMap) -> Option<ColorU> {
     match name {
-        "text.title" => return Some(color_map.keyword_color),
-        "text.literal" => return Some(color_map.string_color),
-        "text.uri" => return Some(color_map.function_color),
-        "text.reference" => return Some(color_map.property_color),
-        _ => {}
-    }
-    match name.split('.').next() {
-        Some("keyword") => Some(color_map.keyword_color),
-        Some("function") => Some(color_map.function_color),
-        Some("string") => Some(color_map.string_color),
-        Some("type") => Some(color_map.type_color),
-        Some("number") => Some(color_map.number_color),
-        Some("comment") => Some(color_map.comment_color),
-        Some("property") => Some(color_map.property_color),
-        Some("tag") => Some(color_map.tag_color),
-        Some("punctuation") => Some(color_map.comment_color),
+        // Markdown (`text.*` captures from the arborium markdown query).
+        "text.title" => Some(color_map.keyword_color),
+        "text.literal" => Some(color_map.string_color),
+        "text.uri" => Some(color_map.function_declaration_color),
+        "text.reference" => Some(color_map.field_color),
+
+        // Keywords; JetBrains' default schemes color every one of these as keywords.
+        "keyword"
+        | "keyword.conditional"
+        | "keyword.conditional.ternary"
+        | "keyword.coroutine"
+        | "keyword.directive"
+        | "keyword.exception"
+        | "keyword.function"
+        | "keyword.import"
+        | "keyword.modifier"
+        | "keyword.operator"
+        | "keyword.repeat"
+        | "keyword.return"
+        | "keyword.type"
+        | "conditional"
+        | "repeat"
+        | "exception"
+        | "storageclass"
+        | "preproc" => Some(color_map.keyword_color),
+
+        // Functions. The tree-sitter queries cannot tell a declaration from a call, so
+        // `function`-style captures take the declaration color (the JetBrains default);
+        // only explicitly call/builtin captures take the call color.
+        "function" | "function.definition" | "function.macro" | "function.method" | "method" => {
+            Some(color_map.function_declaration_color)
+        }
+        "function.builtin"
+        | "function.call"
+        | "function.macro.builtin"
+        | "function.method.builtin"
+        | "function.special"
+        | "method.call" => Some(color_map.function_call_color),
+
+        // Types. JetBrains' defaults leave type references and constructors at the default
+        // text color, so themes set `type_color` to that unless they customize it.
+        "type" | "type.builtin" | "type.definition" | "type.qualifier" => {
+            Some(color_map.type_color)
+        }
+        "constructor" => Some(color_map.plain_default_color),
+
+        // Variables, parameters and constants. JetBrains colors locals, parameters and
+        // `this`/`super` as default text; fields, properties and constants get the field
+        // color; boolean/null literals get the keyword color (Java's query captures them
+        // as `constant.builtin`).
+        "variable" | "variable.builtin" | "variable.parameter" | "parameter"
+        | "parameter.builtin" => Some(color_map.plain_default_color),
+        "property"
+        | "property.definition"
+        | "field"
+        | "variable.member"
+        | "constant"
+        | "constant.macro" => Some(color_map.field_color),
+        "boolean" | "constant.builtin" => Some(color_map.boolean_color),
+        "label" => Some(color_map.label_color),
+
+        // Packages and modules.
+        "namespace" | "module" | "module.builtin" => Some(color_map.namespace_color),
+
+        // Literals.
+        "string"
+        | "string.regex"
+        | "string.regexp"
+        | "string.special"
+        | "string.special.key"
+        | "string.special.path"
+        | "string.special.regex"
+        | "string.special.symbol"
+        | "string.special.uri"
+        | "character" => Some(color_map.string_color),
+        "string.escape" | "escape" | "character.special" => Some(color_map.string_escape_color),
+        "number" | "number.float" | "float" => Some(color_map.number_color),
+
+        // Comments.
+        "comment" | "comment.unused" => Some(color_map.comment_color),
+        "comment.doc" | "comment.documentation" | "comment.doc.__attribute__" => {
+            Some(color_map.doc_comment_color)
+        }
+
+        // Operators and punctuation.
+        "operator" => Some(color_map.operator_color),
+        "punctuation" | "punctuation.bracket" => Some(color_map.punctuation_bracket_color),
+        // Commas and semicolons inherit the keyword color in JetBrains' schemes.
+        "punctuation.delimiter" => Some(color_map.punctuation_delimiter_color),
+        // String-template `${...}` delimiters are keywords in JetBrains' schemes.
+        "punctuation.special" => Some(color_map.keyword_color),
+        "attribute" => Some(color_map.annotation_color),
+        "tag" | "tag.attribute" | "tag.error" => Some(color_map.type_color),
+
         _ => None,
     }
 }
@@ -138,3 +231,7 @@ impl<'a> TextProvider<&'a [u8]> for TextBuffer<'a> {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "highlight_query_tests.rs"]
+mod tests;

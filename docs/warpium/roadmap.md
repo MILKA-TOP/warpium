@@ -51,7 +51,7 @@ Status: **done** (merged), **review** (PR open), **wip** (in progress), **planne
 | 13 | Android: devices, AVDs, run, Logcat (phase A); emulator embedded in a pane (phase B) | A done; B partly done (#34, #36), rest later |
 | 14 | Bottom panel (JetBrains tool window) for long-running panes | done (#30, #38) |
 | 15 | Logcat MCP server for agents | done (#22) |
-| 16 | Android Studio colors, starting with syntax highlighting | later |
+| 16 | Android Studio colors, starting with syntax highlighting | review (#46, phase 1: editor colors + JetBrains Dark/Light themes) |
 | 17 | JetBrains "Islands" UI redesign | later |
 | 18 | Code completion and hints in the editor | research done (#43); phase 1 wip |
 | 19 | Git blame / Annotate | done (#42) |

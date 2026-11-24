@@ -31,6 +31,19 @@ should stay free of this material.
   `tools/mac-mcp/README.md`, "Using the Muhtar VM"). Don't test Warpium and Muhtar UI there
   at the same time, and use CI artifacts rather than in-guest builds (disk).
 
+## Fork modifications of upstream files
+
+The fork prefers new fork-only files over upstream edits, but a few upstream files are
+modified. Keep these minimal and re-check them after merging upstream Warp:
+
+- `crates/syntax_tree/src/queries/highlight_query.rs` — `ColorMap` extended from the
+  coarse 8-field ANSI-based set to a semantic JetBrains-style set, and
+  `convert_capture_name_to_color` matches full tree-sitter capture names instead of
+  first segments (roadmap item 16, editor syntax colors).
+- `app/src/code/editor/model.rs` — `syntax_highlighting_color_map` builds the map from
+  the JetBrains palette (`app/src/warpium/jb_syntax_theme.rs`) instead of terminal ANSI
+  colors (same item; a few one-line hooks elsewhere are listed in each feature's section).
+
 ## What is still shared with upstream's OSS build
 
 Warpium is Warp's `oss` channel with its own bundle name (`Warpium`) and bundle id

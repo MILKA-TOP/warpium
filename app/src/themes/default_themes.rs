@@ -218,6 +218,52 @@ const ADEBERRY_BRIGHT_COLORS: AnsiColors = AnsiColors::new(
     AnsiColor::from_u32(0xFFFFFFFF),
 );
 
+// JetBrains "Dark" console palette (Darcula's CONSOLE_* colors from
+// intellij-community's DefaultColorSchemesManager.xml, Apache-2.0).
+const JETBRAINS_DARK_NORMAL_COLORS: AnsiColors = AnsiColors::new(
+    AnsiColor::from_u32(0x000000FF),
+    AnsiColor::from_u32(0xF0524FFF),
+    AnsiColor::from_u32(0x5C962CFF),
+    AnsiColor::from_u32(0xA68A0DFF),
+    AnsiColor::from_u32(0x3993D4FF),
+    AnsiColor::from_u32(0xA771BFFF),
+    AnsiColor::from_u32(0x00A3A3FF),
+    AnsiColor::from_u32(0x808080FF),
+);
+const JETBRAINS_DARK_BRIGHT_COLORS: AnsiColors = AnsiColors::new(
+    AnsiColor::from_u32(0x595959FF),
+    AnsiColor::from_u32(0xFF4050FF),
+    AnsiColor::from_u32(0x4FC414FF),
+    AnsiColor::from_u32(0xE5BF00FF),
+    AnsiColor::from_u32(0x1FB0FFFF),
+    AnsiColor::from_u32(0xED7EEDFF),
+    AnsiColor::from_u32(0x00E5E5FF),
+    AnsiColor::from_u32(0xFFFFFFFF),
+);
+
+// JetBrains "Default" console palette (the Default scheme's CONSOLE_* colors from
+// intellij-community's DefaultColorSchemesManager.xml, Apache-2.0).
+const JETBRAINS_LIGHT_NORMAL_COLORS: AnsiColors = AnsiColors::new(
+    AnsiColor::from_u32(0x000000FF),
+    AnsiColor::from_u32(0xCE0505FF),
+    AnsiColor::from_u32(0x067D17FF),
+    AnsiColor::from_u32(0xB28C00FF),
+    AnsiColor::from_u32(0x063FDBFF),
+    AnsiColor::from_u32(0xB309B3FF),
+    AnsiColor::from_u32(0x028E8EFF),
+    AnsiColor::from_u32(0x929292FF),
+);
+const JETBRAINS_LIGHT_BRIGHT_COLORS: AnsiColors = AnsiColors::new(
+    AnsiColor::from_u32(0x656565FF),
+    AnsiColor::from_u32(0xFF1616FF),
+    AnsiColor::from_u32(0x16B42CFF),
+    AnsiColor::from_u32(0xECC32CFF),
+    AnsiColor::from_u32(0x2D61F0FF),
+    AnsiColor::from_u32(0xE617E6FF),
+    AnsiColor::from_u32(0x15C1C1FF),
+    AnsiColor::from_u32(0xC9C9C9FF),
+);
+
 pub(super) fn light_mode_colors() -> TerminalColors {
     TerminalColors::new(LIGHT_MODE_NORMAL_COLORS, LIGHT_MODE_BRIGHT_COLORS)
 }
@@ -258,6 +304,14 @@ pub(super) fn adeberry_colors() -> TerminalColors {
     TerminalColors::new(ADEBERRY_NORMAL_COLORS, ADEBERRY_BRIGHT_COLORS)
 }
 
+pub(super) fn jetbrains_dark_colors() -> TerminalColors {
+    TerminalColors::new(JETBRAINS_DARK_NORMAL_COLORS, JETBRAINS_DARK_BRIGHT_COLORS)
+}
+
+pub(super) fn jetbrains_light_colors() -> TerminalColors {
+    TerminalColors::new(JETBRAINS_LIGHT_NORMAL_COLORS, JETBRAINS_LIGHT_BRIGHT_COLORS)
+}
+
 /// Default bundled themes
 pub fn dark_theme() -> WarpTheme {
     WarpTheme::new(
@@ -282,6 +336,36 @@ pub fn light_theme() -> WarpTheme {
         light_mode_colors(),
         None,
         Some("Light".to_string()),
+    )
+}
+
+/// JetBrains "Dark": the new-UI Dark scheme's editor background/text with Darcula's
+/// console palette (roadmap item 16).
+pub(super) fn jetbrains_dark() -> WarpTheme {
+    WarpTheme::new(
+        Fill::Solid(ColorU::from_u32(0x1E1F22FF)),
+        ColorU::from_u32(0xBCBEC4FF),
+        Fill::Solid(ColorU::from_u32(0x548AF7FF)),
+        Some(Fill::Solid(ColorU::from_u32(0xBBBBBBFF))),
+        Some(Details::Darker),
+        jetbrains_dark_colors(),
+        None,
+        Some("JetBrains Dark".to_string()),
+    )
+}
+
+/// JetBrains "IntelliJ Light": the IntelliJ Light scheme's editor background/text with the
+/// Default scheme's console palette (roadmap item 16).
+pub(super) fn jetbrains_light() -> WarpTheme {
+    WarpTheme::new(
+        Fill::Solid(ColorU::from_u32(0xFFFFFFFF)),
+        ColorU::from_u32(0x080808FF),
+        Fill::Solid(ColorU::from_u32(0x3573F0FF)),
+        Some(Fill::Solid(ColorU::from_u32(0x000000FF))),
+        Some(Details::Lighter),
+        jetbrains_light_colors(),
+        None,
+        Some("JetBrains Light".to_string()),
     )
 }
 
