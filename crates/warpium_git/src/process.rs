@@ -2,7 +2,7 @@
 //! and lays out the graph as it reads, and only reads as far as the UI asked.
 
 use std::fmt;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -108,9 +108,93 @@ pub fn run_git_with_input(repo: &Path, args: &[String], input: &[u8]) -> Result<
     }
 }
 
+/// Reads `specs` (`HEAD:path`, `<commit>:<path>`, …) in a single
+/// `git cat-file --batch` process, returning the bytes of each object that
+/// exists keyed by the spec exactly as given. Missing objects are absent from
+/// the map. One process for many blobs is what makes loading diffs for a large
+/// change set fast (the GitHub Desktop pattern).
+pub fn cat_file_batch(repo: &Path, specs: &[String]) -> Result<std::collections::HashMap<String, Vec<u8>>, GitError> {
+    use std::collections::HashMap;
+    use std::io::BufReader;
+
+    if specs.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut child = git_command(repo, &["cat-file".to_owned(), "--batch".to_owned()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| GitError::Spawn(err.to_string()))?;
+    let stdout = child.stdout.take();
+    let mut stdin = child.stdin.take();
+    let specs_for_writer: Vec<String> = specs.to_vec();
+    // Written from another thread: git answers as it reads, and its stdout
+    // pipe can fill long before all specs are consumed.
+    let writer = thread::Builder::new()
+        .name("git-cat-file-stdin".to_owned())
+        .spawn(move || {
+            if let Some(stdin) = stdin.as_mut() {
+                for spec in &specs_for_writer {
+                    if stdin.write_all(spec.as_bytes()).is_err() {
+                        return;
+                    }
+                    if stdin.write_all(b"\n").is_err() {
+                        return;
+                    }
+                }
+            }
+        })
+        .map_err(|err| GitError::Spawn(err.to_string()))?;
+
+    let mut blobs = HashMap::new();
+    if let Some(stdout) = stdout {
+        let mut reader = BufReader::new(stdout);
+        let mut header = String::new();
+        for spec in specs {
+            header.clear();
+            if reader.read_line(&mut header).is_err() {
+                break;
+            }
+            let mut parts = header.split_whitespace();
+            let _object_id = parts.next();
+            let Some(kind) = parts.next() else {
+                break;
+            };
+            let Some(size) = parts.next().and_then(|size| size.parse::<usize>().ok()) else {
+                // A missing object answers `<spec> missing`.
+                continue;
+            };
+            let mut blob = vec![0; size];
+            if reader.read_exact(&mut blob).is_err() {
+                break;
+            }
+            // Each blob is followed by a single newline.
+            let mut newline = [0u8; 1];
+            if reader.read_exact(&mut newline).is_err() {
+                break;
+            }
+            if kind == "blob" {
+                blobs.insert(spec.clone(), blob);
+            }
+        }
+    }
+    let status = child
+        .wait_with_output()
+        .map_err(|err| GitError::Spawn(err.to_string()))?;
+    let _ = writer.join();
+    if status.status.success() {
+        Ok(blobs)
+    } else {
+        Err(GitError::Failed {
+            stderr: String::from_utf8_lossy(&status.stderr).into_owned(),
+        })
+    }
+}
+
 /// The root of the work tree containing `dir`.
-pub fn repo_toplevel(dir: &Path) -> Result<PathBuf, GitError> {
-    let output = run_git(dir, &["rev-parse".to_owned(), "--show-toplevel".to_owned()])?;
+pub fn repo_toplevel(dir: &Path) -> Result<PathBuf, GitError> {    let output = run_git(dir, &["rev-parse".to_owned(), "--show-toplevel".to_owned()])?;
     let path = String::from_utf8_lossy(&output).trim().to_owned();
     if path.is_empty() {
         return Err(GitError::Failed {

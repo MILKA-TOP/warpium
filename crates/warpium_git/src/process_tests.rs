@@ -24,6 +24,30 @@ fn collect(receiver: &mpsc::Receiver<LogEvent>) -> (Vec<LogRow>, Option<LogEvent
 }
 
 #[test]
+fn cat_file_batch_reads_blobs_by_spec_and_skips_missing() {
+    let repo = init_repo();
+    let path = repo.path();
+    commit_file(path, "a.txt", "alpha\n", "Initial");
+    std::fs::create_dir(path.join("dir")).unwrap();
+    commit_file(path, "dir/b.txt", "beta\n", "Second");
+    let head = git(path, &["rev-parse", "HEAD"]).trim().to_owned();
+
+    let blobs = cat_file_batch(
+        path,
+        &[
+            "HEAD:a.txt".to_owned(),
+            format!("{head}:dir/b.txt"),
+            "HEAD:not-there.txt".to_owned(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(blobs.get("HEAD:a.txt").unwrap(), b"alpha\n");
+    assert_eq!(blobs.get(&format!("{head}:dir/b.txt")).unwrap(), b"beta\n");
+    assert!(!blobs.contains_key("HEAD:not-there.txt"));
+    assert!(cat_file_batch(path, &[]).unwrap().is_empty());
+}
+
+#[test]
 fn streams_a_history_with_a_merge() {
     let repo = init_repo();
     let path = repo.path();
