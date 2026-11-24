@@ -687,6 +687,29 @@ impl DiffStateModel {
         }
     }
 
+    /// The panel-opening refresh. Local Head mode runs one combined round
+    /// (one status walk feeding metadata + diffs); everything else falls back
+    /// to the regular diff load.
+    pub(crate) fn open_review_panel(
+        &self,
+        track_load_duration: bool,
+        preferred_session: Option<SessionId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match self {
+            Self::Local(local) => {
+                local.update(ctx, |local, ctx| {
+                    local.open_review_panel(ctx);
+                });
+            }
+            Self::Remote(remote) => {
+                remote.update(ctx, |remote, ctx| {
+                    remote.fetch_fresh_snapshot(track_load_duration, preferred_session, ctx);
+                });
+            }
+        }
+    }
+
     pub(crate) fn set_code_review_metadata_refresh_enabled(
         &self,
         enabled: bool,
@@ -745,6 +768,26 @@ impl DiffStateModel {
                 model.update(ctx, |model, ctx| {
                     model.discard_files(file_infos, should_stash, branch_name, ctx);
                 });
+            }
+        }
+    }
+
+    /// Rolls the given files back to `HEAD` (local repos only; design doc
+    /// §5.5). Unversioned files are deleted, JetBrains' rollback semantics.
+    pub(crate) fn rollback_files(
+        &self,
+        file_infos: Vec<FileStatusInfo>,
+        should_stash: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match self {
+            Self::Local(local) => {
+                local.update(ctx, |local, ctx| {
+                    local.rollback_files(file_infos, should_stash, ctx);
+                });
+            }
+            Self::Remote(_) => {
+                log::debug!("Rollback of selected files is not supported for remote repositories");
             }
         }
     }

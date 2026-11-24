@@ -101,6 +101,7 @@ use crate::code_review::diff_state::{
 };
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::find_model::CodeReviewFindModel;
+use crate::code_review::warpium_file_groups::{FileRow, GroupBy, build_rows};
 use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusEvent, GitRepoStatusModel};
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 use crate::code_review::hidden_lines::calculate_hidden_lines;
@@ -131,6 +132,7 @@ use crate::themes::theme::WarpTheme;
 use crate::ui_components::blended_colors::{neutral_2, neutral_3};
 use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::dialog::{Dialog, dialog_styles};
+use warp_core::ui::color::blend::Blend;
 use crate::ui_components::icons::Icon;
 use crate::ui_components::render_file_search_row::{FileSearchRowOptions, render_file_search_row};
 use crate::util::bindings::{
@@ -350,19 +352,40 @@ pub enum CodeReviewAction {
     ViewPr(String),
     PublishBranch,
     SubmitReviewComments,
+    /// Expand every file in the changes list (JetBrains' Expand All).
+    ExpandAllFiles,
+    /// Collapse every file to the list (JetBrains' Collapse All).
+    CollapseAllFiles,
+    /// The Group By toolbar selection (design doc §5.1), persisted globally.
+    SetGroupBy(GroupBy),
+    ToggleDirectoryNode(String),
+    ToggleRepositoryNode,
+    ToggleUnversionedNode,
+    /// Cmd-click multi-select of a file row for Rollback… (design doc §5.5).
+    ToggleFileRowSelection(String),
+    /// Opens the Rollback confirmation for the selected files.
+    ShowRollbackConfirmDialog,
 }
 
 pub struct FileState {
     pub file_diff: FileDiff,
     pub editor_state: Option<CodeReviewEditorState>,
     pub is_expanded: bool,
+    /// Base content at the diff's commit, kept for lazily creating the editor
+    /// on first expand (design doc §4.9 F2).
+    pub(crate) content_at_head: Option<Arc<str>>,
+    /// Whether the editor and action buttons have been created. `editor_state`
+    /// staying `None` can also mean "nothing to create" (binary files), so
+    /// this flag distinguishes "not yet" from "never".
+    interactive_created: bool,
+    /// Multi-selection for Rollback… (cmd-click, design doc §5.5).
+    selected: bool,
     sidebar_mouse_state: MouseStateHandle,
     header_mouse_state: MouseStateHandle,
-    chevron_button: ViewHandle<ActionButton>,
-    open_in_tab_button: ViewHandle<ActionButton>,
-    discard_button: ViewHandle<ActionButton>,
-    add_context_button: ViewHandle<ActionButton>,
-    copy_path_button: ViewHandle<ActionButton>,
+    open_in_tab_button: Option<ViewHandle<ActionButton>>,
+    discard_button: Option<ViewHandle<ActionButton>>,
+    add_context_button: Option<ViewHandle<ActionButton>>,
+    copy_path_button: Option<ViewHandle<ActionButton>>,
 }
 
 pub(crate) struct LoadedState {
@@ -372,6 +395,55 @@ pub(crate) struct LoadedState {
     pub(crate) total_additions: usize,
     pub(crate) total_deletions: usize,
     pub(crate) files_changed: usize,
+    /// The changes list flattened for the viewport: one item per group node or
+    /// file row in the current grouping (design doc §5.1).
+    pub(crate) rows: Vec<FileRow>,
+    /// Repo-relative file path -> index into `rows`.
+    row_index_by_file: HashMap<String, usize>,
+}
+
+impl LoadedState {
+    /// Rebuilds `rows` from the file set and the grouping state. Cheap
+    /// (linear in files plus the directory tree), called whenever either
+    /// changes.
+    pub(crate) fn rebuild_rows(
+        &mut self,
+        group_by: GroupBy,
+        collapsed_dirs: &HashSet<String>,
+        repository_node_expanded: bool,
+        unversioned_node_expanded: bool,
+    ) {
+        let files: Vec<(String, bool)> = self
+            .file_states
+            .iter()
+            .map(|(path, file_state)| {
+                (
+                    path.clone(),
+                    matches!(file_state.file_diff.status, GitFileStatus::Untracked),
+                )
+            })
+            .collect();
+        self.rows = build_rows(
+            &files,
+            group_by,
+            collapsed_dirs,
+            repository_node_expanded,
+            unversioned_node_expanded,
+        );
+        self.row_index_by_file = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| match row {
+                FileRow::File { path, .. } => Some((path.clone(), index)),
+                FileRow::Repository { .. } | FileRow::Directory { .. } | FileRow::UnversionedNode { .. } => None,
+            })
+            .collect();
+    }
+
+    pub(crate) fn row_index_for_file(&self, path: &str) -> Option<usize> {
+        self.row_index_by_file.get(path).copied()
+    }
 }
 
 impl LoadedState {
@@ -463,6 +535,9 @@ pub enum DiscardOperationType {
     FileUncommittedChanges,
     AllChangesAgainstBranch(Option<String>),
     FileChangesAgainstBranch(Option<String>),
+    /// Rollback of the multi-selected files (design doc §5.5): restore to
+    /// `HEAD`, deleting unversioned files.
+    RollbackSelectedFiles,
 }
 
 impl DiscardOperationType {
@@ -478,6 +553,7 @@ impl DiscardOperationType {
             DiscardOperationType::FileChangesAgainstBranch(_) => {
                 "Discard all changes to file?".to_string()
             }
+            DiscardOperationType::RollbackSelectedFiles => "Rollback selected files?".to_string(),
         }
     }
 
@@ -489,6 +565,7 @@ impl DiscardOperationType {
             DiscardOperationType::FileChangesAgainstBranch(None) => Some("This will restore this file to the main branch version and discard all committed and uncommitted edits.".to_string()),
             DiscardOperationType::AllChangesAgainstBranch(Some(_)) => Some("You're about to discard all committed and uncommitted changes.".to_string()),
             DiscardOperationType::FileChangesAgainstBranch(Some(branch)) => Some(format!("This will reset this file to the {branch} branch version and discard all committed and uncommitted edits.")),
+            DiscardOperationType::RollbackSelectedFiles => Some("Files will be restored to their last committed state. Unversioned files will be deleted.".to_string()),
         }
     }
 
@@ -497,6 +574,7 @@ impl DiscardOperationType {
             self,
             DiscardOperationType::AllUncommittedChanges
                 | DiscardOperationType::FileUncommittedChanges
+                | DiscardOperationType::RollbackSelectedFiles
         )
     }
 }
@@ -534,15 +612,28 @@ struct RepositoryState {
 
     /// Whether a repo-relative file path has been explicitly expanded (true) or collapsed (false).
     file_expanded: HashMap<String, bool>,
+    /// The Group By toolbar selection, persisted globally in
+    /// `warpium.code_review_group_by` and cached here per open repo.
+    group_by: GroupBy,
+    /// Directory nodes the user collapsed (Directory grouping); everything
+    /// starts expanded, matching JetBrains' tool window.
+    collapsed_dirs: HashSet<String>,
+    repository_node_expanded: bool,
+    /// The "Unversioned Files" node starts collapsed, as in JetBrains.
+    unversioned_node_expanded: bool,
 }
 
 impl RepositoryState {
-    fn new(repo_path: LocalOrRemotePath) -> Self {
+    fn new(repo_path: LocalOrRemotePath, group_by: GroupBy) -> Self {
         Self {
             repo_path,
             state: CodeReviewViewState::None,
             available_branches: Vec::new(),
             file_expanded: HashMap::new(),
+            group_by,
+            collapsed_dirs: HashSet::new(),
+            repository_node_expanded: true,
+            unversioned_node_expanded: false,
         }
     }
 
@@ -562,20 +653,11 @@ impl RepositoryState {
         Some(loaded_state)
     }
 
-    fn should_auto_expand_file(&self, file: &FileDiff) -> bool {
-        if let Some(manually_expanded) = self.file_expanded.get(&file.file_path) {
-            return *manually_expanded;
-        }
-
-        if file.is_binary {
-            return false;
-        }
-
-        if file.size != DiffSize::Normal {
-            return false;
-        }
-
-        !file.is_autogenerated
+    /// JetBrains Commit-tool-window parity (design doc §5.3): the changes list
+    /// opens collapsed, and a file expands only on the user's explicit choice
+    /// (a click on the row, or Expand All), remembered per repo.
+    fn should_auto_expand_file(&self, file_path: &str) -> bool {
+        self.file_expanded.get(file_path).copied().unwrap_or(false)
     }
 }
 
@@ -679,6 +761,14 @@ impl CodeReviewView {
         self.active_repo.as_ref().map(|repo| &repo.repo_path)
     }
 
+    /// The active Group By selection (design doc §5.1).
+    pub(crate) fn group_by(&self) -> GroupBy {
+        self.active_repo
+            .as_ref()
+            .map(|repo| repo.group_by)
+            .unwrap_or_default()
+    }
+
     pub(crate) fn repo_is_local(&self) -> Option<bool> {
         self.repo_path().map(LocalOrRemotePath::is_local)
     }
@@ -766,7 +856,7 @@ impl CodeReviewView {
         let preferred_session = self.preferred_review_session(ctx);
         self.diff_state_model.update(ctx, |model, ctx| {
             model.set_code_review_metadata_refresh_enabled(true, ctx);
-            model.load_diffs_for_current_repo(false, true, preferred_session, ctx);
+            model.open_review_panel(true, preferred_session, ctx);
         });
     }
 
@@ -1080,6 +1170,20 @@ impl CodeReviewView {
         list_state
     }
 
+    /// Recreates the viewported list with one item per current row. Scroll
+    /// position survives through the SavePosition anchors each row renders
+    /// with, so rebuilding on grouping changes doesn't jump the viewport.
+    fn reset_viewported_list(&mut self, ctx: &mut ViewContext<Self>) {
+        self.viewported_list_state = Self::create_list_state(ctx);
+        let row_count = match self.state() {
+            CodeReviewViewState::Loaded(loaded) => loaded.rows.len(),
+            _ => 0,
+        };
+        for _ in 0..row_count {
+            self.viewported_list_state.add_item();
+        }
+    }
+
     fn update_editor_comment_markers(&mut self, ctx: &mut ViewContext<Self>) {
         let CodeReviewViewState::Loaded(state) = self.state() else {
             return;
@@ -1314,7 +1418,14 @@ impl CodeReviewView {
         });
 
         let has_repo = repo_path.is_some();
-        let active_repo = repo_path.clone().map(RepositoryState::new);
+        let group_by = GroupBy::from_settings(
+            crate::warpium::sync_settings::WarpiumCodeReviewSettings::as_ref(ctx)
+                .code_review_group_by
+                .as_str(),
+        );
+        let active_repo = repo_path
+            .clone()
+            .map(|repo_path| RepositoryState::new(repo_path, group_by));
 
         let mut view = Self {
             active_repo,
@@ -2414,7 +2525,6 @@ impl CodeReviewView {
 
                 if status_changed {
                     diff_data.file_states.shift_remove_index(index);
-                    self.viewported_list_state.remove(index);
                     let new_states =
                         self.build_view_state_for_file_diffs(std::slice::from_ref(diff), ctx);
                     diff_data.file_states.extend(
@@ -2432,13 +2542,10 @@ impl CodeReviewView {
                     if should_apply {
                         current.file_diff = diff.file_diff.clone();
                     }
-                    self.viewported_list_state
-                        .invalidate_height_for_index(index);
                 }
             }
             (Some(index), None) => {
                 diff_data.file_states.shift_remove_index(index);
-                self.viewported_list_state.remove(index);
             }
             (None, Some(diff)) => {
                 let new_states =
@@ -2454,7 +2561,16 @@ impl CodeReviewView {
 
         if let Some(repo) = self.active_repo.as_mut() {
             repo.state = CodeReviewViewState::Loaded(diff_data);
+            if let CodeReviewViewState::Loaded(state) = &mut repo.state {
+                state.rebuild_rows(
+                    repo.group_by,
+                    &repo.collapsed_dirs,
+                    repo.repository_node_expanded,
+                    repo.unversioned_node_expanded,
+                );
+            }
         }
+        self.reset_viewported_list(ctx);
 
         self.update_editor_comment_markers(ctx);
         GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
@@ -2533,9 +2649,6 @@ impl CodeReviewView {
             });
         }
 
-        // Create a new list state for this update
-        self.viewported_list_state = Self::create_list_state(ctx);
-
         let file_states_vec = self.build_view_state_for_file_diffs(&diff_data.files, ctx);
         let is_local = self.repo_is_local();
         let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
@@ -2549,8 +2662,19 @@ impl CodeReviewView {
                 total_additions: diff_data.total_additions,
                 total_deletions: diff_data.total_deletions,
                 files_changed: diff_data.files_changed,
+                rows: Vec::new(),
+                row_index_by_file: HashMap::new(),
             });
+            if let CodeReviewViewState::Loaded(state) = &mut repo.state {
+                state.rebuild_rows(
+                    repo.group_by,
+                    &repo.collapsed_dirs,
+                    repo.repository_node_expanded,
+                    repo.unversioned_node_expanded,
+                );
+            }
         }
+        self.reset_viewported_list(ctx);
 
         send_telemetry_from_ctx!(
             CodeReviewTelemetryEvent::DiffLoadCompleted {
@@ -2580,11 +2704,163 @@ impl CodeReviewView {
     }
 
     /// Builds view state for the given file diffs, returning the list of newly created file states.
+    ///
+    /// Editors and per-file action buttons are NOT created here: rows start
+    /// collapsed (JetBrains parity, design doc §5.3) and the interactive state
+    /// is built lazily on first expand (design doc §4.9 F2+F5), so opening the
+    /// panel no longer constructs an editor and five buttons per file.
     fn build_view_state_for_file_diffs(
         &self,
         files: &[FileDiffAndContent],
         ctx: &mut ViewContext<Self>,
     ) -> Vec<FileState> {
+        // `ctx` only builds editors on the wasm path; everywhere else the
+        // interactive state is created lazily on first expand.
+        #[cfg(not(target_family = "wasm"))]
+        let _ = ctx;
+
+        let mut file_states = vec![];
+        for file in files {
+            let is_expanded = self.should_auto_expand_file(&file.file_diff.file_path);
+
+            file_states.push(FileState {
+                file_diff: file.file_diff.clone(),
+                editor_state: None,
+                is_expanded,
+                content_at_head: file.content_at_head.as_deref().map(Arc::from),
+                interactive_created: false,
+                selected: false,
+                sidebar_mouse_state: MouseStateHandle::default(),
+                header_mouse_state: MouseStateHandle::default(),
+                open_in_tab_button: None,
+                discard_button: None,
+                add_context_button: None,
+                copy_path_button: None,
+            })
+        }
+
+        file_states
+    }
+
+    /// Lazily creates a file's diff editor and per-file action buttons on
+    /// first expand. A collapsed list of N files used to build N editors and
+    /// 5N button views up front, on the main thread, whether or not any file
+    /// was ever opened; now only expanded files pay that cost.
+    fn ensure_file_interactive_state(&mut self, path: &str, ctx: &mut ViewContext<Self>) {
+        let pending = {
+            let Some(repo) = self.active_repo.as_ref() else {
+                return;
+            };
+            let CodeReviewViewState::Loaded(state) = &repo.state else {
+                return;
+            };
+            let Some(index) = state.file_states.get_index_of(path) else {
+                return;
+            };
+            let file = &state.file_states[index];
+            if file.interactive_created {
+                return;
+            }
+            (
+                index,
+                file.file_diff.clone(),
+                file.content_at_head.clone(),
+            )
+        };
+        let (index, file_diff, content_at_head) = pending;
+
+        let file = FileDiffAndContent {
+            file_diff: file_diff.clone(),
+            content_at_head: content_at_head.as_deref().map(str::to_owned),
+        };
+        let editor_state = {
+            // `LocalCodeEditorView::new_with_global_buffer` natively supports
+            // both `LocalOrRemotePath::Local` and `Remote`, so always go
+            // through the global-buffer path when we have a repo.
+            #[cfg(not(target_family = "wasm"))]
+            {
+                if self.repo_path().is_some() {
+                    self.create_code_review_model_with_global_buffer(&file, ctx)
+                } else {
+                    self.create_code_review_model(&file, ctx)
+                }
+            }
+            #[cfg(target_family = "wasm")]
+            {
+                self.create_code_review_model(&file, ctx)
+            }
+        };
+        let buttons = self.create_file_action_buttons(&file_diff, ctx);
+
+        let Some(repo) = self.active_repo.as_mut() else {
+            return;
+        };
+        let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+            return;
+        };
+        let Some(file) = state.file_states.get_index_mut(index) else {
+            return;
+        };
+        file.1.editor_state = editor_state;
+        file.1.open_in_tab_button = Some(buttons.0);
+        file.1.discard_button = Some(buttons.1);
+        file.1.add_context_button = Some(buttons.2);
+        file.1.copy_path_button = Some(buttons.3);
+        file.1.interactive_created = true;
+        if let Some(row_index) = state.row_index_for_file(path) {
+            self.viewported_list_state.invalidate_height_for_index(row_index);
+        }
+        ctx.notify();
+    }
+
+    /// Expand/collapse every file (JetBrains' toolbar actions, design doc
+    /// §5.2). Overwrites the per-file choices, and builds the lazy interactive
+    /// state of every file being expanded.
+    fn set_all_files_expanded(&mut self, expanded: bool, ctx: &mut ViewContext<Self>) {
+        let paths = {
+            let Some(repo) = self.active_repo.as_mut() else {
+                return;
+            };
+            let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+                return;
+            };
+            let paths: Vec<String> = state.file_states.keys().cloned().collect();
+            for path in &paths {
+                repo.file_expanded.insert(path.clone(), expanded);
+                if let Some(file) = state.file_states.get_mut(path) {
+                    file.is_expanded = expanded;
+                }
+            }
+            paths
+        };
+
+        if expanded {
+            for path in &paths {
+                self.ensure_file_interactive_state(path, ctx);
+            }
+        }
+        let row_count = match self.state() {
+            CodeReviewViewState::Loaded(loaded) => loaded.rows.len(),
+            _ => 0,
+        };
+        for index in 0..row_count {
+            self.viewported_list_state.invalidate_height_for_index(index);
+        }
+        ctx.notify();
+    }
+
+    /// The per-file row action buttons (open, discard, add context, copy
+    /// path), created with the editor on first expand.
+    fn create_file_action_buttons(
+        &self,
+        file_diff: &FileDiff,
+        ctx: &mut ViewContext<Self>,
+    ) -> (
+        ViewHandle<ActionButton>,
+        ViewHandle<ActionButton>,
+        ViewHandle<ActionButton>,
+        ViewHandle<ActionButton>,
+    ) {
         let git_operation_blocked = self
             .diff_state_model
             .as_ref(ctx)
@@ -2595,129 +2871,75 @@ impl CodeReviewView {
             "Discard changes".to_string()
         };
 
-        let mut file_states = vec![];
-        for file in files {
-            let editor_state = {
-                // `LocalCodeEditorView::new_with_global_buffer` natively
-                // supports both `LocalOrRemotePath::Local` and `Remote`
-                // (it sets language by extension and skips local-only
-                // wiring like LSP for remote files), so we always go
-                // through the global-buffer path when we have a repo.
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    if self.repo_path().is_some() {
-                        self.create_code_review_model_with_global_buffer(file, ctx)
-                    } else {
-                        self.create_code_review_model(file, ctx)
-                    }
-                }
-                #[cfg(target_family = "wasm")]
-                {
-                    self.create_code_review_model(file, ctx)
-                }
-            };
-            let is_expanded = self.should_auto_expand_file(&file.file_diff);
+        let file_line = file_line_for_open(file_diff);
 
-            let file_path = file.file_diff.file_path.clone();
-            let file_line = file_line_for_open(&file.file_diff);
+        let open_tab_path = file_diff.file_path.clone();
+        let open_in_tab_button = ctx.add_typed_action_view(move |_ctx| {
+            ActionButton::new("", NakedTheme)
+                .with_icon(Icon::LinkExternal)
+                .with_size(ButtonSize::InlineActionHeader)
+                .with_tooltip("Open file")
+                .on_click(move |ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::OpenInNewTab {
+                        path: open_tab_path.clone(),
+                        line_and_column: file_line.map(|line| LineAndColumnArg {
+                            line_num: line,
+                            column_num: None,
+                        }),
+                    })
+                })
+        });
 
-            let chevron_path = file_path.clone();
-            let initial_icon = if is_expanded {
-                Icon::ChevronDown
+        let discard_path = file_diff.file_path.clone();
+        let discard_tooltip = discard_tooltip_text;
+        let discard_button = ctx.add_typed_action_view(move |ctx| {
+            let mut button = ActionButton::new("", NakedTheme)
+                .with_icon(Icon::ReverseLeft)
+                .with_size(ButtonSize::InlineActionHeader)
+                .with_tooltip(discard_tooltip);
+
+            if git_operation_blocked {
+                button.set_disabled(true, ctx);
             } else {
-                Icon::ChevronRight
-            };
-            let chevron_button = ctx.add_typed_action_view(move |_ctx| {
-                ActionButton::new("", NakedTheme)
-                    .with_icon(initial_icon)
-                    .with_size(ButtonSize::InlineActionHeader)
-                    .on_click(move |ctx| {
-                        ctx.dispatch_typed_action(CodeReviewAction::ToggleFileExpanded(
-                            chevron_path.clone(),
-                        ))
-                    })
-            });
+                button = button.on_click(move |ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::ShowDiscardConfirmDialog(Some(
+                        discard_path.clone(),
+                    )))
+                });
+            }
+            button
+        });
 
-            let open_tab_path = file_path.clone();
-            let open_in_tab_button = ctx.add_typed_action_view(move |_ctx| {
-                ActionButton::new("", NakedTheme)
-                    .with_icon(Icon::LinkExternal)
-                    .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Open file")
-                    .on_click(move |ctx| {
-                        ctx.dispatch_typed_action(CodeReviewAction::OpenInNewTab {
-                            path: open_tab_path.clone(),
-                            line_and_column: file_line.map(|line| LineAndColumnArg {
-                                line_num: line,
-                                column_num: None,
-                            }),
-                        })
-                    })
-            });
+        let context_path = file_diff.file_path.clone();
+        let add_context_button = ctx.add_typed_action_view(move |_ctx| {
+            ActionButton::new("", NakedTheme)
+                .with_icon(Icon::Paperclip)
+                .with_size(ButtonSize::InlineActionHeader)
+                .with_tooltip("Add file diff as context")
+                .on_click(move |ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::AddDiffSetAsContext(
+                        DiffSetScope::File(context_path.clone()),
+                    ))
+                })
+        });
 
-            let discard_path = file.file_diff.file_path.clone();
-            let discard_tooltip = discard_tooltip_text.clone();
-            let discard_button = ctx.add_typed_action_view(move |ctx| {
-                let mut button = ActionButton::new("", NakedTheme)
-                    .with_icon(Icon::ReverseLeft)
-                    .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip(discard_tooltip);
+        let copy_path = file_diff.file_path.clone();
+        let copy_path_button = ctx.add_typed_action_view(move |_ctx| {
+            ActionButton::new("", NakedTheme)
+                .with_icon(Icon::Copy)
+                .with_size(ButtonSize::InlineActionHeader)
+                .with_tooltip("Copy file path")
+                .on_click(move |ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::CopyFilePath(copy_path.clone()))
+                })
+        });
 
-                if git_operation_blocked {
-                    button.set_disabled(true, ctx);
-                } else {
-                    button = button.on_click(move |ctx| {
-                        ctx.dispatch_typed_action(CodeReviewAction::ShowDiscardConfirmDialog(Some(
-                            discard_path.clone(),
-                        )))
-                    });
-                }
-                button
-            });
-
-            let context_path = file.file_diff.file_path.clone();
-            let add_context_button = ctx.add_typed_action_view(move |_ctx| {
-                ActionButton::new("", NakedTheme)
-                    .with_icon(Icon::Paperclip)
-                    .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Add file diff as context")
-                    .on_click(move |ctx| {
-                        ctx.dispatch_typed_action(CodeReviewAction::AddDiffSetAsContext(
-                            DiffSetScope::File(context_path.clone()),
-                        ))
-                    })
-            });
-
-            let copy_path = file.file_diff.file_path.clone();
-            let copy_path_button = ctx.add_typed_action_view(move |_ctx| {
-                ActionButton::new("", NakedTheme)
-                    .with_icon(Icon::Copy)
-                    .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Copy file path")
-                    .on_click(move |ctx| {
-                        ctx.dispatch_typed_action(CodeReviewAction::CopyFilePath(copy_path.clone()))
-                    })
-            });
-
-            file_states.push(FileState {
-                file_diff: file.file_diff.clone(),
-                editor_state,
-                is_expanded,
-                chevron_button,
-                open_in_tab_button,
-                discard_button,
-                add_context_button,
-                copy_path_button,
-                sidebar_mouse_state: MouseStateHandle::default(),
-                header_mouse_state: MouseStateHandle::default(),
-            })
-        }
-
-        // Populate the viewported list with file diffs
-        for _ in file_states.iter() {
-            self.viewported_list_state.add_item();
-        }
-        file_states
+        (
+            open_in_tab_button,
+            discard_button,
+            add_context_button,
+            copy_path_button,
+        )
     }
 
     fn render_diff_at_index(
@@ -2727,22 +2949,167 @@ impl CodeReviewView {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let diff_state = match self.state() {
-            CodeReviewViewState::Loaded(LoadedState { file_states, .. }) => file_states,
+        let loaded = match self.state() {
+            CodeReviewViewState::Loaded(loaded) => loaded,
             // This should never happen--we only render the list when in the loaded state.
             _ => return Empty::new().finish(),
         };
-        let Some((_, file_state)) = diff_state.get_index(index) else {
+        let Some(row) = loaded.rows.get(index) else {
             return Empty::new().finish();
         };
 
-        self.render_file_diff(file_state, index, scroll_offset, appearance, app)
+        match row {
+            FileRow::File { path, .. } => {
+                let Some((file_index, _, file_state)) = loaded.file_states.get_full(path) else {
+                    return Empty::new().finish();
+                };
+                self.render_file_diff(
+                    file_state,
+                    file_index,
+                    index,
+                    scroll_offset,
+                    appearance,
+                    app,
+                )
+            }
+            FileRow::Repository {
+                name,
+                file_count,
+                expanded,
+            } => {
+                let label = if name.is_empty() {
+                    self.repo_path()
+                        .and_then(|repo_path| repo_path.file_name())
+                        .unwrap_or("Repository")
+                        .to_string()
+                } else {
+                    name.clone()
+                };
+                self.render_group_node_row(
+                    Icon::GitBranch,
+                    label,
+                    *file_count,
+                    0,
+                    *expanded,
+                    CodeReviewAction::ToggleRepositoryNode,
+                    appearance,
+                )
+            }
+            FileRow::Directory {
+                label,
+                depth,
+                file_count,
+                expanded,
+                ..
+            } => self.render_group_node_row(
+                Icon::FolderClosed,
+                label.clone(),
+                *file_count,
+                *depth,
+                *expanded,
+                CodeReviewAction::ToggleDirectoryNode(label.clone()),
+                appearance,
+            ),
+            FileRow::UnversionedNode {
+                file_count,
+                expanded,
+            } => self.render_group_node_row(
+                Icon::Folder,
+                "Unversioned Files".to_owned(),
+                *file_count,
+                0,
+                *expanded,
+                CodeReviewAction::ToggleUnversionedNode,
+                appearance,
+            ),
+        }
     }
 
-    fn should_auto_expand_file(&self, file: &FileDiff) -> bool {
+    /// Renders a group node row of the changes list: the repository root, a
+    /// directory, or the "Unversioned Files" node (design doc §5.1, §5.4).
+    /// Clicking the row toggles the node's expansion.
+    fn render_group_node_row(
+        &self,
+        icon: Icon,
+        label: String,
+        file_count: usize,
+        depth: usize,
+        expanded: bool,
+        toggle: CodeReviewAction,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let chevron = if expanded {
+            Icon::ListOpen
+        } else {
+            Icon::ListCollapsed
+        };
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Container::new(
+                    icon.to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .finish(),
+                )
+                .with_margin_right(6.)
+                .finish(),
+            )
+            .with_child(
+                Text::new(
+                    label,
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size() + 2.,
+                )
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .with_color(theme.main_text_color(theme.surface_2()).into())
+                .finish(),
+            )
+            .with_child(
+                Container::new(
+                    Text::new(
+                        format!("{file_count}"),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(theme.sub_text_color(theme.surface_2()).into())
+                    .finish(),
+                )
+                .with_margin_left(6.)
+                .finish(),
+            )
+            .with_child(Shrinkable::new(1., Empty::new().finish()).finish())
+            .with_child(
+                chevron
+                    .to_warpui_icon(theme.sub_text_color(theme.background()))
+                    .finish(),
+            )
+            .finish();
+
+        EventHandler::new(
+            Container::new(
+                Container::new(row)
+                    .with_background(theme.surface_2())
+                    .with_vertical_padding(8.)
+                    .with_horizontal_padding(16. + depth as f32 * 14.)
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+                    .with_border(Border::new(1.).with_border_fill(theme.surface_3()))
+                    .finish(),
+            )
+            .with_background(theme.background())
+            .with_margin_bottom(EDITOR_GAP)
+            .finish(),
+        )
+        .on_left_mouse_up(move |ctx, _, _| {
+            ctx.dispatch_typed_action(toggle.clone());
+            DispatchEventResult::StopPropagation
+        })
+        .finish()
+    }
+
+    fn should_auto_expand_file(&self, file_path: &str) -> bool {
         self.active_repo
             .as_ref()
-            .map(|repo| repo.should_auto_expand_file(file))
+            .map(|repo| repo.should_auto_expand_file(file_path))
             .unwrap_or(false)
     }
 
@@ -4787,13 +5154,14 @@ impl CodeReviewView {
         &self,
         file: &FileState,
         file_index: usize,
+        row_index: usize,
         scroll_offset_from_top: ScrollOffset,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let is_item_being_scrolled = file_index == scroll_offset_from_top.list_item_index();
+        let is_item_being_scrolled = row_index == scroll_offset_from_top.list_item_index();
         // This helps us avoid rendering the sticky header for the first time when scrolled to the very top.
-        let is_first_item_with_no_scroll = file_index == 0
+        let is_first_item_with_no_scroll = row_index == 0
             && scroll_offset_from_top.list_item_index() == 0
             && scroll_offset_from_top.offset_from_start().as_f32() < 1.;
 
@@ -4882,13 +5250,23 @@ impl CodeReviewView {
 
         let file_name = file.file_diff.file_path.clone();
 
+        // A plain icon (not a button view): the whole row toggles the diff.
+        let chevron_icon = if file.is_expanded {
+            Icon::ListOpen
+        } else {
+            Icon::ListCollapsed
+        };
         let mut left_section = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
             .with_child(
-                Container::new(ChildView::new(&file.chevron_button).finish())
-                    .with_margin_right(8.)
-                    .finish(),
+                Container::new(
+                    chevron_icon
+                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .finish(),
+                )
+                .with_margin_right(8.)
+                .finish(),
             );
         if let GitFileStatus::Renamed { old_path } = &file.file_diff.status {
             left_section.add_children([
@@ -4981,16 +5359,18 @@ impl CodeReviewView {
             }
             _ => Empty::new().finish(),
         });
-        left_section.add_child(
-            EventHandler::new(
-                Container::new(ChildView::new(&file.copy_path_button).finish())
-                    .with_margin_right(8.)
-                    .finish(),
-            )
-            .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
-            .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
-            .finish(),
-        );
+        if let Some(copy_path_button) = &file.copy_path_button {
+            left_section.add_child(
+                EventHandler::new(
+                    Container::new(ChildView::new(copy_path_button).finish())
+                        .with_margin_right(8.)
+                        .finish(),
+                )
+                .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
+                .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+                .finish(),
+            );
+        }
         left_section.add_child(self.render_file_stats(&file.file_diff, appearance));
 
         let mut right_row = Flex::row()
@@ -4998,10 +5378,12 @@ impl CodeReviewView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
         // Add file diff as context button (before remove button)
-        if FeatureFlag::DiffSetAsContext.is_enabled() {
+        if FeatureFlag::DiffSetAsContext.is_enabled()
+            && let Some(add_context_button) = &file.add_context_button
+        {
             right_row.add_child(
                 EventHandler::new(
-                    Container::new(ChildView::new(&file.add_context_button).finish())
+                    Container::new(ChildView::new(add_context_button).finish())
                         .with_margin_left(4.)
                         .finish(),
                 )
@@ -5011,10 +5393,12 @@ impl CodeReviewView {
             );
         }
 
-        if FeatureFlag::DiscardPerFileAndAllChanges.is_enabled() {
+        if FeatureFlag::DiscardPerFileAndAllChanges.is_enabled()
+            && let Some(discard_button) = &file.discard_button
+        {
             right_row.add_child(
                 EventHandler::new(
-                    Container::new(ChildView::new(&file.discard_button).finish())
+                    Container::new(ChildView::new(discard_button).finish())
                         .with_margin_left(4.)
                         .finish(),
                 )
@@ -5024,16 +5408,18 @@ impl CodeReviewView {
             );
         }
 
-        right_row.add_child(
-            EventHandler::new(
-                Container::new(ChildView::new(&file.open_in_tab_button).finish())
-                    .with_margin_left(4.)
-                    .finish(),
-            )
-            .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
-            .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
-            .finish(),
-        );
+        if let Some(open_in_tab_button) = &file.open_in_tab_button {
+            right_row.add_child(
+                EventHandler::new(
+                    Container::new(ChildView::new(open_in_tab_button).finish())
+                        .with_margin_left(4.)
+                        .finish(),
+                )
+                .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
+                .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+                .finish(),
+            );
+        }
 
         let right_section = right_row.finish();
 
@@ -5047,10 +5433,14 @@ impl CodeReviewView {
         };
 
         let inner_header = Hoverable::new(file.header_mouse_state.clone(), |mouse_state| {
-            let header_bg = if mouse_state.is_hovered() {
-                neutral_3(appearance.theme())
+            let header_bg: warp_core::ui::theme::Fill = if file.selected {
+                // Multi-selection for Rollback… (design doc §5.5): a
+                // low-opacity accent tint.
+                theme.background().blend(&theme.accent().with_opacity(25))
+            } else if mouse_state.is_hovered() {
+                neutral_3(appearance.theme()).into()
             } else {
-                neutral_2(appearance.theme())
+                neutral_2(appearance.theme()).into()
             };
             Container::new(
                 Clipped::new(
@@ -5084,10 +5474,16 @@ impl CodeReviewView {
             )
             .finish()
         })
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(CodeReviewAction::ToggleFileExpanded(
-                file_path_for_toggle.clone(),
-            ))
+        .on_click_with_modifiers(move |ctx, _, _, modifiers| {
+            if modifiers.cmd || modifiers.ctrl {
+                ctx.dispatch_typed_action(CodeReviewAction::ToggleFileRowSelection(
+                    file_path_for_toggle.clone(),
+                ));
+            } else {
+                ctx.dispatch_typed_action(CodeReviewAction::ToggleFileExpanded(
+                    file_path_for_toggle.clone(),
+                ));
+            }
         })
         .with_defer_events_to_children()
         .finish();
@@ -5409,10 +5805,12 @@ impl CodeReviewView {
             self.discard_dialog_state.operation_type,
             DiscardOperationType::AllUncommittedChanges
                 | DiscardOperationType::AllChangesAgainstBranch(_)
+                | DiscardOperationType::RollbackSelectedFiles
         );
 
         if is_discard_all {
-            // Removing all files: show list of all files with individual stats and checkboxes
+            // Removing all or rolling back the selected files: show the list
+            // with individual stats and checkboxes
             let mut file_list = Flex::column();
 
             for file_path in &self.discard_dialog_state.discard_file_paths {
@@ -5484,7 +5882,14 @@ impl CodeReviewView {
             .finish();
 
         let (title, description) = (
-            self.discard_dialog_state.operation_type.title(),
+            if matches!(
+                self.discard_dialog_state.operation_type,
+                DiscardOperationType::RollbackSelectedFiles
+            ) {
+                format!("Rollback {} files?", self.discard_dialog_state.discard_file_paths.len())
+            } else {
+                self.discard_dialog_state.operation_type.title()
+            },
             self.discard_dialog_state.operation_type.description(),
         );
 
@@ -5635,6 +6040,48 @@ impl CodeReviewView {
             model.discard_files(file_infos, should_stash, branch_name.flatten(), ctx);
         });
         self.discard_dialog_state.stash_changes_enabled = false;
+    }
+
+    /// Rolls the given files back to `HEAD` via the diff model's batched
+    /// rollback (design doc §5.5).
+    fn rollback_multiple_files(
+        &mut self,
+        file_paths: Vec<StandardizedPath>,
+        should_stash: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let file_infos: Vec<FileStatusInfo> = file_paths
+            .into_iter()
+            .map(|path| self.create_file_status_info(path))
+            .collect();
+        self.diff_state_model.update(ctx, |model, ctx| {
+            model.rollback_files(file_infos, should_stash, ctx);
+        });
+        self.discard_dialog_state.stash_changes_enabled = false;
+    }
+
+    fn clear_file_selection(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(repo) = self.active_repo.as_mut()
+            && let CodeReviewViewState::Loaded(state) = &mut repo.state
+        {
+            for file in state.file_states.values_mut() {
+                file.selected = false;
+            }
+        }
+        ctx.notify();
+    }
+
+    /// The repo-relative paths of the multi-selected file rows (design doc
+    /// §5.5).
+    pub(crate) fn selected_file_count(&self) -> usize {
+        match self.state() {
+            CodeReviewViewState::Loaded(loaded) => loaded
+                .file_states
+                .values()
+                .filter(|file_state| file_state.selected)
+                .count(),
+            _ => 0,
+        }
     }
 
     fn handle_code_editor_event(
@@ -7198,42 +7645,41 @@ impl TypedActionView for CodeReviewView {
                 }
             }
             CodeReviewAction::ToggleFileExpanded(path) => {
-                let (file_index, now_expanded, chevron_button) = {
+                let (now_expanded, row_index) = {
                     let Some(repo) = self.active_repo.as_mut() else {
                         return;
                     };
 
                     if let CodeReviewViewState::Loaded(state) = &mut repo.state {
-                        if let Some(index) = state.file_states.get_index_of(path) {
-                            let file = &mut state.file_states[index];
-                            file.is_expanded = !file.is_expanded;
-                            let now_expanded = file.is_expanded;
-                            repo.file_expanded
-                                .insert(file.file_diff.file_path.clone(), now_expanded);
-                            (index, now_expanded, file.chevron_button.clone())
-                        } else {
+                        let Some(file_index) = state.file_states.get_index_of(path) else {
                             return;
-                        }
+                        };
+                        let now_expanded = {
+                            let file = &mut state.file_states[file_index];
+                            file.is_expanded = !file.is_expanded;
+                            file.is_expanded
+                        };
+                        repo.file_expanded.insert(path.clone(), now_expanded);
+                        (now_expanded, state.row_index_for_file(path))
                     } else {
                         return;
                     }
                 };
 
-                // Update the chevron button icon based on expanded state
-                chevron_button.update(ctx, |button, ctx| {
-                    let icon = if now_expanded {
-                        Icon::ChevronDown
-                    } else {
-                        Icon::ChevronRight
-                    };
-                    button.set_icon(Some(icon), ctx);
-                });
+                // Build the editor and row buttons on first expand (lazy
+                // creation, design doc §4.9 F2) before the row re-renders.
+                if now_expanded {
+                    self.ensure_file_interactive_state(path, ctx);
+                }
 
-                self.viewported_list_state
-                    .invalidate_height_for_index(file_index);
-                // If the file gets collapsed and had a sticky header, then we scroll to make the header in view.
-                if !now_expanded && self.viewported_list_state.is_scrolled_to_item(file_index) {
-                    self.viewported_list_state.scroll_to(file_index);
+                if let Some(row_index) = row_index {
+                    self.viewported_list_state
+                        .invalidate_height_for_index(row_index);
+                    // If the file gets collapsed and had a sticky header, then we scroll to make the header in view.
+                    if !now_expanded && self.viewported_list_state.is_scrolled_to_item(row_index)
+                    {
+                        self.viewported_list_state.scroll_to(row_index);
+                    }
                 }
 
                 if self.find_model.as_ref(ctx).is_find_bar_open()
@@ -7244,6 +7690,82 @@ impl TypedActionView for CodeReviewView {
                     });
                 }
 
+                ctx.notify();
+            }
+            CodeReviewAction::ExpandAllFiles => {
+                self.set_all_files_expanded(true, ctx);
+            }
+            CodeReviewAction::CollapseAllFiles => {
+                self.set_all_files_expanded(false, ctx);
+            }
+            CodeReviewAction::SetGroupBy(group_by) => {
+                use ::settings::Setting as _;
+                crate::warpium::sync_settings::WarpiumCodeReviewSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        let value = group_by.as_settings_value().to_owned();
+                        report_if_error!(settings.code_review_group_by.set_value(value, ctx));
+                    },
+                );
+                if let Some(repo) = self.active_repo.as_mut() {
+                    repo.group_by = *group_by;
+                    if let CodeReviewViewState::Loaded(state) = &mut repo.state {
+                        state.rebuild_rows(
+                            repo.group_by,
+                            &repo.collapsed_dirs,
+                            repo.repository_node_expanded,
+                            repo.unversioned_node_expanded,
+                        );
+                    }
+                }
+                self.reset_viewported_list(ctx);
+                ctx.notify();
+            }
+            CodeReviewAction::ToggleDirectoryNode(path) => {
+                if let Some(repo) = self.active_repo.as_mut() {
+                    if !repo.collapsed_dirs.insert(path.clone()) {
+                        repo.collapsed_dirs.remove(path);
+                    }
+                    if let CodeReviewViewState::Loaded(state) = &mut repo.state {
+                        state.rebuild_rows(
+                            repo.group_by,
+                            &repo.collapsed_dirs,
+                            repo.repository_node_expanded,
+                            repo.unversioned_node_expanded,
+                        );
+                    }
+                }
+                self.reset_viewported_list(ctx);
+                ctx.notify();
+            }
+            CodeReviewAction::ToggleRepositoryNode => {
+                if let Some(repo) = self.active_repo.as_mut() {
+                    repo.repository_node_expanded = !repo.repository_node_expanded;
+                    if let CodeReviewViewState::Loaded(state) = &mut repo.state {
+                        state.rebuild_rows(
+                            repo.group_by,
+                            &repo.collapsed_dirs,
+                            repo.repository_node_expanded,
+                            repo.unversioned_node_expanded,
+                        );
+                    }
+                }
+                self.reset_viewported_list(ctx);
+                ctx.notify();
+            }
+            CodeReviewAction::ToggleUnversionedNode => {
+                if let Some(repo) = self.active_repo.as_mut() {
+                    repo.unversioned_node_expanded = !repo.unversioned_node_expanded;
+                    if let CodeReviewViewState::Loaded(state) = &mut repo.state {
+                        state.rebuild_rows(
+                            repo.group_by,
+                            &repo.collapsed_dirs,
+                            repo.repository_node_expanded,
+                            repo.unversioned_node_expanded,
+                        );
+                    }
+                }
+                self.reset_viewported_list(ctx);
                 ctx.notify();
             }
             CodeReviewAction::SetDiffMode(mode) => {
@@ -7266,23 +7788,31 @@ impl TypedActionView for CodeReviewView {
             CodeReviewAction::FileSelected(file_index) => {
                 // Early-return when repo/state/file is missing to avoid calling
                 // invalidate_height_for_index or scroll_to with an invalid index.
-                let was_expanded = {
+                let (path, was_expanded) = {
                     let Some(repo) = self.active_repo.as_mut() else {
                         return;
                     };
                     let CodeReviewViewState::Loaded(state) = &mut repo.state else {
                         return;
                     };
-                    let Some((_, file)) = state.file_states.get_index_mut(*file_index) else {
+                    let Some((path, file)) = state.file_states.get_index_mut(*file_index) else {
                         return;
                     };
+                    let path = path.clone();
                     let was_expanded = file.is_expanded;
                     file.is_expanded = true;
-                    was_expanded
+                    repo.file_expanded.insert(path.clone(), true);
+                    (path, was_expanded)
                 };
 
-                self.viewported_list_state
-                    .invalidate_height_for_index(*file_index);
+                self.ensure_file_interactive_state(&path, ctx);
+                if let Some(row_index) = match self.state() {
+                    CodeReviewViewState::Loaded(loaded) => loaded.row_index_for_file(&path),
+                    _ => None,
+                } {
+                    self.viewported_list_state
+                        .invalidate_height_for_index(row_index);
+                }
 
                 if !was_expanded
                     && self.find_model.as_ref(ctx).is_find_bar_open()
@@ -7421,14 +7951,86 @@ impl TypedActionView for CodeReviewView {
                 }
                 ctx.notify();
             }
+            CodeReviewAction::ShowRollbackConfirmDialog => {
+                let CodeReviewViewState::Loaded(loaded) = self.state() else {
+                    return;
+                };
+                let selected_paths: Vec<String> = loaded
+                    .file_states
+                    .iter()
+                    .filter(|(_, file_state)| file_state.selected)
+                    .map(|(path, _)| path.clone())
+                    .collect();
+                if selected_paths.is_empty() {
+                    return;
+                }
+                self.discard_dialog_state.show_discard_confirm_dialog = true;
+                self.discard_dialog_state.operation_type =
+                    DiscardOperationType::RollbackSelectedFiles;
+                self.discard_dialog_state.discard_file_paths = selected_paths;
+                self.discard_dialog_state.selected_files.clear();
+                self.discard_dialog_state.file_checkbox_mouse_states.clear();
+                for file_path in &self.discard_dialog_state.discard_file_paths {
+                    self.discard_dialog_state
+                        .selected_files
+                        .insert(file_path.clone(), true);
+                    self.discard_dialog_state
+                        .file_checkbox_mouse_states
+                        .insert(file_path.clone(), MouseStateHandle::default());
+                }
+                ctx.notify();
+            }
+            CodeReviewAction::ToggleFileRowSelection(path) => {
+                if let Some(repo) = self.active_repo.as_mut()
+                    && let CodeReviewViewState::Loaded(state) = &mut repo.state
+                    && let Some(file) = state.file_states.get_mut(path)
+                {
+                    file.selected = !file.selected;
+                    ctx.notify();
+                }
+            }
             CodeReviewAction::ConfirmDiscardFile => {
-                let is_discard_all = matches!(
+                let is_rollback = matches!(
                     self.discard_dialog_state.operation_type,
-                    DiscardOperationType::AllUncommittedChanges
-                        | DiscardOperationType::AllChangesAgainstBranch(_)
+                    DiscardOperationType::RollbackSelectedFiles
                 );
+                let is_discard_all = is_rollback
+                    || matches!(
+                        self.discard_dialog_state.operation_type,
+                        DiscardOperationType::AllUncommittedChanges
+                            | DiscardOperationType::AllChangesAgainstBranch(_)
+                    );
 
-                if is_discard_all {
+                if is_rollback {
+                    // Rollback the dialog's checklist selection (design doc
+                    // §5.5), then drop the row selection.
+                    let selected_files: Vec<StandardizedPath> = self
+                        .discard_dialog_state
+                        .discard_file_paths
+                        .iter()
+                        .filter_map(|path| {
+                            if !*self
+                                .discard_dialog_state
+                                .selected_files
+                                .get(path)
+                                .unwrap_or(&false)
+                            {
+                                None
+                            } else {
+                                self.to_standardized_path(path)
+                            }
+                        })
+                        .collect();
+
+                    if !selected_files.is_empty() {
+                        self.rollback_multiple_files(
+                            selected_files,
+                            self.discard_dialog_state.stash_changes_enabled,
+                            ctx,
+                        );
+                    }
+                    self.clear_file_selection(ctx);
+                } else if is_discard_all {
                     // Get list of selected files
                     let selected_files: Vec<StandardizedPath> = self
                         .discard_dialog_state
@@ -7751,7 +8353,7 @@ mod code_review_view_integration;
 
 #[cfg(feature = "integration_tests")]
 pub use code_review_view_integration::CodeReviewVisibleAnchorForTest;
-use warp_errors::report_error;
+use warp_errors::{report_error, report_if_error};
 
 #[cfg(test)]
 #[path = "code_review_view_tests.rs"]

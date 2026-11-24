@@ -219,6 +219,37 @@ pub(crate) const INLINE_BLAME_CONTEXT_FLAG: &str = "WarpiumInlineBlame";
 
 pub(crate) use git::WarpiumGitSettings;
 
+pub(crate) use code_review::WarpiumCodeReviewSettings;
+
+// Its own group so the Code Review panel subscribes to its events only.
+mod code_review {
+    use ::settings::{SupportedPlatforms, SyncToCloud};
+    use warp_core::define_settings_group;
+
+    define_settings_group!(WarpiumCodeReviewSettings, settings: [
+        code_review_group_by: CodeReviewGroupBy {
+            type: String,
+            default: "flat".to_owned(),
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            surface: ::settings::SettingSurfaces::GUI,
+            private: false,
+            toml_path: "warpium.code_review_group_by",
+            description: "How the Code Review panel groups its changes list: flat, directory (collapsible directory nodes), or repository (the repository node as root). Set from the panel's Group By toolbar control.",
+        },
+        code_review_panel_tab: CodeReviewPanelTab {
+            type: String,
+            default: "changes".to_owned(),
+            supported_platforms: SupportedPlatforms::ALL,
+            sync_to_cloud: SyncToCloud::Never,
+            surface: ::settings::SettingSurfaces::GUI,
+            private: false,
+            toml_path: "warpium.code_review_panel_tab",
+            description: "Which sub-tab the Code Review panel shows: changes or stashes.",
+        },
+    ]);
+}
+
 // Its own group for the same reason as `agent` above.
 mod git {
     use ::settings::{SupportedPlatforms, SyncToCloud};

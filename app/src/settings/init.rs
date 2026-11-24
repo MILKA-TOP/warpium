@@ -113,6 +113,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     crate::warpium::sync_settings::WarpiumBottomPanelSettings::register(ctx);
     crate::warpium::sync_settings::WarpiumGitSettings::register(ctx);
     crate::warpium::sync_settings::WarpiumContainerPasteSettings::register(ctx);
+    crate::warpium::sync_settings::WarpiumCodeReviewSettings::register(ctx);
     if FeatureFlag::WarpControlCli.is_enabled() {
         LocalControlSettings::register(ctx);
     }

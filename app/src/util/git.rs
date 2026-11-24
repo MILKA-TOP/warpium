@@ -88,8 +88,25 @@ pub async fn detect_main_branch(_repo_path: &Path) -> Result<String> {
 }
 
 /// Detects the main branch using git-branchless style heuristics.
+///
+/// Memoized per process (`warpium_main_branch`): the detection costs up to
+/// seven sequential `git` spawns and runs in several loads per Code Review
+/// open, while the answer only changes when the repo's refs do. The memo
+/// re-runs the detection whenever the ref stamp changes.
 #[cfg(feature = "local_fs")]
 pub async fn detect_main_branch(repo_path: &Path) -> Result<String> {
+    if let Some(name) = super::warpium_main_branch::cached(repo_path) {
+        log::debug!("[GIT OPERATION] git.rs detect_main_branch memo hit");
+        return Ok(name);
+    }
+    let name = detect_main_branch_uncached(repo_path).await?;
+    super::warpium_main_branch::store(repo_path, &name);
+    Ok(name)
+}
+
+/// Detects the main branch using git-branchless style heuristics.
+#[cfg(feature = "local_fs")]
+async fn detect_main_branch_uncached(repo_path: &Path) -> Result<String> {
     // First try to get the default branch from origin
     log::debug!(
         "[GIT OPERATION] git.rs detect_main_branch git symbolic-ref refs/remotes/origin/HEAD"

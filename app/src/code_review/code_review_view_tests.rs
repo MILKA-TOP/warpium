@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -344,11 +345,10 @@ fn create_loaded_state_with_editors(
     let file_states = file_editors
         .into_iter()
         .map(|(file_path, editor)| {
-            let chevron_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
-            let open_in_tab_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
-            let discard_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
-            let add_context_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
-            let copy_path_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
+            let open_in_tab_button = Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
+            let discard_button = Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
+            let add_context_button = Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
+            let copy_path_button = Some(app.add_view(window_id, |_| ActionButton::new("", NakedTheme)));
 
             let state = FileState {
                 file_diff: FileDiff {
@@ -363,9 +363,11 @@ fn create_loaded_state_with_editors(
                 },
                 editor_state: Some(CodeReviewEditorState::new_loaded(editor)),
                 is_expanded: true,
+                content_at_head: None,
+                interactive_created: true,
+                selected: false,
                 sidebar_mouse_state: MouseStateHandle::default(),
                 header_mouse_state: MouseStateHandle::default(),
-                chevron_button,
                 open_in_tab_button,
                 discard_button,
                 add_context_button,
@@ -380,6 +382,8 @@ fn create_loaded_state_with_editors(
         total_additions: 0,
         total_deletions: 0,
         files_changed: 0,
+        rows: Vec::new(),
+        row_index_by_file: HashMap::new(),
     }
 }
 

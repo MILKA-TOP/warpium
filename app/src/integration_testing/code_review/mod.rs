@@ -256,6 +256,16 @@ pub fn expand_first_hidden_section_and_assert_full_reveal(
     TestStep::new("Fully expand the first hidden section").with_action(move |app, window_id, _| {
         let code_review_view = single_code_review_view(app, window_id);
 
+        // Files start collapsed and their editors are created lazily on first
+        // expand, so opening the row is part of the setup.
+        let row_expanded = code_review_view.update(app, |code_review_view, ctx| {
+            code_review_view.expand_file_for_test(&file_path, ctx)
+        });
+        assert!(
+            row_expanded,
+            "expected the file row to expand for {file_path:?}"
+        );
+
         let before = code_review_view
             .read(app, |code_review_view, ctx| {
                 code_review_view.hidden_section_count_for_test(&file_path, ctx)
