@@ -39,7 +39,7 @@ impl PanelTab {
 }
 
 /// Viewless per-row hover state for the stash list (rebuilt with the list).
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct StashRowInteraction {
     pub row: MouseStateHandle,
 }

@@ -15,7 +15,7 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
-use crate::code::editor::diff::remove_color;
+use crate::code::editor::remove_color;
 use crate::code_review::diff_state::CommitChainMode;
 use crate::code_review::git_dialog::pr::show_pr_created_toast;
 use crate::code_review::git_dialog::{
@@ -151,7 +151,7 @@ pub(super) fn new_state(
             })
     });
     let commit_and_push_button = ctx.add_typed_action_view(move |_ctx| {
-        ActionButton::new(push_label, SecondaryTheme)
+        ActionButton::new(push_label.clone(), SecondaryTheme)
             .with_size(ButtonSize::XSmall)
             .with_height(32.)
             .with_icon(push_icon)
@@ -447,7 +447,10 @@ pub(super) fn handle_sub_action(
 fn update_intent_labels(state: &CommitState, ctx: &mut ViewContext<GitDialog>) {
     let amend = state.amend;
     state.commit_button.update(ctx, |button, ctx| {
-        button.set_label(crate::code_review::warpium_amend::amend_intent_label("Commit", amend), ctx);
+        button.set_label(
+            crate::code_review::warpium_amend::amend_intent_label("Commit", amend),
+            ctx,
+        );
     });
     let push_label = state.push_label.clone();
     state.commit_and_push_button.update(ctx, |button, ctx| {
@@ -490,7 +493,8 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     // once and require a second confirm, like JetBrains (design doc §5.7).
     if crate::code_review::warpium_amend::needs_pushed_amend_warning(
         amend,
-        me.diff_state_model().read(ctx, |model, ctx| model.is_head_pushed(ctx)),
+        me.diff_state_model()
+            .read(ctx, |model, ctx| model.is_head_pushed(ctx)),
         state.amend_pushed_acknowledged,
     ) {
         if let GitDialogMode::Commit(state) = me.mode_mut() {
@@ -788,8 +792,10 @@ fn render_message_editor(
             .checkbox(state.amend_checkbox_mouse_state.clone(), Some(16.))
             .check(state.amend)
             .with_label(
-                appearance.ui_builder().span("Amend").with_style(
-                    UiComponentStyles {
+                appearance
+                    .ui_builder()
+                    .span("Amend")
+                    .with_style(UiComponentStyles {
                         font_size: Some(appearance.ui_font_size()),
                         font_color: Some(
                             appearance
@@ -798,21 +804,14 @@ fn render_message_editor(
                                 .into(),
                         ),
                         ..Default::default()
-                    },
-                ),
+                    }),
             )
             .build()
             .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(GitDialogAction::Commit(
-                    CommitSubAction::ToggleAmend,
-                ));
+                ctx.dispatch_typed_action(GitDialogAction::Commit(CommitSubAction::ToggleAmend));
             })
             .finish();
-        column.add_child(
-            Container::new(amend_checkbox)
-                .with_margin_top(8.)
-                .finish(),
-        );
+        column.add_child(Container::new(amend_checkbox).with_margin_top(8.).finish());
     }
 
     column.finish()

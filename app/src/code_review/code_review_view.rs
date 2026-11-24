@@ -3426,9 +3426,8 @@ impl CodeReviewView {
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
                 .finish()
         })
-        .on_left_mouse_up(move |ctx, _, _| {
+        .on_mouse_down(move |ctx, _, _| {
             ctx.dispatch_typed_action(CodeReviewAction::SelectStash(index));
-            DispatchEventResult::StopPropagation
         })
         .finish();
 
@@ -3623,7 +3622,7 @@ impl CodeReviewView {
             .finish();
 
         let dialog = Dialog::new(
-            "Create stash",
+            "Create stash".to_string(),
             Some("Stashes all local changes, including untracked files.".to_string()),
             UiComponentStyles {
                 width: Some(460.),
