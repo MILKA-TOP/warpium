@@ -102,6 +102,7 @@ use crate::code_review::diff_state::{
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::find_model::CodeReviewFindModel;
 use crate::code_review::warpium_file_groups::{FileRow, GroupBy, build_rows};
+use crate::code_review::warpium_stash_tab::{PanelTab, WarpiumStashTabState};
 use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusEvent, GitRepoStatusModel};
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 use crate::code_review::hidden_lines::calculate_hidden_lines;
@@ -112,7 +113,7 @@ use crate::code_review::telemetry_event::{
     PaneStateChange,
 };
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
-use crate::editor::InteractionState;
+use crate::editor::{EditorOptions, EditorView, InteractionState, TextOptions};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::PaneId;
 use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
@@ -365,6 +366,19 @@ pub enum CodeReviewAction {
     ToggleFileRowSelection(String),
     /// Opens the Rollback confirmation for the selected files.
     ShowRollbackConfirmDialog,
+    /// The Stashes sub-tab (design doc §5.6).
+    SetPanelTab(PanelTab),
+    ReloadStashes,
+    SelectStash(usize),
+    SelectStashFile(usize),
+    OpenCreateStashDialog,
+    CancelCreateStashDialog,
+    ConfirmCreateStash,
+    ApplyStash(usize),
+    PopStash(usize),
+    RequestDropStash(usize),
+    ConfirmDropStash,
+    CancelDropStash,
 }
 
 pub struct FileState {
@@ -754,6 +768,19 @@ pub struct CodeReviewView {
     git_repo_status: Option<ModelHandle<GitRepoStatusModel>>,
     /// Per-repo GitHub-info model for the current repository, if any.
     github_repo_model: Option<ModelHandle<GitHubRepoModel>>,
+    /// Which sub-tab the panel shows (design doc §5.6), persisted.
+    panel_tab: PanelTab,
+    stash_state: WarpiumStashTabState,
+    changes_tab_button: ViewHandle<ActionButton>,
+    stashes_tab_button: ViewHandle<ActionButton>,
+    stash_create_button: ViewHandle<ActionButton>,
+    stash_refresh_button: ViewHandle<ActionButton>,
+    stash_create_message_editor: Option<ViewHandle<EditorView>>,
+    stash_create_confirm_button: Option<ViewHandle<ActionButton>>,
+    stash_create_cancel_button: Option<ViewHandle<ActionButton>>,
+    stash_drop_confirm_button: Option<ViewHandle<ActionButton>>,
+    stash_drop_cancel_button: Option<ViewHandle<ActionButton>>,
+    stash_scroll_state: ClippedScrollStateHandle,
 }
 
 impl CodeReviewView {
@@ -858,6 +885,9 @@ impl CodeReviewView {
             model.set_code_review_metadata_refresh_enabled(true, ctx);
             model.open_review_panel(true, preferred_session, ctx);
         });
+        if self.panel_tab == PanelTab::Stashes {
+            self.reload_stashes(ctx);
+        }
     }
 
     /// Called when the code review view is closed/detached.
@@ -1427,6 +1457,45 @@ impl CodeReviewView {
             .clone()
             .map(|repo_path| RepositoryState::new(repo_path, group_by));
 
+        let panel_tab = PanelTab::from_settings(
+            crate::warpium::sync_settings::WarpiumCodeReviewSettings::as_ref(ctx)
+                .code_review_panel_tab
+                .as_str(),
+        );
+        let changes_tab_button = ctx.add_typed_action_view(move |ctx| {
+            let mut button = ActionButton::new("Changes", NakedTheme)
+                .with_size(ButtonSize::XSmall)
+                .with_tooltip("Show working tree changes");
+            button.set_active(panel_tab == PanelTab::Changes, ctx);
+            button.on_click(|ctx| {
+                ctx.dispatch_typed_action(CodeReviewAction::SetPanelTab(PanelTab::Changes))
+            })
+        });
+        let stashes_tab_button = ctx.add_typed_action_view(move |ctx| {
+            let mut button = ActionButton::new("Stashes", NakedTheme)
+                .with_size(ButtonSize::XSmall)
+                .with_tooltip("Show stashes");
+            button.set_active(panel_tab == PanelTab::Stashes, ctx);
+            button.on_click(|ctx| {
+                ctx.dispatch_typed_action(CodeReviewAction::SetPanelTab(PanelTab::Stashes))
+            })
+        });
+        let stash_create_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Stash", SecondaryTheme)
+                .with_size(ButtonSize::XSmall)
+                .with_icon(Icon::Plus)
+                .with_tooltip("Stash all local changes")
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::OpenCreateStashDialog)
+                })
+        });
+        let stash_refresh_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Refresh", NakedTheme)
+                .with_size(ButtonSize::XSmall)
+                .with_tooltip("Refresh stashes")
+                .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::ReloadStashes))
+        });
+
         let mut view = Self {
             active_repo,
             ui_state_handles,
@@ -1472,6 +1541,18 @@ impl CodeReviewView {
             git_dialog: None,
             git_repo_status: None,
             github_repo_model: None,
+            panel_tab,
+            stash_state: WarpiumStashTabState::default(),
+            changes_tab_button,
+            stashes_tab_button,
+            stash_create_button,
+            stash_refresh_button,
+            stash_create_message_editor: None,
+            stash_create_confirm_button: None,
+            stash_create_cancel_button: None,
+            stash_drop_confirm_button: None,
+            stash_drop_cancel_button: None,
+            stash_scroll_state: ClippedScrollStateHandle::default(),
         };
         view.set_active_repo_comment_model(comment_batch_model, ctx);
         if has_repo {
@@ -3106,7 +3187,510 @@ impl CodeReviewView {
         .finish()
     }
 
-    fn should_auto_expand_file(&self, file_path: &str) -> bool {
+
+    /// The Changes | Stashes sub-tab strip at the top of the panel content
+    /// (design doc §5.6). Stashes are a local-repo surface.
+    fn render_panel_tab_strip(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min);
+        row.add_child(ChildView::new(&self.changes_tab_button).finish());
+        if self.repo_is_local() == Some(true) {
+            row.add_child(
+                Container::new(ChildView::new(&self.stashes_tab_button).finish())
+                    .with_margin_left(4.)
+                    .finish(),
+            );
+        }
+        Container::new(row.finish())
+            .with_margin_bottom(8.)
+            .finish()
+    }
+
+    /// The Stashes sub-tab: the stash list with per-row apply/pop/drop, and
+    /// the selected stash's per-file patches in a read-only unified viewer
+    /// (design doc §5.6).
+    fn render_stash_tab(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        if self.repo_is_local() != Some(true) {
+            return self.render_stash_placeholder(
+                "Stashes are only available for local repositories",
+                appearance,
+            );
+        }
+
+        let mut content = Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+
+        let mut toolbar = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min);
+        toolbar.add_child(ChildView::new(&self.stash_create_button).finish());
+        toolbar.add_child(
+            Container::new(ChildView::new(&self.stash_refresh_button).finish())
+                .with_margin_left(4.)
+                .finish(),
+        );
+        if let Some(busy) = &self.stash_state.busy {
+            toolbar.add_child(
+                Container::new(
+                    Text::new(
+                        busy.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(theme.sub_text_color(theme.background()).into())
+                    .finish(),
+                )
+                .with_margin_left(8.)
+                .finish(),
+            );
+        }
+        content.add_child(Container::new(toolbar.finish()).with_margin_bottom(8.).finish());
+
+        if self.stash_state.loading {
+            content.add_child(
+                Text::new(
+                    "Loading stashes\u{2026}".to_string(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.sub_text_color(theme.background()).into())
+                .finish(),
+            );
+        } else if let Some(err) = &self.stash_state.load_error {
+            content.add_child(
+                Text::new(
+                    format!("Couldn\u{2019}t load stashes: {err}"),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(remove_color(appearance))
+                .finish(),
+            );
+        } else if self.stash_state.entries.is_empty() {
+            content.add_child(self.render_stash_placeholder("No stashes", appearance));
+        } else {
+            for (row_index, entry) in self.stash_state.entries.iter().enumerate() {
+                content.add_child(self.render_stash_row(entry, row_index, appearance));
+                if self.stash_state.selected_stash == Some(entry.index) {
+                    content.add_child(self.render_stash_files(entry, appearance));
+                }
+            }
+        }
+
+        let scrollable = NewScrollable::vertical(
+            SingleAxisConfig::Clipped {
+                handle: self.stash_scroll_state.clone(),
+                child: content.finish(),
+            },
+            theme.nonactive_ui_detail().into(),
+            theme.active_ui_detail().into(),
+            warpui::elements::Fill::None,
+        )
+        .with_vertical_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Auto, false))
+        .finish();
+
+        let mut stack = Stack::new().with_child(Shrinkable::new(1., scrollable).finish());
+        if self.stash_state.create_dialog_open {
+            stack.add_positioned_child(
+                self.render_stash_create_dialog(appearance),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 0.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::Center,
+                    ChildAnchor::Center,
+                ),
+            );
+        }
+        if let Some(index) = self.stash_state.confirm_drop {
+            stack.add_positioned_child(
+                self.render_stash_drop_dialog(index, appearance),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 0.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::Center,
+                    ChildAnchor::Center,
+                ),
+            );
+        }
+        stack.finish()
+    }
+
+    fn render_stash_placeholder(&self, text: &str, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let mut column = Flex::column()
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min);
+        column.add_child(
+            Text::new(
+                text.to_string(),
+                appearance.ui_font_family(),
+                14.,
+            )
+            .with_color(theme.sub_text_color(theme.surface_2()).into())
+            .finish(),
+        );
+        Shrinkable::new(1., column.finish()).finish()
+    }
+
+    fn render_stash_row(
+        &self,
+        entry: &warpium_git::stash::StashEntry,
+        row_index: usize,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let selected = self.stash_state.selected_stash == Some(entry.index);
+        let interaction = self
+            .stash_state
+            .row_interactions
+            .get(row_index)
+            .cloned()
+            .unwrap_or_default();
+
+        let label = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(Shrinkable::new(
+                1.,
+                Text::new(
+                    entry.message.clone(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size() + 1.,
+                )
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .with_color(theme.main_text_color(theme.surface_2()).into())
+                .with_clip(ClipConfig::start())
+                .soft_wrap(false)
+                .finish(),
+            ).finish())
+            .with_child(
+                Container::new(
+                    Text::new(
+                        entry.created.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(theme.sub_text_color(theme.surface_2()).into())
+                    .with_clip(ClipConfig::start())
+                    .soft_wrap(false)
+                    .finish(),
+                )
+                .with_margin_left(8.)
+                .finish(),
+            )
+            .finish();
+
+        let buttons = if let Some((apply, pop, drop)) = self.stash_state.row_buttons.get(row_index)
+        {
+            let mut row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center);
+            row.add_child(ChildView::new(apply).finish());
+            row.add_child(
+                Container::new(ChildView::new(pop).finish())
+                    .with_margin_left(2.)
+                    .finish(),
+            );
+            row.add_child(
+                Container::new(ChildView::new(drop).finish())
+                    .with_margin_left(2.)
+                    .finish(),
+            );
+            row.finish()
+        } else {
+            Empty::new().finish()
+        };
+
+        let body = Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(Shrinkable::new(1., label).finish())
+            .with_child(buttons)
+            .finish();
+
+        let index = entry.index;
+        let row_bg = move |hovered: bool| -> warp_core::ui::theme::Fill {
+            if selected {
+                theme
+                    .background()
+                    .blend(&theme.accent().with_opacity(20))
+            } else if hovered {
+                neutral_3(theme).into()
+            } else {
+                neutral_2(theme).into()
+            }
+        };
+        let inner = Hoverable::new(interaction.row.clone(), move |mouse_state| {
+            Container::new(body)
+                .with_background(row_bg(mouse_state.is_hovered()))
+                .with_vertical_padding(6.)
+                .with_horizontal_padding(12.)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                .finish()
+        })
+        .on_left_mouse_up(move |ctx, _, _| {
+            ctx.dispatch_typed_action(CodeReviewAction::SelectStash(index));
+            DispatchEventResult::StopPropagation
+        })
+        .finish();
+
+        Container::new(inner)
+            .with_margin_bottom(2.)
+            .finish()
+    }
+
+    /// The selected stash's changed files; clicking one shows its patch.
+    fn render_stash_files(
+        &self,
+        entry: &warpium_git::stash::StashEntry,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        if self.stash_state.loading_patch {
+            return Container::new(
+                Text::new(
+                    "Loading diff\u{2026}".to_string(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.sub_text_color(theme.background()).into())
+                .finish(),
+            )
+            .with_margin_left(16.)
+            .with_margin_top(4.)
+            .with_margin_bottom(4.)
+            .finish();
+        }
+        if self.stash_state.files.is_empty() {
+            return Empty::new().finish();
+        }
+        let mut list = Flex::column();
+        for (index, file) in self.stash_state.files.iter().enumerate() {
+            list.add_child(self.render_stash_file_row(index, file, appearance));
+        }
+        Container::new(list.finish())
+            .with_margin_left(16.)
+            .with_margin_top(4.)
+            .with_margin_bottom(4.)
+            .finish()
+    }
+
+    fn render_stash_file_row(
+        &self,
+        index: usize,
+        file: &warpium_git::stash::StashFilePatch,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let (letter, color) = match &file.kind {
+            warpium_git::diff::FileChangeKind::Added => ("A", add_color(appearance)),
+            warpium_git::diff::FileChangeKind::Deleted => ("D", remove_color(appearance)),
+            warpium_git::diff::FileChangeKind::Renamed { .. } => ("R", theme.sub_text_color(theme.background()).into_solid()),
+            _ => ("M", theme.sub_text_color(theme.background()).into_solid()),
+        };
+        let selected = self.stash_state.selected_file == Some(index);
+        let row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Text::new(
+                    letter.to_string(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .with_color(color)
+                .finish(),
+            )
+            .with_child(
+                Container::new(
+                    Text::new(
+                        file.path.clone(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(if selected {
+                        theme.main_text_color(theme.background()).into()
+                    } else {
+                        theme.sub_text_color(theme.background()).into()
+                    })
+                    .with_clip(ClipConfig::start())
+                    .soft_wrap(false)
+                    .finish(),
+                )
+                .with_margin_left(6.)
+                .finish(),
+            )
+            .with_child(
+                Shrinkable::new(
+                    1.,
+                    self.render_stash_patch_preview(file, appearance),
+                )
+                .finish(),
+            )
+            .finish();
+
+        EventHandler::new(
+            Container::new(row)
+                .with_vertical_padding(4.)
+                .with_horizontal_padding(8.)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .finish(),
+        )
+        .on_left_mouse_up(move |ctx, _, _| {
+            ctx.dispatch_typed_action(CodeReviewAction::SelectStashFile(index));
+            DispatchEventResult::StopPropagation
+        })
+        .finish()
+    }
+
+    /// The read-only unified patch of the selected stash file (Git-Log-pane
+    /// style viewer; design doc §5.6).
+    fn render_stash_patch_preview(
+        &self,
+        file: &warpium_git::stash::StashFilePatch,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        const MAX_PATCH_LINES: usize = 2_000;
+        let lines = warpium_git::diff::parse_unified_diff(&file.patch);
+        let mut column = Flex::column();
+        for line in lines.iter().take(MAX_PATCH_LINES) {
+            let (prefix, color) = match line.kind {
+                warpium_git::diff::DiffLineKind::Added => ("+", add_color(appearance)),
+                warpium_git::diff::DiffLineKind::Removed => ("-", remove_color(appearance)),
+                warpium_git::diff::DiffLineKind::Hunk => (" ", theme.sub_text_color(theme.background()).into_solid()),
+                warpium_git::diff::DiffLineKind::Info => (" ", theme.sub_text_color(theme.background()).into_solid()),
+                warpium_git::diff::DiffLineKind::Context => (" ", theme.main_text_color(theme.background()).into_solid()),
+            };
+            column.add_child(
+                Text::new(
+                    format!("{prefix}{}", line.text),
+                    appearance.monospace_font_family(),
+                    appearance.monospace_font_size(),
+                )
+                .with_color(color)
+                .with_clip(ClipConfig::start())
+                .soft_wrap(false)
+                .finish(),
+            );
+        }
+        if lines.len() > MAX_PATCH_LINES {
+            column.add_child(
+                Text::new(
+                    format!("\u{2026} {} more lines", lines.len() - MAX_PATCH_LINES),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.sub_text_color(theme.background()).into())
+                .finish(),
+            );
+        }
+        Container::new(column.finish())
+            .with_vertical_padding(6.)
+            .with_horizontal_padding(8.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .with_background(theme.background())
+            .with_border(
+                Border::new(1.).with_border_fill(theme.surface_3()),
+            )
+            .finish()
+    }
+
+    /// The create-stash dialog: a message field plus Create/Cancel.
+    fn render_stash_create_dialog(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let editor = match &self.stash_create_message_editor {
+            Some(editor) => editor,
+            None => return Empty::new().finish(),
+        };
+        let confirm = match &self.stash_create_confirm_button {
+            Some(button) => ChildView::new(button).finish(),
+            None => return Empty::new().finish(),
+        };
+        let cancel = match &self.stash_create_cancel_button {
+            Some(button) => ChildView::new(button).finish(),
+            None => return Empty::new().finish(),
+        };
+
+        let input = appearance
+            .ui_builder()
+            .text_input(editor.clone())
+            .with_style(UiComponentStyles {
+                border_color: Some(theme.surface_3().into()),
+                border_radius: Some(CornerRadius::with_all(Radius::Pixels(6.))),
+                height: Some(64.),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        let dialog = Dialog::new(
+            "Create stash",
+            Some("Stashes all local changes, including untracked files.".to_string()),
+            UiComponentStyles {
+                width: Some(460.),
+                padding: Some(Coords::uniform(24.).bottom(12.)),
+                ..dialog_styles(appearance)
+            },
+        )
+        .with_child(Container::new(input).finish())
+        .with_separator()
+        .with_bottom_row_child(cancel)
+        .with_bottom_row_child(confirm)
+        .build()
+        .finish();
+
+        Container::new(Align::new(dialog).finish())
+            .with_background_color(theme.blurred_background_overlay().into())
+            .finish()
+    }
+
+    /// The drop-stash confirmation, like JetBrains' "Drop 1 stash?".
+    fn render_stash_drop_dialog(
+        &self,
+        index: usize,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let message = self
+            .stash_state
+            .entries
+            .iter()
+            .find(|entry| entry.index == index)
+            .map(|entry| entry.message.clone())
+            .unwrap_or_else(|| format!("stash@{{{index}}}"));
+        let confirm = match &self.stash_drop_confirm_button {
+            Some(button) => ChildView::new(button).finish(),
+            None => return Empty::new().finish(),
+        };
+        let cancel = match &self.stash_drop_cancel_button {
+            Some(button) => ChildView::new(button).finish(),
+            None => return Empty::new().finish(),
+        };
+
+        let dialog = Dialog::new(
+            "Drop stash?".to_string(),
+            Some(format!("\u{201c}{message}\u{201d} will be permanently removed.")),
+            UiComponentStyles {
+                width: Some(460.),
+                padding: Some(Coords::uniform(24.).bottom(12.)),
+                ..dialog_styles(appearance)
+            },
+        )
+        .with_separator()
+        .with_bottom_row_child(cancel)
+        .with_bottom_row_child(confirm)
+        .build()
+        .finish();
+
+        Container::new(Align::new(dialog).finish())
+            .with_background_color(theme.blurred_background_overlay().into())
+            .finish()
+    }
+\n    fn should_auto_expand_file(&self, file_path: &str) -> bool {
         self.active_repo
             .as_ref()
             .map(|repo| repo.should_auto_expand_file(file_path))
@@ -4379,11 +4963,17 @@ impl CodeReviewView {
         is_in_split_pane: bool,
         app: &warpui::AppContext,
     ) -> Box<dyn Element> {
+        let panel_content = if self.panel_tab == PanelTab::Stashes {
+            self.render_stash_tab(appearance)
+        } else {
+            self.render_content(state, appearance, app)
+        };
         let top_section = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_main_axis_alignment(MainAxisAlignment::Start)
+            .with_child(self.render_panel_tab_strip(appearance))
             .with_child(self.render_header(state, appearance, is_in_split_pane, app))
-            .with_child(self.render_content(state, appearance, app));
+            .with_child(panel_content);
 
         let top_section_with_margin = ConstrainedBox::new(
             Container::new(Shrinkable::new(1., top_section.finish()).finish())
@@ -6069,6 +6659,165 @@ impl CodeReviewView {
             }
         }
         ctx.notify();
+    }
+
+
+    // -- Stashes sub-tab (design doc §5.6) -----------------------------------
+
+    fn stash_repo_path(&self) -> Option<PathBuf> {
+        self.repo_path()
+            .and_then(LocalOrRemotePath::to_local_path)
+            .map(Path::to_path_buf)
+    }
+
+    fn stash_toast(&self, message: String, error: bool, ctx: &mut ViewContext<Self>) {
+        ToastStack::handle(ctx).update(ctx, |stack, ctx| {
+            let toast = if error {
+                DismissibleToast::error(message)
+            } else {
+                DismissibleToast::default(message)
+            };
+            stack.add_ephemeral_toast(toast, self.window_id, ctx);
+        });
+    }
+
+    /// Loads the stash list off the main thread (design doc §5.6).
+    fn reload_stashes(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(repo_path) = self.stash_repo_path() else {
+            return;
+        };
+        self.stash_state.loading = true;
+        self.stash_state.load_error = None;
+        ctx.spawn(
+            async move {
+                tokio::task::spawn_blocking(move || warpium_git::stash::list_stashes(&repo_path))
+                    .await
+                    .map_err(|err| anyhow!("stash list task failed: {err}"))?
+                    .map_err(|err| anyhow!("{err}"))
+            },
+            |me, result, ctx| {
+                me.stash_state.loading = false;
+                match result {
+                    Ok(entries) => me.set_stash_entries(entries, ctx),
+                    Err(err) => {
+                        log::warn!("Failed to list stashes: {err:#}");
+                        me.stash_state.load_error = Some(err.to_string());
+                    }
+                }
+                ctx.notify();
+            },
+        );
+    }
+
+    /// Applying/popping/creating a stash mutates the working tree, so the
+    /// Changes tab reloads like after any other git operation.
+    fn reload_changes_after_stash_op(&mut self, ctx: &mut ViewContext<Self>) {
+        let preferred_session = self.preferred_review_session(ctx);
+        self.diff_state_model.update(ctx, |model, ctx| {
+            model.load_diffs_for_current_repo(false, false, preferred_session, ctx);
+            model.refresh_metadata_after_git_operation(ctx);
+        });
+    }
+
+    /// Replaces the stash list and (re)creates its per-row buttons.
+    fn set_stash_entries(
+        &mut self,
+        entries: Vec<warpium_git::stash::StashEntry>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let mut row_buttons = Vec::with_capacity(entries.len());
+        for entry in &entries {
+            let index = entry.index;
+            let apply = ctx.add_typed_action_view(move |_| {
+                ActionButton::new("", NakedTheme)
+                    .with_icon(Icon::Download)
+                    .with_size(ButtonSize::InlineActionHeader)
+                    .with_tooltip("Apply stash")
+                    .on_click(move |ctx| {
+                        ctx.dispatch_typed_action(CodeReviewAction::ApplyStash(index))
+                    })
+            });
+            let pop = ctx.add_typed_action_view(move |_| {
+                ActionButton::new("", NakedTheme)
+                    .with_icon(Icon::ArrowDown)
+                    .with_size(ButtonSize::InlineActionHeader)
+                    .with_tooltip("Pop stash")
+                    .on_click(move |ctx| {
+                        ctx.dispatch_typed_action(CodeReviewAction::PopStash(index))
+                    })
+            });
+            let drop = ctx.add_typed_action_view(move |_| {
+                ActionButton::new("", NakedTheme)
+                    .with_icon(Icon::Trash)
+                    .with_size(ButtonSize::InlineActionHeader)
+                    .with_tooltip("Drop stash\u{2026}")
+                    .on_click(move |ctx| {
+                        ctx.dispatch_typed_action(CodeReviewAction::RequestDropStash(index))
+                    })
+            });
+            row_buttons.push((apply, pop, drop));
+        }
+        self.stash_state.set_entries(entries);
+        self.stash_state.set_row_buttons(row_buttons);
+    }
+
+    /// Lazily creates the drop-confirmation dialog's buttons.
+    fn ensure_stash_drop_dialog_views(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.stash_drop_confirm_button.is_some() {
+            return;
+        }
+        let confirm = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Drop stash", DangerPrimaryTheme)
+                .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::ConfirmDropStash))
+        });
+        let cancel = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(CodeReviewAction::CancelDropStash);
+            })
+        });
+        self.stash_drop_confirm_button = Some(confirm);
+        self.stash_drop_cancel_button = Some(cancel);
+    }
+
+    /// Lazily creates the create-stash dialog's editor and buttons.
+    fn ensure_stash_create_dialog_views(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.stash_create_message_editor.is_some() {
+            return;
+        }
+        let message_editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            let mut editor = EditorView::new(
+                EditorOptions {
+                    text: TextOptions {
+                        font_size_override: Some(appearance.ui_font_size()),
+                        font_family_override: Some(appearance.ui_font_family()),
+                        ..Default::default()
+                    },
+                    soft_wrap: true,
+                    autogrow: true,
+                    single_line: false,
+                    ..Default::default()
+                },
+                ctx,
+            );
+            editor.set_placeholder_text("Stash message", ctx);
+            editor
+        });
+        let confirm = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Create stash", SecondaryTheme)
+                .with_size(ButtonSize::XSmall)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::ConfirmCreateStash)
+                })
+        });
+        let cancel = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(CodeReviewAction::CancelCreateStashDialog);
+            })
+        });
+        self.stash_create_message_editor = Some(message_editor);
+        self.stash_create_confirm_button = Some(confirm);
+        self.stash_create_cancel_button = Some(cancel);
     }
 
     /// The repo-relative paths of the multi-selected file rows (design doc
@@ -7988,6 +8737,237 @@ impl TypedActionView for CodeReviewView {
                     file.selected = !file.selected;
                     ctx.notify();
                 }
+            }
+            CodeReviewAction::SetPanelTab(panel_tab) => {
+                use ::settings::Setting as _;
+                crate::warpium::sync_settings::WarpiumCodeReviewSettings::handle(ctx).update(
+                    ctx,
+                    |settings, ctx| {
+                        let value = panel_tab.as_settings_value().to_owned();
+                        report_if_error!(settings.code_review_panel_tab.set_value(value, ctx));
+                    },
+                );
+                self.panel_tab = *panel_tab;
+                self.changes_tab_button.update(ctx, |button, ctx| {
+                    button.set_active(*panel_tab == PanelTab::Changes, ctx);
+                });
+                self.stashes_tab_button.update(ctx, |button, ctx| {
+                    button.set_active(*panel_tab == PanelTab::Stashes, ctx);
+                });
+                if *panel_tab == PanelTab::Stashes && self.stash_state.entries.is_empty() {
+                    self.reload_stashes(ctx);
+                }
+                ctx.notify();
+            }
+            CodeReviewAction::ReloadStashes => {
+                self.reload_stashes(ctx);
+            }
+            CodeReviewAction::SelectStash(index) => {
+                if self.stash_state.busy.is_some() {
+                    return;
+                }
+                self.stash_state.selected_stash = Some(*index);
+                self.stash_state.files = Vec::new();
+                self.stash_state.selected_file = None;
+                self.stash_state.loading_patch = true;
+                let Some(repo_path) = self.stash_repo_path() else {
+                    return;
+                };
+                let index = *index;
+                ctx.spawn(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            warpium_git::stash::stash_patch(&repo_path, index)
+                        })
+                        .await
+                        .map_err(|err| anyhow!("stash diff task failed: {err}"))?
+                        .map_err(|err| anyhow!("{err}"))
+                    },
+                    |me, result, ctx| {
+                        me.stash_state.loading_patch = false;
+                        match result {
+                            Ok(files) => me.stash_state.files = files,
+                            Err(err) => {
+                                log::warn!("Failed to load stash patch: {err:#}");
+                                me.stash_toast(format!("Couldn\u{2019}t load the stash diff"), true, ctx);
+                            }
+                        }
+                        ctx.notify();
+                    },
+                );
+                ctx.notify();
+            }
+            CodeReviewAction::SelectStashFile(index) => {
+                self.stash_state.selected_file = Some(*index);
+                ctx.notify();
+            }
+            CodeReviewAction::OpenCreateStashDialog => {
+                if self.stash_state.busy.is_some()
+                    || self.diff_state_model.as_ref(ctx).is_git_operation_blocked(ctx)
+                {
+                    self.stash_toast(
+                        "Another git operation is in progress".to_string(),
+                        true,
+                        ctx,
+                    );
+                    return;
+                }
+                self.ensure_stash_create_dialog_views(ctx);
+                if let Some(editor) = &self.stash_create_message_editor {
+                    editor.update(ctx, |editor, ctx| {
+                        editor.set_placeholder_text("Stash message", ctx);
+                    });
+                }
+                self.stash_state.create_dialog_open = true;
+                ctx.notify();
+            }
+            CodeReviewAction::CancelCreateStashDialog => {
+                self.stash_state.create_dialog_open = false;
+                ctx.notify();
+            }
+            CodeReviewAction::ConfirmCreateStash => {
+                if self.stash_state.busy.is_some() {
+                    return;
+                }
+                let message = self
+                    .stash_create_message_editor
+                    .as_ref()
+                    .map(|editor| editor.as_ref(ctx).buffer_text(ctx))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned();
+                let message = if message.is_empty() {
+                    format!("Warpium: stash {}", chrono::Local::now().format("%Y-%m-%d %H:%M"))
+                } else {
+                    message
+                };
+                let Some(repo_path) = self.stash_repo_path() else {
+                    return;
+                };
+                self.stash_state.create_dialog_open = false;
+                self.stash_state.busy = Some("Creating stash\u{2026}".to_string());
+                ctx.spawn(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            warpium_git::stash::create(&repo_path, &message)
+                        })
+                        .await
+                        .map_err(|err| anyhow!("stash create task failed: {err}"))?
+                        .map_err(|err| anyhow!("{err}"))
+                    },
+                    |me, result, ctx| {
+                        me.stash_state.busy = None;
+                        match result {
+                            Ok(()) => {
+                                me.stash_toast("Stash created".to_string(), false, ctx);
+                                me.reload_stashes(ctx);
+                                me.reload_changes_after_stash_op(ctx);
+                            }
+                            Err(err) => {
+                                log::warn!("Failed to create stash: {err:#}");
+                                me.stash_toast("Couldn\u{2019}t create the stash".to_string(), true, ctx);
+                            }
+                        }
+                        ctx.notify();
+                    },
+                );
+                ctx.notify();
+            }
+            CodeReviewAction::ApplyStash(index) | CodeReviewAction::PopStash(index) => {
+                let pop = matches!(action, CodeReviewAction::PopStash(_));
+                if self.stash_state.busy.is_some() {
+                    return;
+                }
+                let Some(repo_path) = self.stash_repo_path() else {
+                    return;
+                };
+                let label = if pop { "Popping stash\u{2026}" } else { "Applying stash\u{2026}" };
+                self.stash_state.busy = Some(label.to_string());
+                let index = *index;
+                ctx.spawn(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            if pop {
+                                warpium_git::stash::pop(&repo_path, index)
+                            } else {
+                                warpium_git::stash::apply(&repo_path, index)
+                            }
+                        })
+                        .await
+                        .map_err(|err| anyhow!("stash apply task failed: {err}"))?
+                        .map_err(|err| anyhow!("{err}"))
+                    },
+                    move |me, result, ctx| {
+                        me.stash_state.busy = None;
+                        match result {
+                            Ok(()) => {
+                                me.stash_toast(
+                                    if pop { "Stash popped" } else { "Stash applied" }.to_string(),
+                                    false,
+                                    ctx,
+                                );
+                                me.reload_stashes(ctx);
+                                me.reload_changes_after_stash_op(ctx);
+                            }
+                            Err(err) => {
+                                log::warn!("Failed to {} stash: {err:#}", if pop { "pop" } else { "apply" });
+                                me.stash_toast(
+                                    format!("Couldn\u{2019}t {} the stash", if pop { "pop" } else { "apply" }),
+                                    true,
+                                    ctx,
+                                );
+                            }
+                        }
+                        ctx.notify();
+                    },
+                );
+                ctx.notify();
+            }
+            CodeReviewAction::RequestDropStash(index) => {
+                self.ensure_stash_drop_dialog_views(ctx);
+                self.stash_state.confirm_drop = Some(*index);
+                ctx.notify();
+            }
+            CodeReviewAction::CancelDropStash => {
+                self.stash_state.confirm_drop = None;
+                ctx.notify();
+            }
+            CodeReviewAction::ConfirmDropStash => {
+                let Some(index) = self.stash_state.confirm_drop.take() else {
+                    return;
+                };
+                if self.stash_state.busy.is_some() {
+                    return;
+                }
+                let Some(repo_path) = self.stash_repo_path() else {
+                    return;
+                };
+                self.stash_state.busy = Some("Dropping stash\u{2026}".to_string());
+                ctx.spawn(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            warpium_git::stash::drop(&repo_path, index)
+                        })
+                        .await
+                        .map_err(|err| anyhow!("stash drop task failed: {err}"))?
+                        .map_err(|err| anyhow!("{err}"))
+                    },
+                    |me, result, ctx| {
+                        me.stash_state.busy = None;
+                        match result {
+                            Ok(()) => {
+                                me.stash_toast("Stash dropped".to_string(), false, ctx);
+                                me.reload_stashes(ctx);
+                            }
+                            Err(err) => {
+                                log::warn!("Failed to drop stash: {err:#}");
+                                me.stash_toast("Couldn\u{2019}t drop the stash".to_string(), true, ctx);
+                            }
+                        }
+                        ctx.notify();
+                    },
+                );
+                ctx.notify();
             }
             CodeReviewAction::ConfirmDiscardFile => {
                 let is_rollback = matches!(

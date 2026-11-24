@@ -25,6 +25,7 @@ pub(crate) mod diff_selector;
 pub(crate) mod file_invalidation_queue;
 pub(crate) mod warpium_batched_diff;
 pub mod warpium_file_groups;
+pub mod warpium_stash_tab;
 
 use code_review_view::CodeReviewAction;
 use warpui::keymap::{EditableBinding, FixedBinding};
