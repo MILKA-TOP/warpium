@@ -212,6 +212,17 @@ pub struct LocalDiffStateModel {
     /// Controls whether periodic throttled metadata refresh is active.
     /// Refresh is suppressed when the code review pane is not open.
     metadata_refresh_enabled: bool,
+    /// Whether the working tree may have changed since the last successful
+    /// diff load. Set by watcher events (including while the pane is closed,
+    /// where diff reloads are suppressed) and cleared when a load succeeds;
+    /// a clean reopen skips the diff reload entirely (design doc §4.9 F4).
+    #[cfg(feature = "local_fs")]
+    diffs_dirty_since_load: bool,
+    /// A commit-level watcher update is pending; the throttled metadata
+    /// refresh reloads the diffs with it instead of reloading mid-operation
+    /// (design doc §4.9 F4, coalescing watcher storms).
+    #[cfg(feature = "local_fs")]
+    pending_diff_reload: bool,
     // TODO: Remove pending file invalidations — pause the queue instead.
     /// Files that have been invalidated but not yet processed when diff is still loading.
     #[cfg(feature = "local_fs")]
@@ -293,6 +304,8 @@ impl LocalDiffStateModel {
             computing_metadata_abort_handle: None,
             tracked_diff_load_start_time: None,
             metadata_refresh_enabled: false,
+            diffs_dirty_since_load: true,
+            pending_diff_reload: false,
             file_invalidation: FileInvalidationState::new(queue),
             pending_file_updates: None,
         };
@@ -590,6 +603,11 @@ impl LocalDiffStateModel {
         // Noop on WASM builds.
     }
 
+    #[cfg(feature = "local_fs")]
+    fn take_pending_diff_reload(&mut self) -> bool {
+        std::mem::take(&mut self.pending_diff_reload)
+    }
+
     /// The panel-opening refresh (design doc §4.9 F3). Head mode runs one
     /// background task whose single `git status` walk feeds both the metadata
     /// refresh and the batched diff load, emitting `MetadataRefreshed` then
@@ -598,6 +616,14 @@ impl LocalDiffStateModel {
     pub fn open_review_panel(&mut self, ctx: &mut ModelContext<Self>) {
         if !matches!(self.mode, DiffMode::Head) {
             self.load_diffs_for_current_repo(false, true, ctx);
+            return;
+        }
+
+        // Fast reopen (design doc §4.9 F4): nothing changed since the last
+        // successful load, so keep the diffs and only kick a metadata
+        // refresh; the panel renders the cached state immediately.
+        if matches!(self.state, InternalDiffState::Loaded(_)) && !self.diffs_dirty_since_load {
+            self.refresh_diff_metadata_for_current_repo(false, ctx);
             return;
         }
 
@@ -617,7 +643,10 @@ impl LocalDiffStateModel {
         let Some(current_repository) = &self.repository else {
             return;
         };
-        let repo_path = current_repository.as_ref(ctx).root_dir().to_local_path_lossy();
+        let repo_path = current_repository
+            .as_ref(ctx)
+            .root_dir()
+            .to_local_path_lossy();
         self.state = InternalDiffState::Loading;
         let handle = ctx.spawn(
             async move { Self::load_open_round_head(repo_path).await },
@@ -657,13 +686,8 @@ impl LocalDiffStateModel {
             Some(num_stat.clone()),
         )
         .await;
-        let diffs = Self::diff_state_against_commit(
-            &repo_path,
-            &changed_files,
-            "HEAD",
-            &num_stat,
-        )
-        .await;
+        let diffs =
+            Self::diff_state_against_commit(&repo_path, &changed_files, "HEAD", &num_stat).await;
         let diffs = DiffsWithBaseContent {
             changes: diffs.map_err(|err| err.to_string()),
         };
@@ -1142,7 +1166,13 @@ impl LocalDiffStateModel {
         let include_base_branch = true;
         let abort_handle = ctx.spawn(
             async move {
-                Self::load_metadata_for_repo(current_repository_path, include_base_branch, None, None).await
+                Self::load_metadata_for_repo(
+                    current_repository_path,
+                    include_base_branch,
+                    None,
+                    None,
+                )
+                .await
             },
             move |me, res, ctx| me.handle_updated_metadata_for_repo(res, should_reload_diffs, ctx),
         );
@@ -1182,7 +1212,13 @@ impl LocalDiffStateModel {
             let include_base_branch = true;
             let abort_handle = ctx.spawn(
                 async move {
-                    Self::load_metadata_for_repo(new_repository_root, include_base_branch, None, None).await
+                    Self::load_metadata_for_repo(
+                        new_repository_root,
+                        include_base_branch,
+                        None,
+                        None,
+                    )
+                    .await
                 },
                 move |me, res, ctx| me.handle_updated_metadata_for_repo(res, true, ctx),
             );
@@ -1234,7 +1270,11 @@ impl LocalDiffStateModel {
         ctx.spawn_stream_local(
             throttle(Duration::from_secs(5), throttled_repository_update_rx),
             |me, _, ctx| {
-                me.refresh_diff_metadata_for_current_repo(false, ctx);
+                // Commit-level updates mark a pending diff reload so their
+                // storms coalesce into one reload here instead of reloading
+                // mid-operation (design doc §4.9 F4).
+                let should_reload_diffs = me.take_pending_diff_reload();
+                me.refresh_diff_metadata_for_current_repo(should_reload_diffs, ctx);
             },
             |_, _| {},
         );
@@ -1268,17 +1308,23 @@ impl LocalDiffStateModel {
         // When the code review pane is closed (metadata_refresh_enabled ==
         // false), skip diff reloads and per-file invalidations.  The throttled
         // metadata path already respects this flag, and `on_open` will trigger
-        // a full reload when the pane becomes visible.
+        // a full reload when the pane becomes visible. Whatever brought us
+        // here may invalidate the loaded diffs, so mark them dirty for the
+        // next open (design doc §4.9 F4).
         if !self.metadata_refresh_enabled {
+            self.diffs_dirty_since_load = true;
             return false;
         }
 
         if commit_updated || remote_ref_updated {
-            self.load_diffs_for_current_repo(false, false, ctx);
+            // Coalesce commit-level storms (checkout, pull, rebase): instead
+            // of reloading mid-operation, let the throttled metadata refresh
+            // carry one diff reload a moment later (design doc §4.9 F4).
+            self.diffs_dirty_since_load = true;
+            self.pending_diff_reload = true;
             // Don't emit MetadataRefreshed here — metadata hasn't been
-            // recomputed yet. NewDiffsComputed handles the immediate UI
-            // refresh, and the throttled metadata refresh will emit
-            // MetadataRefreshed with fresh stats/git-operations data.
+            // recomputed yet. The throttled refresh will emit
+            // MetadataRefreshed and run the pending diff reload.
             return true;
         } else if index_lock_detected {
             if self.file_invalidation.invalidate_all_pending {
@@ -1951,6 +1997,9 @@ impl LocalDiffStateModel {
             }
         };
 
+        if diffs.changes.is_ok() {
+            self.diffs_dirty_since_load = false;
+        }
         self.state = InternalDiffState::Loaded((&diffs).into());
         // Compute merge base and flush deferred invalidations before emitting.
         self.recompute_merge_base_and_flush(ctx);
@@ -2562,13 +2611,9 @@ impl LocalDiffStateModel {
         // One batched `git diff <merge_base>` + `cat-file --batch` for all
         // files, like Head mode; untracked files are synthesized from disk.
         let num_stat = Self::get_diff_metadata_using_numstat(repo_path, &merge_base).await?;
-        let mut loaded = Self::diff_state_against_commit(
-            repo_path,
-            &changed_files,
-            &merge_base,
-            &num_stat,
-        )
-        .await?;
+        let mut loaded =
+            Self::diff_state_against_commit(repo_path, &changed_files, &merge_base, &num_stat)
+                .await?;
 
         // Skip files that have no actual changes (empty hunks and not binary)
         // except for renamed or new files.
@@ -3339,6 +3384,10 @@ impl LocalDiffStateModel {
             computing_metadata_abort_handle: None,
             tracked_diff_load_start_time: None,
             metadata_refresh_enabled: false,
+            #[cfg(feature = "local_fs")]
+            diffs_dirty_since_load: true,
+            #[cfg(feature = "local_fs")]
+            pending_diff_reload: false,
             #[cfg(feature = "local_fs")]
             file_invalidation: FileInvalidationState::new(SyncQueue::new_streaming(
                 &ctx.background_executor(),
