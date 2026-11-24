@@ -58,20 +58,22 @@ Status: **done** (merged), **review** (PR open), **wip** (in progress), **planne
 | 20 | Change markers in the gutter and Rollback, like IDEA | done (#42); follow-ups below |
 | 21 | Search Everywhere on `cmd-O` (All / Classes / Symbols / Files) | done (#39) |
 | 22 | Find in Files on `cmd-shift-F`, plus a Text tab in `cmd-O` | planned |
+| 23 | Code Review panel → JetBrains Commit tool window: group by directory/repository, expand/collapse all, collapsed-by-default file list, unversioned files, rollback selected files, stash tab, amend commit, fast open | research |
 
 Also done along the way: Warpium self-update from GitHub Releases (#11), the fork's CI and release
 workflows, the test VM MCP server (`tools/mac-mcp`).
 
 ## Queue
 
-1. Git tools follow-ups (below) and the rest of IDEA parity from
+1. Item 23 (research first, then one big implementation PR; owner list: group by directory/repository, expand/collapse all, collapsed default with click-to-open diff, unversioned files, rollback of selected files, stash tab, amend commit, open-performance).
+2. Git tools follow-ups (below) and the rest of IDEA parity from
    [research/git-tools.md](research/git-tools.md) "Next steps".
-2. Item 18 phase 1: completion from the code index (branch `claude/code-completion`).
-3. Item 18 next phase: library symbols in the index (Kotlin stdlib, AndroidX, Android SDK sources).
-4. Item 22 (with item 2).
-5. Item 11.
-6. Item 13 phase B, remaining PRs (input, launching, stable texture, physical devices).
-7. Items 16 and 17.
+3. Item 18 phase 1: completion from the code index (branch `claude/code-completion`).
+4. Item 18 next phase: library symbols in the index (Kotlin stdlib, AndroidX, Android SDK sources).
+5. Item 22 (with item 2).
+6. Item 11.
+7. Item 13 phase B, remaining PRs (input, launching, stable texture, physical devices).
+8. Items 16 and 17.
 
 Git tools follow-ups found in the VM check of #42: in a narrow pane the commit subject column
 collapses before author and date (IDEA shrinks author and date first); the filter fields collapse to
