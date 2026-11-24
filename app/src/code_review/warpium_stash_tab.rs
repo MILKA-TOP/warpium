@@ -38,13 +38,10 @@ impl PanelTab {
     }
 }
 
-/// Viewless per-row mouse states for the stash list (rebuilt with the list).
+/// Viewless per-row hover state for the stash list (rebuilt with the list).
 #[derive(Clone)]
 pub(crate) struct StashRowInteraction {
     pub row: MouseStateHandle,
-    pub apply: MouseStateHandle,
-    pub pop: MouseStateHandle,
-    pub drop: MouseStateHandle,
 }
 
 /// The stash sub-tab's state, held by the code review view.
@@ -104,9 +101,6 @@ impl WarpiumStashTabState {
             .iter()
             .map(|_| StashRowInteraction {
                 row: MouseStateHandle::default(),
-                apply: MouseStateHandle::default(),
-                pop: MouseStateHandle::default(),
-                drop: MouseStateHandle::default(),
             })
             .collect();
         self.entries = entries;

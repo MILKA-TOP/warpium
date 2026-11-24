@@ -1465,7 +1465,7 @@ impl CodeReviewView {
                 .as_str(),
         );
         let changes_tab_button = ctx.add_typed_action_view(move |ctx| {
-            let mut button = ActionButton::new("Changes", NakedTheme)
+            let mut button = ActionButton::new(PanelTab::Changes.label(), NakedTheme)
                 .with_size(ButtonSize::XSmall)
                 .with_tooltip("Show working tree changes");
             button.set_active(panel_tab == PanelTab::Changes, ctx);
@@ -1474,7 +1474,7 @@ impl CodeReviewView {
             })
         });
         let stashes_tab_button = ctx.add_typed_action_view(move |ctx| {
-            let mut button = ActionButton::new("Stashes", NakedTheme)
+            let mut button = ActionButton::new(PanelTab::Stashes.label(), NakedTheme)
                 .with_size(ButtonSize::XSmall)
                 .with_tooltip("Show stashes");
             button.set_active(panel_tab == PanelTab::Stashes, ctx);

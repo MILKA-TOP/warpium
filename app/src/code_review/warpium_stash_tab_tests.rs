@@ -17,15 +17,13 @@ fn set_entries_rebuilds_row_interactions() {
             index: 0,
             message: "one".to_owned(),
             created: String::new(),
-            oid: warpium_git::Oid::from_hex("9911e3876c7128dde5476aa0141916d403365415")
-                .unwrap(),
+            oid: warpium_git::Oid::from_hex("9911e3876c7128dde5476aa0141916d403365415").unwrap(),
         },
         warpium_git::stash::StashEntry {
             index: 1,
             message: "two".to_owned(),
             created: String::new(),
-            oid: warpium_git::Oid::from_hex("9911e3876c7128dde5476aa0141916d403365415")
-                .unwrap(),
+            oid: warpium_git::Oid::from_hex("9911e3876c7128dde5476aa0141916d403365415").unwrap(),
         },
     ]);
     assert_eq!(state.entries.len(), 2);
