@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ai::project_context::model::ProjectContextModel;
+use anyhow::anyhow;
 use indexmap::IndexMap;
 use itertools::Itertools;
 #[cfg(feature = "local_fs")]
@@ -3187,7 +3188,7 @@ impl CodeReviewView {
 
     /// The Changes | Stashes sub-tab strip at the top of the panel content
     /// (design doc §5.6). Stashes are a local-repo surface.
-    fn render_panel_tab_strip(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_panel_tab_strip(&self) -> Box<dyn Element> {
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min);
@@ -3274,7 +3275,7 @@ impl CodeReviewView {
             for (row_index, entry) in self.stash_state.entries.iter().enumerate() {
                 content.add_child(self.render_stash_row(entry, row_index, appearance));
                 if self.stash_state.selected_stash == Some(entry.index) {
-                    content.add_child(self.render_stash_files(entry, appearance));
+                    content.add_child(self.render_stash_files(appearance));
                 }
             }
         }
@@ -3437,7 +3438,6 @@ impl CodeReviewView {
     /// The selected stash's changed files; clicking one shows its patch.
     fn render_stash_files(
         &self,
-        entry: &warpium_git::stash::StashEntry,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -4964,7 +4964,7 @@ impl CodeReviewView {
         let top_section = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_main_axis_alignment(MainAxisAlignment::Start)
-            .with_child(self.render_panel_tab_strip(appearance))
+            .with_child(self.render_panel_tab_strip())
             .with_child(self.render_header(state, appearance, is_in_split_pane, app))
             .with_child(panel_content);
 

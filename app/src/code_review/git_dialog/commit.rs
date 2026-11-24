@@ -150,8 +150,9 @@ pub(super) fn new_state(
                 )))
             })
     });
+    let commit_and_push_label = push_label.clone();
     let commit_and_push_button = ctx.add_typed_action_view(move |_ctx| {
-        ActionButton::new(push_label.clone(), SecondaryTheme)
+        ActionButton::new(commit_and_push_label.clone(), SecondaryTheme)
             .with_size(ButtonSize::XSmall)
             .with_height(32.)
             .with_icon(push_icon)
