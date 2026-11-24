@@ -77,34 +77,44 @@ fn directory_groups_in_tree_order_with_joined_chains() {
         true,
         false,
     );
+    // `src` keeps its own row because it holds more than one child; the
+    // single-child chain below it joins into `main/kotlin` (Git Log pane
+    // semantics), keyed by its full repo-relative path.
     assert_eq!(
         rows,
         vec![
             FileRow::Directory {
-                path: "src/main/kotlin".to_owned(),
-                label: "src/main/kotlin".to_owned(),
+                path: "src".to_owned(),
+                label: "src".to_owned(),
                 depth: 0,
+                file_count: 3,
+                expanded: true,
+            },
+            FileRow::Directory {
+                path: "src/main/kotlin".to_owned(),
+                label: "main/kotlin".to_owned(),
+                depth: 1,
                 file_count: 2,
                 expanded: true,
             },
             FileRow::File {
                 path: "src/main/kotlin/App.kt".to_owned(),
-                depth: 1
+                depth: 2
             },
             FileRow::File {
                 path: "src/main/kotlin/Util.kt".to_owned(),
-                depth: 1
+                depth: 2
             },
             FileRow::Directory {
                 path: "src/test".to_owned(),
-                label: "src/test".to_owned(),
-                depth: 0,
+                label: "test".to_owned(),
+                depth: 1,
                 file_count: 1,
                 expanded: true,
             },
             FileRow::File {
                 path: "src/test/Test.kt".to_owned(),
-                depth: 1
+                depth: 2
             },
             FileRow::File {
                 path: "README.md".to_owned(),
@@ -129,22 +139,24 @@ fn collapsed_directory_skips_its_subtree() {
         true,
         false,
     );
+    // Collapse keys are full repo-relative paths; the collapsed node's
+    // subtree (App.kt, Util.kt) is skipped, its sibling file survives.
     assert_eq!(
         rows,
         vec![
             FileRow::Directory {
-                path: "src/main/kotlin".to_owned(),
-                label: "src/main/kotlin".to_owned(),
-                depth: 0,
-                file_count: 2,
-                expanded: false,
-            },
-            FileRow::Directory {
                 path: "src".to_owned(),
                 label: "src".to_owned(),
                 depth: 0,
-                file_count: 1,
+                file_count: 3,
                 expanded: true,
+            },
+            FileRow::Directory {
+                path: "src/main/kotlin".to_owned(),
+                label: "main/kotlin".to_owned(),
+                depth: 1,
+                file_count: 2,
+                expanded: false,
             },
             FileRow::File {
                 path: "src/readme.txt".to_owned(),

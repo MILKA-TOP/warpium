@@ -172,6 +172,11 @@ fn push_directory_rows(
             kind: warpium_git::diff::FileChangeKind::Modified,
         })
         .collect();
+    // `file_tree` joins single-child chains into one row whose `label` is the
+    // joined path relative to the row's parent (`main/kotlin` under `src`).
+    // The collapse key is the full repo-relative path (`src/main/kotlin`), so
+    // reconstruct it with a stack of ancestor labels.
+    let mut dir_stack: Vec<(usize, String)> = Vec::new();
     let mut skip_below_depth: Option<usize> = None;
     for tree_row in warpium_git::tree::file_tree(&changes) {
         if let Some(hidden_depth) = skip_below_depth {
@@ -182,9 +187,22 @@ fn push_directory_rows(
         }
         match tree_row.kind {
             warpium_git::tree::TreeRowKind::Directory { files } => {
-                let expanded = !collapsed_dirs.contains(&tree_row.label);
+                while dir_stack
+                    .last()
+                    .is_some_and(|(depth, _)| *depth >= tree_row.depth)
+                {
+                    dir_stack.pop();
+                }
+                let full_path = dir_stack
+                    .iter()
+                    .map(|(_, label)| label.as_str())
+                    .chain(std::iter::once(tree_row.label.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let expanded = !collapsed_dirs.contains(&full_path);
+                dir_stack.push((tree_row.depth, tree_row.label.clone()));
                 rows.push(FileRow::Directory {
-                    path: tree_row.label.clone(),
+                    path: full_path,
                     label: tree_row.label,
                     depth: base_depth + tree_row.depth,
                     file_count: files,

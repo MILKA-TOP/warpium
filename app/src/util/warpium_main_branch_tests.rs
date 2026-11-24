@@ -45,11 +45,12 @@ fn new_ref_file_changes_the_stamp() {
     std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
     store(&repo, "main");
     assert_eq!(cached(&repo).as_deref(), Some("main"));
-    // A fetch can rewrite packed-refs; its appearance must invalidate.
+    // A fetch can rewrite packed-refs with a newer mtime; the stamp is the
+    // newest mtime, so it must invalidate.
     std::fs::write(repo.join(".git/packed-refs"), "# pack-refs\n").unwrap();
     let status = std::process::Command::new("touch")
         .arg("-t")
-        .arg("202001020304.05")
+        .arg("203001020304.05")
         .arg(repo.join(".git/packed-refs"))
         .status()
         .expect("touch runs");
@@ -63,6 +64,8 @@ fn resolves_worktree_gitdir_pointer() {
     let gitdir = repo.parent().unwrap().join("warpium-memo-test-gitdir");
     let _ = std::fs::remove_dir_all(&gitdir);
     std::fs::create_dir_all(&gitdir).unwrap();
+    // Replace the directory `temp_repo` created with a `.git` file pointer.
+    std::fs::remove_dir_all(repo.join(".git")).unwrap();
     std::fs::write(repo.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
     assert_eq!(resolve_git_dir(&repo), gitdir);
 
