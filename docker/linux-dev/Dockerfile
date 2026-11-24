@@ -25,6 +25,10 @@ RUN apt-get update \
             mesa-vulkan-drivers mesa-utils \
             # protoc, in order to compile warp-proto-apis crates like the MAA API.
             protobuf-compiler \
+            # ripgrep: coding agents that run inside this container search files
+            # with `rg`; without it an agent can't see files pasted for it (e.g.
+            # Warpium's container image paste).
+            ripgrep \
             # Don't ask for confirmation.
             -y
 
