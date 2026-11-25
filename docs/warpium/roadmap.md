@@ -161,3 +161,12 @@ Decisions: KMP and plain Kotlin/JVM projects both matter; Java is supported by t
 jdtls; kotlin-lsp only off by default / on demand with idle shutdown. Benchmarks on the owner's
 large private project report aggregate numbers only: never commit its code, names or paths. Research
 report: [research/kotlin-navigation-and-toolchain.md](research/kotlin-navigation-and-toolchain.md).
+
+Item 23 VM follow-ups (from the post-fix verification; input injection in the
+test VM died mid-session — macOS update reset Accessibility, re-grant with
+`tools/mac-mcp/vm/grant-permissions.sh` — so the rest is unchecked in the VM):
+the Group By dropdown menu items, stash create/apply/pop/drop, the Amend checkbox
+flow, multi-select + Rollback, and the Expand/Collapse-All toolbar buttons all
+render but weren't click-verified; the collapse-all/expand-all toolbar icons
+show only one chevron — check whether both buttons render (right_panel.rs adds
+both when `has_file_states()`).
