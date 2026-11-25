@@ -88,8 +88,25 @@ pub async fn detect_main_branch(_repo_path: &Path) -> Result<String> {
 }
 
 /// Detects the main branch using git-branchless style heuristics.
+///
+/// Memoized per process (`warpium_main_branch`): the detection costs up to
+/// seven sequential `git` spawns and runs in several loads per Code Review
+/// open, while the answer only changes when the repo's refs do. The memo
+/// re-runs the detection whenever the ref stamp changes.
 #[cfg(feature = "local_fs")]
 pub async fn detect_main_branch(repo_path: &Path) -> Result<String> {
+    if let Some(name) = super::warpium_main_branch::cached(repo_path) {
+        log::debug!("[GIT OPERATION] git.rs detect_main_branch memo hit");
+        return Ok(name);
+    }
+    let name = detect_main_branch_uncached(repo_path).await?;
+    super::warpium_main_branch::store(repo_path, &name);
+    Ok(name)
+}
+
+/// Detects the main branch using git-branchless style heuristics.
+#[cfg(feature = "local_fs")]
+async fn detect_main_branch_uncached(repo_path: &Path) -> Result<String> {
     // First try to get the default branch from origin
     log::debug!(
         "[GIT OPERATION] git.rs detect_main_branch git symbolic-ref refs/remotes/origin/HEAD"
@@ -660,12 +677,15 @@ pub async fn get_diff_for_commit_message(
 }
 
 /// Commits changes. If `include_unstaged` is true, stages all changes first via `git add -A`.
-/// `path_env` is forwarded so commit hooks can find tools on the user's `PATH`.
+/// With `amend`, the previous commit is replaced (`git commit --amend`), which
+/// git allows with an empty staged set for a message-only amend. `path_env` is
+/// forwarded so commit hooks can find tools on the user's `PATH`.
 #[cfg(feature = "local_fs")]
 pub async fn run_commit(
     repo_path: &Path,
     message: &str,
     include_unstaged: bool,
+    amend: bool,
     path_env: Option<&str>,
 ) -> Result<String> {
     if include_unstaged {
@@ -676,20 +696,25 @@ pub async fn run_commit(
     // stdout is how it tolerates `git diff`). Guard explicitly so an empty
     // commit surfaces as an error toast instead of a phantom "committed"
     // success — this is the authoritative backstop now that the dialog no
-    // longer pre-gates on a synced staged-changes bit.
+    // longer pre-gates on a synced staged-changes bit. Amend skips the guard:
+    // a message-only amend is legitimate.
     let staged = run_git_command_with_env(
         repo_path,
         &["--no-optional-locks", "diff", "--cached", "--name-only"],
         path_env,
     )
     .await?;
-    if staged.trim().is_empty() {
+    if staged.trim().is_empty() && !amend {
         if include_unstaged {
             anyhow::bail!("nothing to commit, working tree clean");
         }
         anyhow::bail!("no changes added to commit");
     }
-    run_git_command_with_env(repo_path, &["commit", "-m", message], path_env).await
+    if amend {
+        run_git_command_with_env(repo_path, &["commit", "--amend", "-m", message], path_env).await
+    } else {
+        run_git_command_with_env(repo_path, &["commit", "-m", message], path_env).await
+    }
 }
 
 #[cfg(not(feature = "local_fs"))]
@@ -697,8 +722,21 @@ pub async fn run_commit(
     _repo_path: &Path,
     _message: &str,
     _include_unstaged: bool,
+    _amend: bool,
     _path_env: Option<&str>,
 ) -> Result<String> {
+    Err(anyhow!("Not supported on wasm"))
+}
+
+/// The current `HEAD` commit's full message, prefilled into the commit
+/// dialog when Amend is checked (design doc §5.7).
+#[cfg(feature = "local_fs")]
+pub async fn head_commit_message(repo_path: &Path) -> Result<String> {
+    run_git_command(repo_path, &["log", "-1", "--format=%B"]).await
+}
+
+#[cfg(not(feature = "local_fs"))]
+pub async fn head_commit_message(_repo_path: &Path) -> Result<String> {
     Err(anyhow!("Not supported on wasm"))
 }
 

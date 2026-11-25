@@ -970,6 +970,78 @@ pane), `app/src/pane_group/pane/warpium_git_log_pane.rs`, `app/src/workspace/vie
   `diff.rs` (`clear_base`), `code/editor/nav_bar.rs` (revert label).
 - **Not yet:** docking the log in the bottom panel, side-by-side diffs, `--follow` across renames,
   annotating older revisions, branch operations from the log.
+## Code Review panel (JetBrains Commit tool window parity)
+
+Roadmap item 23; design and the performance analysis in
+[docs/warpium/research/code-review-panel.md](docs/warpium/research/code-review-panel.md).
+The panel's changes list becomes IDEA's Commit tool window: collapsed-by-default
+rows with click-to-expand diffs, Group By (Flat / Directory / Repository), Expand
+All / Collapse All, an "Unversioned Files" node, Rollback… of selected files, a
+Stashes sub-tab, and an Amend checkbox in the commit dialog — plus an open-path
+perf rework. Fork-only crate code in `crates/warpium_git` (`stash.rs`,
+`rollback_many`, `cat_file_batch`; `cargo test -p warpium_git`); app-side state
+and parsers in `app/src/code_review/warpium_*.rs` (CI's `test(/warpium/)`
+filter), `app/src/code_review/warpium_stash_tab.rs`,
+`warpium_file_groups.rs`, `warpium_batched_diff.rs`, `warpium_amend.rs`,
+`warpium_main_branch.rs` (`app/src/util/`).
+
+- **Collapsed by default; click opens the diff.** `should_auto_expand_file`
+  (`code_review_view.rs`) defaults to collapsed; a single click on a row toggles
+  the inline diff immediately (no hover delay). Editors and the per-file action
+  buttons are created lazily on first expand (`ensure_file_interactive_state`),
+  so opening the panel no longer builds an editor and five buttons per file.
+- **Open performance.** The diff load runs one batched
+  `git diff --patch-with-raw -z` parsed per file (`warpium_batched_diff.rs`)
+  instead of the old 2N+2 sequential per-file spawns, reads all base blobs with
+  one `cat-file --batch`, and synthesizes untracked files' all-additions diffs
+  from disk. Head-mode open is one combined round (`open_review_panel`): a
+  single `git status` walk feeds both the metadata refresh and the diff load.
+  `detect_main_branch` is memoized per process against the repo's ref stamp
+  (`util/warpium_main_branch.rs`). Measured on a synthetic 100-file change set:
+  202 spawns / ~157-189 ms → 4 spawns / ~13-16 ms (local disk; the gap widens on
+  slower disks). A dirty flag skips the diff reload entirely on a clean reopen
+  (watcher events set it, a successful load clears it), and commit-level watcher
+  storms coalesce into one reload through the existing 5 s throttle instead of
+  reloading mid-operation.
+- **Group By.** Toolbar dropdown in the panel header (Flat / Directory /
+  Repository), persisted as `warpium.code_review_group_by`. Directory rows come
+  from `warpium_git::tree::file_tree`; the repository node is the structural
+  root for a future multi-repo mode (no multi-repo aggregation yet).
+- **Unversioned Files.** Untracked files render under a collapsed-by-default
+  node in every mode (never inside directory grouping). Commit semantics are
+  unchanged (`git add -A` keeps them committable, a deliberate deviation from
+  JB).
+- **Rollback… of selected files.** Cmd-click multi-selects rows, the header's
+  Rollback button opens the confirmation (the discard dialog's checklist,
+  retitled "Rollback N files?"), and the model batches committed →
+  `git checkout HEAD --`, staged-new → `git rm --cached --quiet --`, unversioned
+  → `git clean -fd --` (deleting unversioned files, JB semantics) via
+  `warpium_git::rollback_many`; renames keep the per-file sequence. Local repos
+  only.
+- **Stashes sub-tab.** Changes | Stashes strip (persisted
+  `warpium.code_review_panel_tab`, local repos only): list/create/apply/pop/drop
+  (drop confirmed), a read-only per-file unified patch viewer, toasts, and a
+  Changes-tab reload after working-tree mutations. Stash diffs are Git-Log-pane
+  style; an editor-grade stash diff is follow-up.
+- **Amend.** Checkbox under the commit message (hidden without HEAD): prefills
+  `git log -1 --format=%B` unless the user typed, confirm runs
+  `git commit --amend`, intent buttons get an "Amend" prefix, and amending an
+  already-pushed HEAD warns once and needs a second confirm. Amend is
+  local-only (no wire bit).
+- **Fork modifications to upstream files** (check after upstream merges):
+  `code_review/diff_state/local.rs` (batched diff load, combined open round,
+  dirty flag, coalesced commit reloads, `rollback_files`, `is_head_pushed`),
+  `diff_state/mod.rs` (`open_review_panel`, `rollback_files`, amend threading),
+  `code_review_view.rs` (collapse default, row click, lazy editors, group-by
+  rows, unversioned node, selection rollback, stash tab, toolbar state),
+  `git_dialog/commit.rs` (amend), `util/git.rs` (`run_commit` amend param,
+  `head_commit_message`, memoized `detect_main_branch`), `util/mod.rs`,
+  `code_review/mod.rs`, `remote_server/server_model.rs` (`run_commit_chain`
+  call), `workspace/view/right_panel.rs` (toolbar), `settings/init.rs` +
+  `warpium/sync_settings.rs` (`warpium.code_review_group_by`,
+  `warpium.code_review_panel_tab`), `code_review_view_tests.rs` and
+  `code_review_view_integration.rs` (lazy-editor test hooks).
+
 ## Image paste into containers and SSH sessions
 
 CLI agents read a pasted image from the Mac's clipboard, which they can't reach inside a container

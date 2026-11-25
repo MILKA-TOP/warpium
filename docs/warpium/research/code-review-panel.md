@@ -647,3 +647,49 @@ toolbar actions.
    `git clean -fd -- paths` inside the confirmation dialog). If the owner
    prefers unversioned rollback to be "exclude from list" instead, that's a
    one-line change in the batching split.
+
+---
+
+## Implementation status (2026-11-24, PR "Code Review panel: JetBrains Commit tool window parity")
+
+All eight plan commits landed on `claude/code-review-jb`, in plan order:
+
+1. **warpium_git foundations** — `stash.rs` (list parse, args builders,
+   per-file patch split), `rollback_many` (batching split tested:
+   committed→`checkout HEAD`, added→`rm --cached`, untracked→`clean -fd`),
+   `cat_file_batch`.
+2. **Diff-load performance (§4.9 F1, F2, F3, F5)** — one batched
+   `git diff --patch-with-raw -z` + one `cat-file --batch` + untracked
+   synthesized from disk; combined Head-mode open round shares one status walk
+   between metadata and diffs; `detect_main_branch` memoized per process;
+   editors/buttons lazy on first expand. Measured on the synthetic 100-file
+   change set (this doc's method, local disk): **202 spawns / ~157-189 ms →
+   4 spawns / ~13-16 ms**; the doc's dev-container numbers (per-spawn ~15 ms
+   on the bind mount) put the old path at ≈1.44 s for the same set.
+3. **Collapsed by default + click-to-expand + Expand/Collapse All (§5.2-5.3)**
+   — single click toggles immediately; Expand All restores the old
+   fully-expanded view on demand.
+4. **Group By + Unversioned Files node (§5.1, §5.4)** — Flat / Directory /
+   Repository dropdown persisted in `warpium.code_review_group_by`;
+   unversioned node collapsed by default in every mode.
+5. **Rollback of selected files (§5.5)** — cmd-click selection, header
+   Rollback… button, "Rollback N files?" checklist dialog, batched git,
+   renames per-file.
+6. **Stash tab (§5.6)** — Changes | Stashes strip
+   (`warpium.code_review_panel_tab`), list/create/apply/pop/drop with toasts,
+   read-only per-file unified patch viewer (capped at 2,000 lines).
+7. **Amend (§5.7)** — checkbox, message prefill, `git commit --amend`,
+   pushed-commit warning, "Amend" button prefixes. Local-only: the wire
+   protocol has no amend bit, so remote repos keep current behavior
+   (documented deviation; the proto change deserves its own review).
+8. **Fast reopen + watcher coalescing (§4.9 F4)** — dirty flag skips the diff
+   reload on a clean reopen; commit-level watcher storms coalesce through the
+   5 s throttle. Docs: WARPIUM.md's "Code Review panel" section.
+
+Deviations from this doc: none beyond the two documented above (amend
+local-only; unversioned stay committable via `git add -A`). VM checkpoint
+screenshots (§8) are pending the mac-mcp VM's return.
+
+Remaining follow-ups (out of scope here): editor-grade stash diff viewer,
+multi-repo aggregation, remote-repo amend (proto), session restore of the
+panel.

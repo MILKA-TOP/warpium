@@ -13,6 +13,8 @@ pub mod path;
 pub mod repo_detection;
 pub mod time_format;
 pub mod tooltips;
+#[cfg(feature = "local_fs")]
+pub(crate) mod warpium_main_branch;
 pub(crate) mod traffic_lights;
 pub(crate) mod truncation;
 pub mod vm_detection;

@@ -1,6 +1,8 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
+use instant::Instant;
+
 use super::*;
 use crate::blame::{Blame, blame_args};
 use crate::diff::{changed_files_args, file_diff_args, parse_name_status, parse_unified_diff};
@@ -21,6 +23,30 @@ fn collect(receiver: &mpsc::Receiver<LogEvent>) -> (Vec<LogRow>, Option<LogEvent
             end @ (LogEvent::Finished { .. } | LogEvent::Failed(_)) => return (rows, Some(end)),
         }
     }
+}
+
+#[test]
+fn cat_file_batch_reads_blobs_by_spec_and_skips_missing() {
+    let repo = init_repo();
+    let path = repo.path();
+    commit_file(path, "a.txt", "alpha\n", "Initial");
+    std::fs::create_dir(path.join("dir")).unwrap();
+    commit_file(path, "dir/b.txt", "beta\n", "Second");
+    let head = git(path, &["rev-parse", "HEAD"]).trim().to_owned();
+
+    let blobs = cat_file_batch(
+        path,
+        &[
+            "HEAD:a.txt".to_owned(),
+            format!("{head}:dir/b.txt"),
+            "HEAD:not-there.txt".to_owned(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(blobs.get("HEAD:a.txt").unwrap(), b"alpha\n");
+    assert_eq!(blobs.get(&format!("{head}:dir/b.txt")).unwrap(), b"beta\n");
+    assert!(!blobs.contains_key("HEAD:not-there.txt"));
+    assert!(cat_file_batch(path, &[]).unwrap().is_empty());
 }
 
 #[test]
@@ -92,12 +118,19 @@ fn reads_only_as_far_as_requested() {
         let _ = sender.send(event);
     })
     .unwrap();
+    // Rows arrive in batches; on a loaded machine the first batch can be
+    // smaller than the request (the 50 ms interval flush), so wait — bounded —
+    // until the initial request has been delivered rather than asserting on
+    // the first batch.
+    let deadline = Instant::now() + WAIT;
     let mut received = 0;
-    match receiver.recv_timeout(WAIT).expect("first rows") {
-        LogEvent::Rows(rows) => received += rows.len(),
-        other => panic!("unexpected {other:?}"),
+    while received < 100 {
+        let timeout = deadline.saturating_duration_since(Instant::now());
+        match receiver.recv_timeout(timeout).expect("initial rows") {
+            LogEvent::Rows(rows) => received += rows.len(),
+            other => panic!("unexpected {other:?}"),
+        }
     }
-    assert!(received >= 100);
     assert!(received < 6_000, "stopped early, got {received}");
     // Nothing more arrives until more is requested.
     assert!(receiver.recv_timeout(Duration::from_millis(300)).is_err());

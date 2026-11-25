@@ -404,6 +404,40 @@ impl CodeReviewView {
         )
     }
 
+    /// Expands a file's diff row, building its editor lazily (files start
+    /// collapsed and editor-less since the JetBrains-parity redesign).
+    pub fn expand_file_for_test(&mut self, path: &str, ctx: &mut ViewContext<Self>) -> bool {
+        let index = match self.state() {
+            CodeReviewViewState::Loaded(state) => state
+                .file_states
+                .iter()
+                .position(|(_, file_state)| file_state.file_diff.file_path == path),
+            _ => return false,
+        };
+        let Some(index) = index else {
+            return false;
+        };
+        {
+            let Some(repo) = self.active_repo.as_mut() else {
+                return false;
+            };
+            if let CodeReviewViewState::Loaded(state) = &mut repo.state
+                && let Some((_, file)) = state.file_states.get_index_mut(index)
+            {
+                file.is_expanded = true;
+            }
+        }
+        self.ensure_file_interactive_state(path, ctx);
+        if let CodeReviewViewState::Loaded(state) = self.state()
+            && let Some(row_index) = state.row_index_for_file(path)
+        {
+            self.viewported_list_state
+                .invalidate_height_for_index(row_index);
+        }
+        ctx.notify();
+        true
+    }
+
     /// Fully expand the first hidden section of the given file's diff editor,
     /// mirroring what a bar double-click does. Returns whether a section was
     /// expanded.
@@ -412,6 +446,9 @@ impl CodeReviewView {
         path: &str,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        if !self.expand_file_for_test(path, ctx) {
+            return false;
+        }
         let CodeReviewViewState::Loaded(state) = self.state() else {
             return false;
         };

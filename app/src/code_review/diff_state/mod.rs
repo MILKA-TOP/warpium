@@ -687,6 +687,29 @@ impl DiffStateModel {
         }
     }
 
+    /// The panel-opening refresh. Local Head mode runs one combined round
+    /// (one status walk feeding metadata + diffs); everything else falls back
+    /// to the regular diff load.
+    pub(crate) fn open_review_panel(
+        &self,
+        track_load_duration: bool,
+        preferred_session: Option<SessionId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match self {
+            Self::Local(local) => {
+                local.update(ctx, |local, ctx| {
+                    local.open_review_panel(ctx);
+                });
+            }
+            Self::Remote(remote) => {
+                remote.update(ctx, |remote, ctx| {
+                    remote.fetch_fresh_snapshot(track_load_duration, preferred_session, ctx);
+                });
+            }
+        }
+    }
+
     pub(crate) fn set_code_review_metadata_refresh_enabled(
         &self,
         enabled: bool,
@@ -749,12 +772,33 @@ impl DiffStateModel {
         }
     }
 
+    /// Rolls the given files back to `HEAD` (local repos only; design doc
+    /// §5.5). Unversioned files are deleted, JetBrains' rollback semantics.
+    pub(crate) fn rollback_files(
+        &self,
+        file_infos: Vec<FileStatusInfo>,
+        should_stash: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match self {
+            Self::Local(local) => {
+                local.update(ctx, |local, ctx| {
+                    local.rollback_files(file_infos, should_stash, ctx);
+                });
+            }
+            Self::Remote(_) => {
+                log::debug!("Rollback of selected files is not supported for remote repositories");
+            }
+        }
+    }
+
     /// Runs a commit chain (commit, then optionally push/create-PR).
     pub(crate) fn git_commit_chain(
         &self,
         mode: CommitChainMode,
         message: String,
         include_unstaged: bool,
+        amend: bool,
         branch: String,
         autogenerate_pr_content: bool,
         ctx: &mut ModelContext<Self>,
@@ -765,12 +809,18 @@ impl DiffStateModel {
                     mode,
                     message,
                     include_unstaged,
+                    amend,
                     branch,
                     autogenerate_pr_content,
                     ctx,
                 );
             }),
             Self::Remote(remote) => remote.update(ctx, |remote, ctx| {
+                if amend {
+                    // Amend is local-only: the wire protocol has no amend bit.
+                    log::debug!("Amend is not supported for remote repositories");
+                    return;
+                }
                 remote.git_commit_chain(
                     mode,
                     message,
@@ -780,6 +830,14 @@ impl DiffStateModel {
                     ctx,
                 );
             }),
+        }
+    }
+
+    /// Whether `HEAD` is already pushed (local repos; false for remote).
+    pub(crate) fn is_head_pushed(&self, ctx: &AppContext) -> bool {
+        match self {
+            Self::Local(local) => local.as_ref(ctx).is_head_pushed(),
+            Self::Remote(_) => false,
         }
     }
 

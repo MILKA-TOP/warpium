@@ -81,6 +81,51 @@ pub fn rollback(repo: &Path, relative_path: &str) -> Result<FileState, GitError>
     Ok(state)
 }
 
+fn batch(args: &[&str], paths: Vec<&str>) -> Vec<String> {
+    let mut batch: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    batch.extend(paths.into_iter().map(str::to_owned));
+    batch
+}
+
+/// The git invocations rolling back `files` as few processes as possible: all
+/// committed paths in one `git checkout HEAD -- …`, all staged-new paths in one
+/// `git rm --cached --quiet -- …`, all untracked paths in one
+/// `git clean -fd -- …` (JetBrains' rollback deletes unversioned files, and
+/// `git clean` removes only the paths it is given).
+pub fn rollback_batches(files: &[(&str, FileState)]) -> Vec<Vec<String>> {
+    let paths_in = |state: FileState| -> Vec<&str> {
+        files
+            .iter()
+            .filter_map(|(path, file_state)| (*file_state == state).then_some(*path))
+            .collect()
+    };
+    let committed = paths_in(FileState::Committed);
+    let added = paths_in(FileState::Added);
+    let untracked = paths_in(FileState::Untracked);
+
+    let mut batches = Vec::new();
+    if !committed.is_empty() {
+        batches.push(batch(&["checkout", "HEAD", "--"], committed));
+    }
+    if !added.is_empty() {
+        batches.push(batch(&["rm", "--cached", "--quiet", "--"], added));
+    }
+    if !untracked.is_empty() {
+        batches.push(batch(&["clean", "-fd", "--"], untracked));
+    }
+    batches
+}
+
+/// Rolls back `files` in at most three git invocations, one per file state
+/// (see [`rollback_batches`]). Callers pass each file's [`FileState`]; when it
+/// isn't known, compute it with [`file_state`] first.
+pub fn rollback_many(repo: &Path, files: &[(&str, FileState)]) -> Result<(), GitError> {
+    for args in rollback_batches(files) {
+        run_git(repo, &args)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "rollback_tests.rs"]
 mod tests;

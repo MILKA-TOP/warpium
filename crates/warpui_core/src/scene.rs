@@ -531,6 +531,23 @@ impl Scene {
             .unwrap_or_default();
         #[cfg(not(debug_assertions))]
         let location_info = "";
+        // Log the offending rect and its element's creation site before the
+        // debug assert aborts: the assert message itself can be lost when the
+        // panic hook fails (the observed "failed to initiate panic" aborts).
+        if cfg!(debug_assertions)
+            && (rect.origin().y().is_infinite()
+                || rect.origin().y().is_nan()
+                || rect.size().x().is_infinite()
+                || rect.size().x().is_nan()
+                || rect.size().y().is_infinite()
+                || rect.size().y().is_nan())
+        {
+            log::error!(
+                "[scene] invalid rect {:?} drawn{location_info}\n{}",
+                rect,
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         debug_assert!(
             !rect.origin().y().is_infinite(),
             "!rect.origin().y().is_infinite(){location_info}"

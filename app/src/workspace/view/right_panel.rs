@@ -10,10 +10,11 @@ use warp_errors::report_error;
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
     ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide,
-    Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-    PositionedElementAnchor, Resizable, ResizableStateHandle, Shrinkable, Text,
-    resizable_state_handle,
+    Element, Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor, Resizable,
+    ResizableStateHandle, Shrinkable, Stack, Text, resizable_state_handle,
 };
+use pathfinder_geometry::vector::vec2f;
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::EditableBinding;
 use warpui::platform::Cursor;
@@ -37,6 +38,8 @@ use crate::code_review::diff_state::DiffStateModel;
 use crate::code_review::telemetry_event::CodeReviewContextDestination;
 use crate::drive::panel::{MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH};
 use crate::pane_group::pane::view::header::PANE_HEADER_HEIGHT;
+use crate::code_review::warpium_file_groups::GroupBy;
+use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
 use crate::pane_group::{
     Event as PaneGroupEvent, PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel,
@@ -399,6 +402,16 @@ pub enum RightPanelAction {
     },
     OpenRepository,
     ToggleMaximize,
+    /// Expand every file's diff in the Code Review panel.
+    ExpandAllFiles,
+    /// Collapse every file's diff in the Code Review panel.
+    CollapseAllFiles,
+    /// The Group By dropdown (design doc §5.1).
+    ToggleGroupByMenu,
+    SetGroupBy(GroupBy),
+    /// Rollback of the Code Review panel's multi-selected files
+    /// (design doc §5.5).
+    RollbackSelectedFiles,
 }
 
 #[derive(Clone, Debug)]
@@ -427,6 +440,17 @@ pub struct RightPanelView {
     file_navigation_button_mouse_state: MouseStateHandle,
     #[cfg(feature = "local_fs")]
     open_repository_button: ViewHandle<ActionButton>,
+    /// Expand/collapse every file diff (JetBrains' Commit tool window toolbar,
+    /// design doc §5.2).
+    expand_all_button: ViewHandle<ActionButton>,
+    collapse_all_button: ViewHandle<ActionButton>,
+    /// The Group By dropdown and its toggle button (design doc §5.1).
+    group_by_button: ViewHandle<ActionButton>,
+    group_by_menu: ViewHandle<Menu<RightPanelAction>>,
+    group_by_menu_open: bool,
+    /// Rollback… for the panel's multi-selected files (design doc §5.5),
+    /// shown while a selection exists on a local repo.
+    rollback_button: ViewHandle<ActionButton>,
     pub active_pane_group: Option<ViewHandle<PaneGroup>>,
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     working_directories_model: ModelHandle<WorkingDirectoriesModel>,
@@ -509,12 +533,61 @@ impl RightPanelView {
                 .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::OpenRepository))
         });
 
+        let expand_all_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("", PaneHeaderTheme)
+                .with_icon(icons::Icon::ListOpen)
+                .with_tooltip("Expand all files")
+                .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::ExpandAllFiles))
+        });
+        let collapse_all_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("", PaneHeaderTheme)
+                .with_icon(icons::Icon::ListCollapsed)
+                .with_tooltip("Collapse all files")
+                .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::CollapseAllFiles))
+        });
+
+        let group_by_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Group By", PaneHeaderTheme)
+                .with_icon(icons::Icon::FolderClosed)
+                .with_tooltip("Group changes by")
+                .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::ToggleGroupByMenu))
+        });
+        let rollback_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Rollback\u{2026}", PaneHeaderTheme)
+                .with_icon(icons::Icon::ReverseLeft)
+                .with_tooltip("Roll back the selected files")
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(RightPanelAction::RollbackSelectedFiles)
+                })
+        });
+        let group_by_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .prevent_interaction_with_other_elements()
+                .with_drop_shadow()
+        });
+        ctx.subscribe_to_view(&group_by_menu, |me, _, event, ctx| match event {
+            MenuEvent::ItemSelected | MenuEvent::Close { .. } => {
+                me.group_by_menu_open = false;
+                me.group_by_button.update(ctx, |button, ctx| {
+                    button.set_active(false, ctx);
+                });
+                ctx.notify();
+            }
+            MenuEvent::ItemHovered => {}
+        });
+
         Self {
             resizable_state_handle,
             close_button_mouse_state: Default::default(),
             file_navigation_button_mouse_state: Default::default(),
             #[cfg(feature = "local_fs")]
             open_repository_button,
+            expand_all_button,
+            collapse_all_button,
+            group_by_button,
+            group_by_menu,
+            group_by_menu_open: false,
+            rollback_button,
             active_pane_group: None,
             working_directories_model,
             maximize_button,
@@ -940,6 +1013,58 @@ impl RightPanelView {
         }
     }
 
+    /// The Group By dropdown entries, with the active mode check-marked.
+    fn group_by_menu_items(&self, app: &AppContext) -> Vec<MenuItem<RightPanelAction>> {
+        let current = self
+            .active_code_review_view(app)
+            .map(|view| view.as_ref(app).group_by())
+            .unwrap_or_default();
+        GroupBy::all()
+            .into_iter()
+            .map(|group_by| {
+                let mut item = MenuItemFields::new(group_by.label())
+                    .with_on_select_action(RightPanelAction::SetGroupBy(group_by));
+                if group_by == current {
+                    item = item.with_right_side_icon(icons::Icon::Check);
+                }
+                item.into_item()
+            })
+            .collect()
+    }
+
+    /// The active pane group's code review view, when one is open.
+    fn active_code_review_view(&self, app: &AppContext) -> Option<ViewHandle<CodeReviewView>> {
+        let repo_path = self.code_review_state.as_ref()?.selected_repo_path.as_ref()?;
+        let pane_group_id = self.active_pane_group.as_ref()?.id();
+        self.working_directories_model
+            .as_ref(app)
+            .get_code_review_view(pane_group_id, repo_path)
+    }
+
+    /// Dispatches a [`CodeReviewAction`] to the active pane group's code
+    /// review view, when one is open.
+    fn forward_to_code_review_view(
+        &self,
+        action: CodeReviewAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(state) = &self.code_review_state
+            && let Some(repo_path) = &state.selected_repo_path
+            && let Some(pane_group) = &self.active_pane_group
+        {
+            let pane_group_id = pane_group.id();
+            let working_directories_model = self.working_directories_model.clone();
+            if let Some(code_review_view) = working_directories_model
+                .as_ref(ctx)
+                .get_code_review_view(pane_group_id, repo_path)
+            {
+                code_review_view.update(ctx, |view, ctx| {
+                    view.handle_action(&action, ctx);
+                });
+            }
+        }
+    }
+
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn render_maximize_pane_button(&self) -> Box<dyn Element> {
         ConstrainedBox::new(ChildView::new(&self.maximize_button).finish())
@@ -1013,10 +1138,34 @@ impl RightPanelView {
         if let Some(repo_dropdown) = self.render_repo_dropdown() {
             right_section.push(repo_dropdown);
         }
+        right_section.push(
+            Container::new(ChildView::new(&self.group_by_button).finish())
+                .with_margin_right(2.)
+                .finish(),
+        );
+        if crv.selected_file_count() > 0 && crv.repo_is_local() == Some(true) {
+            right_section.push(
+                Container::new(ChildView::new(&self.rollback_button).finish())
+                    .with_margin_right(2.)
+                    .finish(),
+            );
+        }
+        if crv.has_file_states() {
+            right_section.push(
+                Container::new(ChildView::new(&self.expand_all_button).finish())
+                    .with_margin_right(2.)
+                    .finish(),
+            );
+            right_section.push(
+                Container::new(ChildView::new(&self.collapse_all_button).finish())
+                    .with_margin_right(2.)
+                    .finish(),
+            );
+        }
         right_section.push(self.render_maximize_pane_button());
         right_section.push(close_button);
 
-        Container::new(
+        let header = Container::new(
             ConstrainedBox::new(
                 Flex::row()
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -1032,7 +1181,21 @@ impl RightPanelView {
         )
         .with_padding_left(CONTENT_LEFT_MARGIN)
         .with_padding_right(CONTENT_RIGHT_MARGIN)
-        .finish()
+        .finish();
+
+        let mut stack = Stack::new().with_child(header);
+        if self.group_by_menu_open {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.group_by_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 0.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::BottomRight,
+                    ChildAnchor::TopRight,
+                ),
+            );
+        }
+        stack.finish()
     }
 
     /// Legacy header layout: "Code review" title + file nav button.
@@ -1839,6 +2002,49 @@ impl TypedActionView for RightPanelView {
             RightPanelAction::ToggleMaximize => {
                 ctx.emit(RightPanelEvent::ToggleMaximize);
                 ctx.notify();
+            }
+            RightPanelAction::ExpandAllFiles => {
+                self.forward_to_code_review_view(CodeReviewAction::ExpandAllFiles, ctx);
+            }
+            RightPanelAction::CollapseAllFiles => {
+                self.forward_to_code_review_view(CodeReviewAction::CollapseAllFiles, ctx);
+            }
+            RightPanelAction::ToggleGroupByMenu => {
+                let items = self.group_by_menu_items(ctx);
+                if items.is_empty() {
+                    return;
+                }
+                if self.group_by_menu_open {
+                    self.group_by_menu.update(ctx, |menu, ctx| {
+                        menu.set_items(Vec::new(), ctx);
+                        ctx.notify();
+                    });
+                    self.group_by_menu_open = false;
+                } else {
+                    self.group_by_menu.update(ctx, move |menu, ctx| {
+                        menu.set_items(items, ctx);
+                        ctx.notify();
+                    });
+                    self.group_by_menu_open = true;
+                }
+                self.group_by_button.update(ctx, |button, ctx| {
+                    button.set_active(self.group_by_menu_open, ctx);
+                });
+                ctx.notify();
+            }
+            RightPanelAction::RollbackSelectedFiles => {
+                self.forward_to_code_review_view(
+                    CodeReviewAction::ShowRollbackConfirmDialog,
+                    ctx,
+                );
+            }
+            RightPanelAction::SetGroupBy(group_by) => {
+                self.group_by_menu_open = false;
+                self.group_by_menu.update(ctx, |menu, ctx| {
+                    menu.set_items(Vec::new(), ctx);
+                    ctx.notify();
+                });
+                self.forward_to_code_review_view(CodeReviewAction::SetGroupBy(*group_by), ctx);
             }
             RightPanelAction::OpenRepository => {
                 if let Some(active_pane_group) = &self.active_pane_group {
