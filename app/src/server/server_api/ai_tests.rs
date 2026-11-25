@@ -130,8 +130,7 @@ fn execution_bootstrap_response() -> Value {
                         "idleOnCompleteSeconds": null,
                         "idleOnFailSeconds": null,
                         "snapshotDisabled": false,
-                        "agentHookSources": [],
-                        "experimentalJson": null
+                        "agentHookSources": []
                     },
                     "attachments": [{
                         "fileId": "file-one",
@@ -283,6 +282,24 @@ fn execution_bootstrap_fetches_config_secrets_and_attachments_once() {
         }
         assert!(data.secrets.unwrap().contains_key("API_KEY"));
         assert_eq!(data.attachments.unwrap()[0].filename, "file-one_test.txt");
+        request.assert();
+    }
+}
+
+#[test]
+fn execution_bootstrap_uses_the_server_selected_message_owner() {
+    let _feature = crate::features::FeatureFlag::SessionAgentMessages.override_enabled(true);
+    for selected in [false, true] {
+        let mut response = execution_bootstrap_response();
+        response["data"]["task"]["task"]["executionConfig"]["sessionAgentMessages"] =
+            json!(selected);
+        let request = mock_execution_bootstrap(response, "token-success", false);
+        let api = execution_bootstrap_server_api();
+        block_on(api.get_execution_bootstrap("task-one", "1", "token-success".into(), false))
+            .unwrap();
+
+        assert_eq!(api.uses_session_agent_messages("task-one"), selected);
+        assert!(!api.uses_session_agent_messages("another-task"));
         request.assert();
     }
 }

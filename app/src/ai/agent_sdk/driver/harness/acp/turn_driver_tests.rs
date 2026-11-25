@@ -248,6 +248,16 @@ impl FakeAgent {
         }))
         .await;
     }
+
+    /// Answers `prompt` with the JSON-RPC `error`.
+    async fn fail(&mut self, prompt: &Value, error: Value) {
+        self.send(json!({
+            "jsonrpc": "2.0",
+            "id": prompt["id"],
+            "error": error,
+        }))
+        .await;
+    }
 }
 
 /// The text of a prompt request, as the agent would concatenate its text blocks.
@@ -613,6 +623,7 @@ impl Fixture {
                 attachments: Vec::new(),
                 participant_id: participant_id.clone(),
                 base: None,
+                accepted: None,
             })
             .await
             .unwrap();
@@ -687,10 +698,13 @@ fn start(
         host: host.clone(),
         telemetry: telemetry.clone(),
         state: state.clone(),
+        harness: Harness::Unknown,
         turn,
         session_id: SESSION.to_owned(),
         suppressed_startup_message: None,
         prompt_text: "initial prompt".to_owned(),
+        initial_inbox_ready: None,
+        skip_initial_prompt: false,
         initial_attachments: Vec::new(),
         attachments: Arc::new(AttachmentResolver::new(
             Arc::new(MockAIClient::new()),
@@ -1647,6 +1661,7 @@ fn more_than_two_ready_batches_are_submitted_fifo_without_empty_prompts_or_dupli
                         attachments: Vec::new(),
                         participant_id: participant_id.clone(),
                         base: None,
+                        accepted: None,
                     },
                     None,
                 ));
@@ -1874,7 +1889,7 @@ fn an_ignored_explicit_stop_uses_the_bounded_terminal_path() {
     );
     assert_eq!(
         telemetry.actions(AcpActionEvent::Turn),
-        vec![("error", true)]
+        vec![("error_turn_failed", true)]
     );
     assert!(host.events().iter().any(|event| matches!(
         event,
@@ -1964,9 +1979,9 @@ fn transport_eof_during_soft_cancellation_remains_an_error_and_cleans_pending_ro
         fixture.agent.expect_cancel().await;
         fixture.agent.to_client.close().await.unwrap();
         fixture.host.wait_for_finished(1).await;
-        fixture.unbind()
+        fixture.unbind_with_telemetry()
     };
-    let ((host, state), ()) = block_on(join(script, driver.run(&mut mapper)));
+    let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
     assert!(
         host.events().iter().any(|event| matches!(
             event,
@@ -1977,6 +1992,11 @@ fn transport_eof_during_soft_cancellation_remains_an_error_and_cleans_pending_ro
         )),
         "{:?}",
         host.events()
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("error_session_lost", true)],
+        "an agent that closed its side is gone, whatever the error says"
     );
     assert!(!host.events().iter().any(|event| matches!(
         event,
@@ -2101,6 +2121,142 @@ fn turn_state_reports_idle_once_the_prompt_resolves() {
 }
 
 #[test]
+fn delivery_receipt_waits_for_a_successful_prompt_response() {
+    let (driver, mut mapper, mut fixture) = start_default();
+    let (accepted, receipt) = async_channel::bounded(1);
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.host.wait_for_finished(1).await;
+        fixture
+            .follow_ups
+            .send(ExternalHarnessPrompt {
+                text: "inbox batch".into(),
+                attachments: Vec::new(),
+                participant_id: ParticipantId::new(),
+                base: None,
+                accepted: Some(accepted),
+            })
+            .await
+            .unwrap();
+        let prompt = fixture.agent.next_prompt().await;
+        fixture.agent.read_barrier().await;
+        assert_eq!(receipt.try_recv(), Err(async_channel::TryRecvError::Empty));
+
+        fixture.agent.respond(&prompt, "end_turn").await;
+        receipt.recv().await.unwrap();
+        fixture.host.wait_for_finished(2).await;
+        fixture.unbind()
+    };
+    block_on(join(script, driver.run(&mut mapper)));
+}
+
+#[test]
+fn rejected_prompt_releases_its_delivery_receipt_without_accepting() {
+    let (driver, mut mapper, mut fixture) = start_default();
+    let (accepted, receipt) = async_channel::bounded(1);
+    fixture
+        .follow_ups
+        .try_send(ExternalHarnessPrompt {
+            text: "inbox batch".into(),
+            attachments: Vec::new(),
+            participant_id: ParticipantId::new(),
+            base: None,
+            accepted: Some(accepted),
+        })
+        .unwrap();
+    let script = async {
+        let prompt = fixture.agent.next_prompt().await;
+        fixture
+            .agent
+            .send(json!({
+                "jsonrpc": "2.0", "id": prompt["id"],
+                "error": { "code": -32603, "message": "not accepted" }
+            }))
+            .await;
+
+        assert_eq!(receipt.recv().await, Err(async_channel::RecvError));
+        fixture.host.wait_for_finished(1).await;
+        fixture.unbind()
+    };
+    block_on(join(script, driver.run(&mut mapper)));
+}
+
+#[test]
+fn injected_steer_accepts_delivery_before_the_running_turn_finishes() {
+    let (driver, mut mapper, mut fixture) = start_steering();
+    let (accepted, receipt) = async_channel::bounded(1);
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture
+            .follow_ups
+            .send(ExternalHarnessPrompt {
+                text: "inbox batch".into(),
+                attachments: Vec::new(),
+                participant_id: ParticipantId::new(),
+                base: None,
+                accepted: Some(accepted),
+            })
+            .await
+            .unwrap();
+        let steer = fixture.agent.next_steer().await;
+        fixture.agent.read_barrier().await;
+        assert_eq!(receipt.try_recv(), Err(async_channel::TryRecvError::Empty));
+
+        fixture.agent.answer_steer(&steer, "injected").await;
+        receipt.recv().await.unwrap();
+        fixture.agent.respond(&first, "end_turn").await;
+        fixture.host.wait_for_finished(1).await;
+        fixture.unbind()
+    };
+    block_on(join(script, driver.run(&mut mapper)));
+}
+
+#[test]
+fn opening_wake_does_not_submit_a_synthetic_prompt() {
+    let (mut driver, mut mapper, mut fixture) = start_default();
+    let (ready, inbox_ready) = async_channel::bounded(1);
+    driver.initial_inbox_ready = Some(inbox_ready);
+    driver.skip_initial_prompt = true;
+    let mut running = Box::pin(driver.run(&mut mapper));
+    assert!(running.as_mut().now_or_never().is_none());
+    assert_eq!(ended_count(&fixture.host.events()), 0);
+    let script = async {
+        ready.send(()).await.unwrap();
+        fixture.host.wait_for_finished(1).await;
+        assert!(fixture.agent.next_message().now_or_never().is_none());
+
+        fixture.send_follow_up("resolved inbox batch").await;
+        let prompt = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&prompt), "resolved inbox batch");
+        fixture.agent.respond(&prompt, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        fixture.unbind()
+    };
+    block_on(join(script, running));
+}
+
+#[test]
+fn opening_inbox_batch_runs_on_the_initial_stream_without_an_idle_boundary() {
+    let (mut driver, mut mapper, mut fixture) = start_default();
+    let (ready, inbox_ready) = async_channel::bounded(1);
+    driver.initial_inbox_ready = Some(inbox_ready);
+    driver.skip_initial_prompt = true;
+    let script = async {
+        fixture.send_follow_up("resolved inbox batch").await;
+        ready.send(()).await.unwrap();
+        let prompt = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&prompt), "resolved inbox batch");
+        assert_eq!(ended_count(&fixture.host.events()), 0);
+        fixture.agent.respond(&prompt, "end_turn").await;
+        fixture.host.wait_for_finished(1).await;
+        fixture.unbind()
+    };
+    let ((host, _), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(host.streams().len(), 1);
+}
+
+#[test]
 fn opening_batch_preserves_attachments_and_authorship_across_preparation() {
     let (driver, mut mapper, mut fixture) = start_default();
     let author_b = ParticipantId::new();
@@ -2124,6 +2280,7 @@ fn opening_batch_preserves_attachments_and_authorship_across_preparation() {
             }],
             participant_id: author_b,
             base: Some(base),
+            accepted: None,
         })
         .unwrap();
     block_on(fixture.send_follow_up("C"));
@@ -2320,6 +2477,199 @@ fn follow_ups_held_through_a_failed_turn_go_out_as_the_next_turn() {
         "the failed turn ends with the follow-up still to send: {events:?}"
     );
     assert_eq!(host.texts_on(&streams[1]), vec!["kept"]);
+    assert!(host.queued_rows.lock().is_empty());
+    assert!(!state.is_settling());
+}
+
+/// The error the Claude adapter rejects a prompt with when the API left a server tool call
+/// unanswered, as observed on a production run.
+fn unanswered_server_tool_error() -> Value {
+    json!({
+        "code": -32603,
+        "message": "Internal error: Claude ended the turn without returning results for tool \
+                    calls: srvtoolu_018jms7VSGbY5G5N2SagnC2M",
+        "data": { "errorKind": "incomplete_tool_call" },
+    })
+}
+
+/// Runs one turn the agent answers with `error` and returns what the host and telemetry saw.
+fn run_failed_turn(
+    harness: Harness,
+    error: Value,
+) -> (Arc<RecordingHost>, Arc<RecordingTelemetry>) {
+    let (mut driver, mut mapper, mut fixture) = start_default();
+    driver.harness = harness;
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.agent.fail(&first, error).await;
+        fixture.host.wait_for_finished(1).await;
+        fixture.unbind_with_telemetry()
+    };
+    let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
+    assert_eq!(host.streams().len(), 1, "{:?}", host.events());
+    assert!(!state.is_settling());
+    assert!(!state.is_in_turn());
+    (host, telemetry)
+}
+
+/// How the only turn's stream was finished.
+fn finish_reason(host: &RecordingHost) -> &'static str {
+    host.events()
+        .into_iter()
+        .find_map(|event| match event {
+            HostEvent::Finished { reason, .. } => Some(reason),
+            _ => None,
+        })
+        .expect("the turn's stream was finished")
+}
+
+#[test]
+fn an_agent_error_fails_the_turn_for_every_harness() {
+    let overloaded = json!({ "code": -32603, "message": "model overloaded" });
+    for harness in [Harness::Claude, Harness::Codex, Harness::Pi] {
+        let (host, telemetry) = run_failed_turn(harness, overloaded.clone());
+        assert_eq!(finish_reason(&host), "internal_error", "{harness}");
+        assert_eq!(
+            telemetry.actions(AcpActionEvent::Turn),
+            vec![("error_turn_failed", true)],
+            "{harness}"
+        );
+    }
+}
+
+#[test]
+fn a_lost_session_is_labelled_apart_from_a_failed_turn() {
+    let session_not_found = json!({
+        "code": -32002,
+        "message": "Session sess_1 not found",
+        "data": { "sessionId": SESSION },
+    });
+    let (host, telemetry) = run_failed_turn(Harness::Codex, session_not_found);
+    assert_eq!(finish_reason(&host), "internal_error");
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("error_session_lost", true)]
+    );
+}
+
+#[test]
+fn claude_rejecting_a_prompt_for_an_unanswered_server_tool_call_ends_the_turn_normally() {
+    let (host, telemetry) = run_failed_turn(Harness::Claude, unanswered_server_tool_error());
+    assert_eq!(finish_reason(&host), "done");
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("stopped_despite_error", false)]
+    );
+}
+
+#[test]
+fn the_unanswered_server_tool_reading_is_claudes_alone() {
+    for harness in [Harness::Codex, Harness::Pi, Harness::Unknown] {
+        let (host, telemetry) = run_failed_turn(harness, unanswered_server_tool_error());
+        assert_eq!(finish_reason(&host), "internal_error", "{harness}");
+        assert_eq!(
+            telemetry.actions(AcpActionEvent::Turn),
+            vec![("error_turn_failed", true)],
+            "{harness}"
+        );
+    }
+
+    let client_tool_unanswered = json!({
+        "code": -32603,
+        "message": "Internal error: Claude ended the turn without returning results for tool \
+                    calls: toolu_01ClientToolCall",
+        "data": { "errorKind": "incomplete_tool_call" },
+    });
+    let (host, telemetry) = run_failed_turn(Harness::Claude, client_tool_unanswered);
+    assert_eq!(
+        finish_reason(&host),
+        "internal_error",
+        "a client tool call left without a result is a real failure"
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("error_turn_failed", true)]
+    );
+}
+
+#[test]
+fn an_unanswered_server_tool_error_while_a_cancel_is_pending_is_still_the_cancellation() {
+    let (mut driver, mut mapper, mut fixture) = start_default();
+    driver.harness = Harness::Claude;
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_interrupt().await;
+        fixture.agent.expect_cancel().await;
+        fixture
+            .agent
+            .fail(&first, unanswered_server_tool_error())
+            .await;
+        fixture
+            .host
+            .wait_for(|events| matches!(events.last(), Some(HostEvent::Cancelled { .. })))
+            .await;
+        fixture.unbind_with_telemetry()
+    };
+    let ((host, _, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    assert!(
+        host.events().iter().any(|event| matches!(
+            event,
+            HostEvent::Cancelled {
+                by: TurnCancellation::Interrupt,
+                ..
+            }
+        )),
+        "{:?}",
+        host.events()
+    );
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![("cancelled", false)]
+    );
+}
+
+#[test]
+fn a_follow_up_held_through_a_completed_turn_the_agent_rejected_goes_out_as_the_next_turn() {
+    let (mut driver, mut mapper, mut fixture) = start_steering();
+    driver.harness = Harness::Claude;
+    let script = async {
+        let first = fixture.agent.next_prompt().await;
+        fixture.send_follow_up("kept").await;
+        let steer = fixture.agent.next_steer().await;
+        fixture
+            .agent
+            .fail(&first, unanswered_server_tool_error())
+            .await;
+        fixture.agent.answer_steer(&steer, "promptRequired").await;
+
+        let second = fixture.agent.next_prompt().await;
+        assert_eq!(prompt_text(&second), "kept");
+        fixture.agent.respond(&second, "end_turn").await;
+        fixture.host.wait_for_finished(2).await;
+        fixture.unbind_with_telemetry()
+    };
+    let ((host, state, telemetry), ()) = block_on(join(script, driver.run(&mut mapper)));
+
+    let streams = host.streams();
+    assert_eq!(streams.len(), 2, "{:?}", host.events());
+    let events = host.events();
+    assert!(
+        events.contains(&HostEvent::Finished {
+            stream: streams[0].clone(),
+            reason: "done",
+            settling: true,
+        }),
+        "the rejected turn ends as done with the follow-up still to send: {events:?}"
+    );
+    assert_eq!(host.texts_on(&streams[1]), vec!["kept"]);
+    assert_eq!(
+        telemetry.actions(AcpActionEvent::Turn),
+        vec![
+            ("stopped_despite_error", false),
+            ("stopped_end_turn", false)
+        ]
+    );
     assert!(host.queued_rows.lock().is_empty());
     assert!(!state.is_settling());
 }
@@ -2651,6 +3001,7 @@ fn follow_ups_a_prompt_could_not_carry_are_steered_into_its_turn() {
                 attachments: Vec::new(),
                 participant_id: ParticipantId::new(),
                 base: None,
+                accepted: None,
             },
             None,
         ));

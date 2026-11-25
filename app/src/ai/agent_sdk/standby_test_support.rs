@@ -233,6 +233,7 @@ pub(super) fn connection() -> (ConnectionAttempt, TestServer) {
 
 pub(super) fn execution_config() -> ExecutionConfiguration {
     ExecutionConfiguration {
+        session_agent_messages: None,
         task_id: "run-id".into(),
         execution_id: "42".into(),
         conversation_id: None,
@@ -259,7 +260,6 @@ pub(super) fn execution_config() -> ExecutionConfiguration {
         idle_on_fail_seconds: None,
         snapshot_disabled: true,
         agent_hook_sources: Vec::new(),
-        experimental_json: None,
     }
 }
 

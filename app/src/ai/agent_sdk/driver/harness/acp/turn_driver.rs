@@ -28,6 +28,7 @@ use futures::stream::{FuturesOrdered, FuturesUnordered};
 use futures::{FutureExt, StreamExt, future, pin_mut, select, select_biased};
 use parking_lot::Mutex;
 use session_sharing_protocol::common::ParticipantId;
+use warp_cli::agent::Harness;
 use warp_multi_agent_api::ClientAction;
 use warp_multi_agent_api::response_event::{StreamFinished, stream_finished};
 use warpui::r#async::Timer;
@@ -41,6 +42,7 @@ use super::protocol::{
     SessionUpdateParams, SteeringIdleBehavior, SteeringMeta, SteeringOptions, SteeringOutcome,
     SteeringParams, SteeringResponse, StopReason,
 };
+use super::turn_failure::{PromptErrorReading, classify_turn_failure, read_prompt_error};
 use crate::ai::agent_sdk::setup_observability::{AcpActionEvent, SetupClientEventReporter};
 use crate::ai::attachment_utils::DownloadedAttachment;
 use crate::ai::blocklist::{
@@ -187,6 +189,9 @@ impl TurnState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TurnOutcome {
     Stopped(StopReason),
+    /// The agent answered the prompt with an error its harness is known to send for a turn
+    /// whose work completed.
+    StoppedDespiteError,
     /// The agent acknowledged a `session/cancel`.
     Cancelled,
 }
@@ -201,6 +206,7 @@ impl TurnOutcome {
             Self::Stopped(StopReason::Refusal) => "stopped_refusal",
             Self::Stopped(StopReason::Cancelled) => "stopped_cancelled",
             Self::Stopped(StopReason::Unknown) => "stopped_unknown",
+            Self::StoppedDespiteError => "stopped_despite_error",
             Self::Cancelled => "cancelled",
         }
     }
@@ -405,6 +411,8 @@ pub(super) struct TurnDriver {
     pub host: Arc<dyn TurnHost>,
     pub telemetry: Arc<dyn TurnTelemetry>,
     pub state: Arc<TurnState>,
+    /// Which agent is on the other end, for the conventions only its adapter follows.
+    pub harness: Harness,
     /// The currently open request stream.
     pub turn: ExternalHarnessTurn,
     pub session_id: String,
@@ -413,6 +421,8 @@ pub(super) struct TurnDriver {
     /// this is cleared.
     pub suppressed_startup_message: Option<String>,
     pub prompt_text: String,
+    pub initial_inbox_ready: Option<async_channel::Receiver<()>>,
+    pub skip_initial_prompt: bool,
     /// Task attachments downloaded before the run started, sent with the initial prompt.
     pub initial_attachments: Vec<DownloadedAttachment>,
     pub attachments: Arc<AttachmentResolver>,
@@ -444,7 +454,37 @@ impl TurnDriver {
     /// an internal error), which is what the task status follows; the block's exit code remains
     /// the agent's own.
     pub(super) async fn run(mut self, mapper: &mut AcpTurnMapper) {
-        let mut turn_result = self.run_turn(mapper, PromptInput::Initial).await;
+        let inbox_ready = if let Some(ready) = self.initial_inbox_ready.take() {
+            // Completing the startup stream before the inbox resolves can trigger an idle exit.
+            select! {
+                result = ready.recv().fuse() => result.is_ok(),
+                _ = recv_or_pending(self.cancels.as_ref()).fuse() => false,
+            }
+        } else {
+            true
+        };
+        let mut turn_result = if !inbox_ready {
+            self.finish_turn(
+                self.turn.stream_id.clone(),
+                stream_finished_for(StopReason::Cancelled),
+            )
+            .await;
+            Ok(TurnOutcome::Cancelled)
+        } else if self.skip_initial_prompt {
+            if self.pending_follow_ups().is_empty() {
+                self.finish_turn(
+                    self.turn.stream_id.clone(),
+                    stream_finished_for(StopReason::EndTurn),
+                )
+                .await;
+                Ok(TurnOutcome::Stopped(StopReason::EndTurn))
+            } else {
+                self.run_turn(mapper, PromptInput::FollowUps { interrupted: false })
+                    .await
+            }
+        } else {
+            self.run_turn(mapper, PromptInput::Initial).await
+        };
 
         log::info!("ACP turn finished; accepting follow-ups until the driver ends the run");
         loop {
@@ -550,7 +590,8 @@ impl TurnDriver {
         &mut self,
         mapper: &mut AcpTurnMapper,
         input: PromptInput,
-    ) -> Result<Vec<ContentBlock>> {
+    ) -> Result<(Vec<ContentBlock>, Vec<async_channel::Sender<()>>)> {
+        let mut accepted = Vec::new();
         let (mut content, mut interrupted) = match input {
             PromptInput::Initial => (
                 self.attachments
@@ -567,6 +608,9 @@ impl TurnDriver {
         let mut prepared = 0;
         while let Some(QueuedFollowUp { prompt, row, .. }) = self.next_batch_follow_up(prepared) {
             prepared += 1;
+            if let Some(receipt) = prompt.accepted {
+                accepted.push(receipt);
+            }
             if let Some(row) = row {
                 self.host.hide_queued_prompt(row).await;
             }
@@ -585,7 +629,7 @@ impl TurnDriver {
                     .await,
             );
         }
-        Ok(content)
+        Ok((content, accepted))
     }
 
     /// Runs one prompt turn to completion and finishes its last request stream.
@@ -612,13 +656,17 @@ impl TurnDriver {
             }
         };
         let turn_result = match prepared {
-            Ok(Some(prompt)) => self.prompt(mapper, prompt).await,
+            Ok(Some((prompt, accepted))) => self.prompt(mapper, prompt, accepted).await,
             Ok(None) => Ok(TurnOutcome::Cancelled),
             Err(error) => Err(error),
         };
         let (outcome, is_error) = match &turn_result {
             Ok(outcome) => (outcome.metric_label(), false),
-            Err(_) => ("error", true),
+            Err(error) => {
+                let failure =
+                    classify_turn_failure(self.harness, error, self.notifications.is_closed());
+                (failure.metric_label(), true)
+            }
         };
         self.telemetry
             .action(AcpActionEvent::Turn, outcome, started, is_error);
@@ -644,6 +692,10 @@ impl TurnDriver {
             }
             Ok(TurnOutcome::Stopped(stop_reason)) => {
                 self.finish_turn(stream_id, stream_finished_for(*stop_reason))
+                    .await;
+            }
+            Ok(TurnOutcome::StoppedDespiteError) => {
+                self.finish_turn(stream_id, stream_finished_for(StopReason::EndTurn))
                     .await;
             }
             Err(error) => {
@@ -711,6 +763,7 @@ impl TurnDriver {
         &mut self,
         mapper: &mut AcpTurnMapper,
         prompt: Vec<ContentBlock>,
+        accepted: Vec<async_channel::Sender<()>>,
     ) -> Result<TurnOutcome> {
         let connection = self.connection.clone();
         self.host.on_prompt_submitted().await;
@@ -769,6 +822,11 @@ impl TurnDriver {
                     break;
                 }
                 Wake::Response((arrival, response)) => {
+                    if response.is_ok() {
+                        for receipt in &accepted {
+                            let _ = receipt.try_send(());
+                        }
+                    }
                     while let Ok(notification) = self.notifications.try_recv() {
                         self.handle_notification(mapper, notification).await?;
                     }
@@ -1061,6 +1119,9 @@ impl TurnDriver {
         mapper: &mut AcpTurnMapper,
         steer: QueuedFollowUp,
     ) -> Result<()> {
+        if let Some(receipt) = &steer.prompt.accepted {
+            let _ = receipt.try_send(());
+        }
         if let Some(row) = steer.row {
             self.host.hide_queued_prompt(row).await;
         }
@@ -1181,7 +1242,8 @@ impl TurnDriver {
 
     /// Maps the prompt response to the turn's outcome. While a cancel is pending an agent error
     /// is taken as the cancellation (some agents report an aborted turn that way rather than
-    /// with a `cancelled` stop reason).
+    /// with a `cancelled` stop reason). Otherwise an agent error fails the turn unless its
+    /// harness is known to send it for a turn that completed.
     fn settle_response(
         &self,
         response: Result<PromptResponse>,
@@ -1198,7 +1260,23 @@ impl TurnDriver {
                 );
                 Ok(TurnOutcome::Cancelled)
             }
+            Err(error) if self.completed_despite_error(&error) => {
+                log::warn!("Treating the agent's error as the end of a completed turn: {error}");
+                Ok(TurnOutcome::StoppedDespiteError)
+            }
             Err(error) => Err(error),
+        }
+    }
+
+    /// Whether `error` is one the agent's harness is known to answer a prompt with after the
+    /// turn's work completed.
+    fn completed_despite_error(&self, error: &anyhow::Error) -> bool {
+        let Some(rpc_error) = error.downcast_ref::<RpcError>() else {
+            return false;
+        };
+        match read_prompt_error(self.harness, rpc_error, self.notifications.is_closed()) {
+            PromptErrorReading::Completed => true,
+            PromptErrorReading::Failed(_) => false,
         }
     }
 
