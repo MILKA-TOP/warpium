@@ -3128,8 +3128,13 @@ impl CodeReviewView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
                 Container::new(
-                    icon.to_warpui_icon(theme.sub_text_color(theme.background()))
-                        .finish(),
+                    ConstrainedBox::new(
+                        icon.to_warpui_icon(theme.sub_text_color(theme.background()))
+                            .finish(),
+                    )
+                    .with_width(16.)
+                    .with_height(16.)
+                    .finish(),
                 )
                 .with_margin_right(6.)
                 .finish(),
@@ -5843,10 +5848,18 @@ impl CodeReviewView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Min)
             .with_child(
+                // A bare warpui Icon lays out at constraint.max, so pin its size:
+                // the row's unbounded main-axis measurement would otherwise hand
+                // it an infinite rect (Scene::validate_rect aborts in debug).
                 Container::new(
-                    chevron_icon
-                        .to_warpui_icon(theme.sub_text_color(theme.background()))
-                        .finish(),
+                    ConstrainedBox::new(
+                        chevron_icon
+                            .to_warpui_icon(theme.sub_text_color(theme.background()))
+                            .finish(),
+                    )
+                    .with_width(16.)
+                    .with_height(16.)
+                    .finish(),
                 )
                 .with_margin_right(8.)
                 .finish(),
