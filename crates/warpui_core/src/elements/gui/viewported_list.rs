@@ -296,9 +296,19 @@ impl<T: 'static> Element for List<T> {
         // Create a child constraint with unbounded vertical height.
         // List items should be laid out at their natural height - the List handles
         // viewport clipping and scroll management internally.
+        // The width, however, must stay finite: while a surrounding pane is still
+        // resolving its width (e.g. the code review panel's open animation) the
+        // incoming constraint can be unbounded, and rows measured at infinite
+        // width produce infinite/NaN bounds (soft-wrap-off text claims the whole
+        // width) that poison the scene rects.
+        let max_x = if constraint.max.x().is_finite() {
+            constraint.max.x()
+        } else {
+            0.
+        };
         let child_constraint = SizeConstraint {
-            min: vec2f(constraint.min.x(), 0.),
-            max: vec2f(constraint.max.x(), f32::INFINITY),
+            min: vec2f(constraint.min.x().min(max_x), 0.),
+            max: vec2f(max_x, f32::INFINITY),
         };
 
         self.children.clear();
