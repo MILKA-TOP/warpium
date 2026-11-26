@@ -1705,6 +1705,7 @@ pub trait AIClient: 'static + Send + Sync {
         task_id: AmbientAgentTaskId,
         task_state: Option<AgentTaskState>,
         session_id: Option<session_sharing_protocol::common::SessionId>,
+        session_started_at: Option<DateTime<Utc>>,
         conversation_id: Option<String>,
         status_message: Option<TaskStatusUpdate>,
         session_debug_until: Option<DateTime<Utc>>,
@@ -2833,7 +2834,7 @@ impl AIClient for ServerApi {
                 }
                 Ok(node_results)
             }
-            UpdateMerkleTreeResult::UpdateMerkleTreeError(e) => Err(anyhow!(e.error)),
+            UpdateMerkleTreeResult::UpdateMerkleTreeError(e) => Err(anyhow!(e.message)),
             UpdateMerkleTreeResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)))
             }
@@ -2869,7 +2870,7 @@ impl AIClient for ServerApi {
                 }
                 Ok(results)
             }
-            GenerateCodeEmbeddingsResult::GenerateCodeEmbeddingsError(e) => Err(anyhow!(e.error)),
+            GenerateCodeEmbeddingsResult::GenerateCodeEmbeddingsError(e) => Err(anyhow!(e.message)),
             GenerateCodeEmbeddingsResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)))
             }
@@ -3013,6 +3014,7 @@ impl AIClient for ServerApi {
         task_id: AmbientAgentTaskId,
         task_state: Option<AgentTaskState>,
         session_id: Option<session_sharing_protocol::common::SessionId>,
+        session_started_at: Option<DateTime<Utc>>,
         conversation_id: Option<String>,
         status_message: Option<TaskStatusUpdate>,
         session_debug_until: Option<DateTime<Utc>>,
@@ -3023,6 +3025,7 @@ impl AIClient for ServerApi {
                 task_id: task_id.to_string().into(),
                 task_state,
                 session_id: session_id.map(|id| id.to_string().into()),
+                session_started_at: session_started_at.map(Into::into),
                 conversation_id: conversation_id.map(|id| id.into()),
                 status_message: status_message.map(agent_task_status_message_input),
                 session_debug_until: session_debug_until.map(Into::into),
@@ -4471,7 +4474,7 @@ impl StoreClient for ServerApi {
                 }
                 Ok(node_results)
             }
-            SyncMerkleTreeResult::SyncMerkleTreeError(e) => Err(anyhow!(e.error).into()),
+            SyncMerkleTreeResult::SyncMerkleTreeError(e) => Err(anyhow!(e.message).into()),
             SyncMerkleTreeResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)).into())
             }
@@ -4498,7 +4501,7 @@ impl StoreClient for ServerApi {
                 .into_iter()
                 .map(|fragment| fragment.try_into())
                 .collect::<Result<Vec<_>, _>>()?),
-            RerankFragmentsResult::RerankFragmentsError(e) => Err(anyhow!(e.error).into()),
+            RerankFragmentsResult::RerankFragmentsError(e) => Err(anyhow!(e.message).into()),
             RerankFragmentsResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)).into())
             }
@@ -4533,7 +4536,7 @@ impl StoreClient for ServerApi {
                 Err(anyhow!(get_user_facing_error_message(e)).into())
             }
             GetRelevantFragmentsResult::GetRelevantFragmentsError(e) => {
-                Err(anyhow!(e.error).into())
+                Err(anyhow!(e.message).into())
             }
             GetRelevantFragmentsResult::Unknown => {
                 Err(anyhow!("failed to get relevant fragments").into())
