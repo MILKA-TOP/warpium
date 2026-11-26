@@ -75,16 +75,21 @@ workflows, the test VM MCP server (`tools/mac-mcp`).
 7. Item 13 phase B, remaining PRs (input, launching, stable texture, physical devices).
 8. Items 16 and 17.
 
-Git tools follow-ups found in the VM check of #42: in a narrow pane the commit subject column
-collapses before author and date (IDEA shrinks author and date first); the filter fields collapse to
-empty boxes when narrow; clicking the 2 px gutter marker doesn't open the change (the palette's "Show
-change at cursor" does; IDEA's marker is wider and opens a popup); after Rollback the editor still
-shows the unsaved dot although the text equals HEAD; the hunk bar stays after Esc; the Git Log opens
-as a small split instead of a tool window (dock it in the bottom panel).
+Git tools follow-ups found in the VM check of #42: ~~in a narrow pane the commit subject column
+collapses before author and date~~ (fixed: author/date shrink first); ~~the filter fields collapse to
+empty boxes when narrow~~ (fixed: 100px minimum); ~~clicking the 2 px gutter marker doesn't open the
+change~~ (fixed: the whole gutter width opens it); after Rollback the editor still
+shows the unsaved dot although the text equals HEAD (**open** — a version race between the manual
+discard and the file watcher's reload, needs a running app to pin down); ~~the hunk bar stays after
+Esc~~ (fixed); the Git Log opens
+as a small split instead of a tool window (dock it in the bottom panel, **open**). Also fixed from
+the same list: Go to Parent Commit stalling when scrolled up, a stale file-diff race across commits,
+the visible-range over-read on restart, selection lost on Refresh, cross-repo commit matching, and
+the diff viewer's silent 20,000-line truncation.
 
-Small follow-ups found in VM checks: the Classes tab of `cmd-O` says "No Results Found" on an empty
-query; the Devices pane header shows `DevicesFake AVD 5900` and the Git Log header `Git Logkt` without a
-separator.
+Small follow-ups found in VM checks: ~~the Classes tab of `cmd-O` says "No Results Found" on an empty
+query~~ (fixed: a hint); ~~the Devices pane header shows `DevicesFake AVD 5900` and the Git Log header
+`Git Logkt` without a separator~~ (fixed: a middot separator).
 
 ## Item details and decisions
 

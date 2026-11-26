@@ -420,6 +420,7 @@ impl GitLogView {
             DiffContent::Loaded {
                 lines,
                 side_by_side,
+                truncated,
             } => {
                 let list: Box<dyn ScrollableElement> = if self.diff_side_by_side {
                     let rows = side_by_side.clone();
@@ -444,7 +445,7 @@ impl GitLogView {
                     )
                     .finish_scrollable()
                 };
-                Scrollable::vertical(
+                let scrollable = Scrollable::vertical(
                     diff.scroll_state.clone(),
                     list,
                     ScrollbarWidth::Auto,
@@ -453,7 +454,23 @@ impl GitLogView {
                     Fill::None,
                 )
                 .with_overlayed_scrollbar()
-                .finish()
+                .finish();
+                if *truncated {
+                    Flex::column()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                        .with_child(Expanded::new(1., scrollable).finish())
+                        .with_child(self.render_status(
+                            &format!(
+                                "Diff truncated at {} lines",
+                                super::MAX_DIFF_LINES
+                            ),
+                            false,
+                            appearance,
+                        ))
+                        .finish()
+                } else {
+                    scrollable
+                }
             }
         };
         Flex::column()

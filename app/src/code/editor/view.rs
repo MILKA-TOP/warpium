@@ -746,6 +746,12 @@ impl CodeEditorView {
             return;
         }
 
+        // If the diff nav bar is open, close it.
+        if self.model.as_ref(ctx).diff_nav_is_active() {
+            self.toggle_diff_nav(None, ctx);
+            return;
+        }
+
         // If vim mode is enabled, let vim handle escape
         if self.vim_mode_enabled(ctx) {
             self.enter_vim_normal_mode(ctx);
@@ -2287,10 +2293,9 @@ impl View for CodeEditorView {
             diff_status,
             self.display_states.wrapper_state_handle.clone(),
             Box::new(move |click, ctx| match click {
-                GutterRange::DiffHunk {
-                    line,
-                    in_sliver: true,
-                } => {
+                // The whole gutter width opens the change, not just the 3px
+                // sliver: IDEA's marker is a wide click target.
+                GutterRange::DiffHunk { line, .. } => {
                     if collapsible_diffs {
                         ctx.dispatch_typed_action(CodeEditorViewAction::ToggleDiffNav(Some(
                             line.line_range().clone(),

@@ -247,6 +247,8 @@ enum DiffContent {
     Loaded {
         lines: Rc<Vec<DiffLine>>,
         side_by_side: Rc<Vec<SideBySideRow>>,
+        /// The diff was cut at `MAX_DIFF_LINES`; the viewer says so.
+        truncated: bool,
     },
     Failed(String),
 }
@@ -298,6 +300,9 @@ pub(crate) struct GitLogView {
     selected: Option<usize>,
     /// A commit to select once it is loaded.
     pending_select: Option<String>,
+    /// The pre-reload selection, re-selected silently if it streams in again
+    /// (kept across Refresh and filter changes, like IDEA).
+    restore_selection: Option<String>,
     details: DetailsState,
     details_generation: u64,
     diff: Option<FileDiff>,
@@ -414,6 +419,7 @@ impl GitLogView {
             graph_lanes: 1,
             selected: None,
             pending_select: None,
+            restore_selection: None,
             details: DetailsState::None,
             details_generation: 0,
             diff: None,
@@ -507,9 +513,13 @@ impl GitLogView {
                     let paths: Vec<String> = relative.into_iter().collect();
                     let paths_changed = me.query.paths != paths;
                     me.query.paths = paths;
-                    let selected_loaded = select
-                        .as_deref()
-                        .is_some_and(|oid| me.select_commit_if_loaded(oid, ctx));
+                    // Only the current repo's rows are a valid match: two
+                    // repos can share a commit (forks), and a stale row would
+                    // consume the selection before the new repo's log loads.
+                    let selected_loaded = same_repo
+                        && select
+                            .as_deref()
+                            .is_some_and(|oid| me.select_commit_if_loaded(oid, ctx));
                     if select.is_some() && !selected_loaded {
                         // The commit may be outside the filtered history: list everything.
                         me.query = LogQuery {
@@ -565,6 +575,16 @@ impl GitLogView {
     /// Restarts `git log` for the current repository and filters.
     fn restart(&mut self, ctx: &mut ViewContext<Self>) {
         self.stop();
+        // Keep the selected commit across the reload (IDEA does): it's
+        // re-selected silently if it shows up in the freshly streamed rows.
+        // An explicit navigation target (`pending_select`) wins over it.
+        self.restore_selection = if self.pending_select.is_some() {
+            None
+        } else {
+            self.selected
+                .and_then(|index| self.rows.get(index))
+                .map(|row| row.commit.oid.to_hex())
+        };
         self.rows.clear();
         self.row_mouse_states.clear();
         self.graph_lanes = 1;
@@ -573,6 +593,9 @@ impl GitLogView {
         self.diff = None;
         self.list_state = UniformListState::new();
         self.scroll_state = ScrollStateHandle::default();
+        // The old visible range would demand that many rows up front from the
+        // new stream, breaking the small-first-screen design.
+        self.visible = 0..0;
         let Some(repo) = self.repo.clone() else {
             self.load_state = LoadState::Idle;
             ctx.notify();
@@ -623,6 +646,13 @@ impl GitLogView {
                         // Keep reading until the commit shows up.
                         stream.request(self.rows.len() + PAGE_ROWS);
                     }
+                } else if let Some(restore) = self.restore_selection.clone() {
+                    // Re-select the pre-reload commit if it streamed in; no
+                    // extra reads for it (a dropped commit just isn't
+                    // restored).
+                    if self.select_commit_if_loaded(&restore, ctx) {
+                        self.restore_selection = None;
+                    }
                 } else if first_batch && self.selected.is_none() && !self.rows.is_empty() {
                     self.select_row(0, ctx);
                 }
@@ -631,6 +661,8 @@ impl GitLogView {
             }
             LogEvent::Finished { .. } => {
                 self.load_state = LoadState::Finished;
+                // A selection that didn't stream back in just isn't restored.
+                self.restore_selection = None;
                 if let Some(pending) = self.pending_select.take() {
                     self.show_toast(
                         format!(
@@ -646,6 +678,7 @@ impl GitLogView {
                 log::info!("[Git log] git log failed: {message}");
                 self.load_state = LoadState::Failed(message);
                 self.pending_select = None;
+                self.restore_selection = None;
                 ctx.notify();
             }
         }
@@ -794,6 +827,8 @@ impl GitLogView {
             return;
         }
         self.selected = Some(index);
+        // A manual selection ends any pending restore.
+        self.restore_selection = None;
         self.diff = None;
         self.details_scroll = ClippedScrollStateHandle::default();
         self.load_details(ctx);
@@ -884,22 +919,30 @@ impl GitLogView {
             run_git(&repo, &file_diff_args(&oid, first_parent.as_ref(), &change))
                 .map(|output| {
                     let mut lines = parse_unified_diff(&String::from_utf8_lossy(&output));
+                    let truncated = lines.len() > MAX_DIFF_LINES;
                     lines.truncate(MAX_DIFF_LINES);
                     let rows = side_by_side(&lines);
-                    (lines, rows)
+                    (lines, rows, truncated)
                 })
                 .map_err(|err| err.to_string())
         });
         ctx.spawn(
             async move { receiver.await.ok() },
             move |me, result, ctx| {
-                let Some(diff) = me.diff.as_mut().filter(|diff| diff.change.path == path) else {
+                // Guard on the commit too, not just the path: the same file
+                // opened from another commit must not get this stale diff.
+                let Some(diff) = me
+                    .diff
+                    .as_mut()
+                    .filter(|diff| diff.change.path == path && diff.oid == oid)
+                else {
                     return;
                 };
                 diff.content = match result {
-                    Some(Ok((lines, rows))) => DiffContent::Loaded {
+                    Some(Ok((lines, rows, truncated))) => DiffContent::Loaded {
                         lines: Rc::new(lines),
                         side_by_side: Rc::new(rows),
+                        truncated,
                     },
                     Some(Err(err)) => DiffContent::Failed(err),
                     None => DiffContent::Failed("git didn't answer".to_owned()),
@@ -1068,7 +1111,13 @@ impl GitLogView {
                     let hex = parent.to_hex();
                     if !self.select_commit_if_loaded(&hex, ctx) {
                         self.pending_select = Some(hex);
-                        self.request_more_if_needed();
+                        // `request_more_if_needed` only reads ahead of the
+                        // visible rows, so from a scrolled-up position it
+                        // would never load the parent: read on explicitly
+                        // (the same demand `on_log_event` makes).
+                        if let Some(stream) = &self.stream {
+                            stream.request(self.rows.len() + PAGE_ROWS);
+                        }
                     }
                 }
             }
@@ -1085,6 +1134,7 @@ impl GitLogView {
         let DiffContent::Loaded {
             lines,
             side_by_side: rows,
+            ..
         } = &diff.content
         else {
             return;
@@ -1322,6 +1372,9 @@ impl GitLogView {
         let input = Container::new(
             ConstrainedBox::new(Clipped::new(ChildView::new(editor).finish()).finish())
                 .with_height(CONTROL_HEIGHT - 8.)
+                // Keep the fields usable in a narrow pane instead of letting
+                // them collapse to empty boxes.
+                .with_min_width(100.)
                 .finish(),
         )
         .with_padding(Padding::uniform(4.))
@@ -1440,30 +1493,37 @@ impl GitLogView {
             )
             .finish(),
         );
-        let fixed_column = |text: String, width: f32, color| {
-            ConstrainedBox::new(
-                Container::new(
-                    Text::new_inline(text, font, FONT_SIZE)
-                        .with_color(color)
-                        .with_clip(ClipConfig::end())
-                        .finish(),
+        // Author and date cap at their preferred widths but shrink (clipped)
+        // when the pane is narrow, so the subject keeps its space — IDEA
+        // shrinks these columns first, not the subject.
+        let shrinkable_column = |text: String, max_width: f32, color| {
+            Shrinkable::new(
+                1.,
+                ConstrainedBox::new(
+                    Container::new(
+                        Text::new_inline(text, font, FONT_SIZE)
+                            .with_color(color)
+                            .with_clip(ClipConfig::end())
+                            .finish(),
+                    )
+                    .with_padding_left(8.)
+                    .finish(),
                 )
-                .with_padding_left(8.)
+                .with_max_width(max_width)
                 .finish(),
             )
-            .with_width(width)
             .finish()
         };
         let content = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(graph)
-            .with_child(Expanded::new(1., Clipped::new(subject.finish()).finish()).finish())
-            .with_child(fixed_column(
+            .with_child(Expanded::new(6., Clipped::new(subject.finish()).finish()).finish())
+            .with_child(shrinkable_column(
                 commit.author_name.clone(),
                 AUTHOR_WIDTH,
                 sub_color,
             ))
-            .with_child(fixed_column(
+            .with_child(shrinkable_column(
                 local_date_time(commit.author_time),
                 DATE_WIDTH,
                 sub_color,

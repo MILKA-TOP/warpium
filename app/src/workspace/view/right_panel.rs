@@ -535,13 +535,13 @@ impl RightPanelView {
 
         let expand_all_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("", PaneHeaderTheme)
-                .with_icon(icons::Icon::ListOpen)
+                .with_icon(icons::Icon::ExpandDown)
                 .with_tooltip("Expand all files")
                 .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::ExpandAllFiles))
         });
         let collapse_all_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("", PaneHeaderTheme)
-                .with_icon(icons::Icon::ListCollapsed)
+                .with_icon(icons::Icon::ExpandUp)
                 .with_tooltip("Collapse all files")
                 .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::CollapseAllFiles))
         });
