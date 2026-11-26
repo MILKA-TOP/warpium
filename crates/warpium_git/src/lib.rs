@@ -14,6 +14,7 @@ pub mod process;
 pub mod refs;
 pub mod rollback;
 pub mod show;
+pub mod stage;
 #[cfg(test)]
 mod test_support;
 pub mod stash;
