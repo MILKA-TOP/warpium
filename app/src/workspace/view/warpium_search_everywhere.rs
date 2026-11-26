@@ -36,10 +36,15 @@ impl Workspace {
         if !self.prepare_code_index_for_search(tab, is_shared_session_viewer, ctx) {
             return false;
         }
+        let text_search_roots = self
+            .find_in_files_scope(ctx)
+            .map(|(roots, _)| roots)
+            .unwrap_or_default();
         self.palette.update(ctx, |palette, ctx| {
             palette.reset(ctx);
             let mixer = palette.search_bar.as_ref(ctx).mixer().clone();
             palette.data_source_store.update(ctx, |store, ctx| {
+                store.set_text_search_roots(text_search_roots);
                 store.reset_search_mixer(mixer, is_shared_session_viewer, ctx);
             });
             palette.show_warpium_search_tab(tab, ctx);
@@ -66,7 +71,7 @@ impl Workspace {
                         ctx,
                     )
             }
-            SearchTab::Classes | SearchTab::Symbols | SearchTab::Files => {
+            SearchTab::Classes | SearchTab::Symbols | SearchTab::Files | SearchTab::Text => {
                 code_index::ensure_project(root, require_build_files, ctx);
                 true
             }

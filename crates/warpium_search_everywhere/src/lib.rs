@@ -1,9 +1,10 @@
 //! Warpium: the Android Studio–style project search on cmd-O.
 //!
 //! In a Kotlin/Java project the Files palette gets tabs: **All**, **Classes** and **Symbols**
-//! from the code index, and **Files**. This crate holds the UI-free parts: the tabs and their
-//! order, how the All tab merges the other tabs' results into capped sections, and whether a
-//! project gets the tabs at all. The app runs the searches and renders the rows.
+//! from the code index, **Files**, and **Text** (file contents, like Find in Files). This crate
+//! holds the UI-free parts: the tabs and their order, how the All tab merges the other tabs'
+//! results into capped sections, and whether a project gets the tabs at all. The app runs the
+//! searches and renders the rows.
 
 /// A tab of the project search, in display order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -12,14 +13,16 @@ pub enum SearchTab {
     Classes,
     Symbols,
     Files,
+    Text,
 }
 
 impl SearchTab {
-    pub const ALL: [SearchTab; 4] = [
+    pub const ALL: [SearchTab; 5] = [
         SearchTab::All,
         SearchTab::Classes,
         SearchTab::Symbols,
         SearchTab::Files,
+        SearchTab::Text,
     ];
 
     pub fn label(self) -> &'static str {
@@ -28,6 +31,7 @@ impl SearchTab {
             SearchTab::Classes => "Classes",
             SearchTab::Symbols => "Symbols",
             SearchTab::Files => "Files",
+            SearchTab::Text => "Text",
         }
     }
 
@@ -49,6 +53,7 @@ impl SearchTab {
             SearchTab::Classes => 1,
             SearchTab::Symbols => 2,
             SearchTab::Files => 3,
+            SearchTab::Text => 4,
         }
     }
 }

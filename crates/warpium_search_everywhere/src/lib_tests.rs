@@ -23,8 +23,9 @@ fn header(section: Section, label: &str) -> Entry<&'static str> {
 fn tabs_cycle_in_both_directions() {
     assert_eq!(SearchTab::All.next(), SearchTab::Classes);
     assert_eq!(SearchTab::Symbols.next(), SearchTab::Files);
-    assert_eq!(SearchTab::Files.next(), SearchTab::All);
-    assert_eq!(SearchTab::All.previous(), SearchTab::Files);
+    assert_eq!(SearchTab::Files.next(), SearchTab::Text);
+    assert_eq!(SearchTab::Text.next(), SearchTab::All);
+    assert_eq!(SearchTab::All.previous(), SearchTab::Text);
     assert_eq!(SearchTab::Classes.previous(), SearchTab::All);
     for tab in SearchTab::ALL {
         assert_eq!(tab.next().previous(), tab);

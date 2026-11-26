@@ -119,7 +119,8 @@ impl FilterChipRenderer for QueryFilter {
             | QueryFilter::CodeClasses
             | QueryFilter::CodeSymbols
             | QueryFilter::CodeNavigation
-            | QueryFilter::CodeAll => appearance
+            | QueryFilter::CodeAll
+            | QueryFilter::CodeText => appearance
                 .theme()
                 .main_text_color(appearance.theme().surface_2())
                 .into_solid(),

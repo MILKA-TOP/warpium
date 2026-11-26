@@ -431,7 +431,7 @@ impl View {
                 | (PaletteMode::LaunchConfig, QueryFilter::LaunchConfigurations)
                 | (
                     PaletteMode::Files,
-                    QueryFilter::Files | QueryFilter::CodeAll
+                    QueryFilter::Files | QueryFilter::CodeAll | QueryFilter::CodeText
                 )
                 | (PaletteMode::Conversations, QueryFilter::Conversations)
                 | (PaletteMode::WarpDrive, QueryFilter::Drive)

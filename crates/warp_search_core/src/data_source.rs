@@ -234,6 +234,9 @@ pub enum QueryFilter {
 
     /// Warpium: classes, symbols and files together (the project search's All tab).
     CodeAll,
+
+    /// Warpium: file contents over the project (the project search's Text tab).
+    CodeText,
 }
 
 impl QueryFilter {
@@ -278,6 +281,7 @@ impl QueryFilter {
             QueryFilter::CodeSymbols => "Go to symbol",
             QueryFilter::CodeNavigation => "Filter by file or code",
             QueryFilter::CodeAll => "Search classes, symbols and files",
+            QueryFilter::CodeText => "Search in files",
         }
     }
 
@@ -314,6 +318,7 @@ impl QueryFilter {
             QueryFilter::CodeSymbols => &NO_FILTER_ATOM,
             QueryFilter::CodeNavigation => &NO_FILTER_ATOM,
             QueryFilter::CodeAll => &NO_FILTER_ATOM,
+            QueryFilter::CodeText => &NO_FILTER_ATOM,
         }
     }
 
@@ -350,6 +355,7 @@ impl QueryFilter {
             QueryFilter::CodeSymbols => "symbols",
             QueryFilter::CodeNavigation => "definitions and usages",
             QueryFilter::CodeAll => "classes, symbols and files",
+            QueryFilter::CodeText => "file contents",
         }
     }
 
@@ -393,6 +399,7 @@ impl QueryFilter {
             QueryFilter::CodeSymbols => Some("bundled/svg/code-01.svg"),
             QueryFilter::CodeNavigation => Some("bundled/svg/code-01.svg"),
             QueryFilter::CodeAll => Some("bundled/svg/code-02.svg"),
+            QueryFilter::CodeText => Some("bundled/svg/code-01.svg"),
         }
     }
 }

@@ -706,6 +706,8 @@ pub enum WorkspaceAction {
     ToggleGlobalSearch,
     ToggleHiddenFiles,
     OpenGlobalSearch,
+    /// Warpium: opens the Find in Files popup for the active tab's project.
+    OpenFindInFiles,
     ToggleConversationListView,
     OpenConversationListView,
     OpenAgentManagementView,
@@ -1250,6 +1252,7 @@ impl WorkspaceAction {
             | ToggleGlobalSearch
             | ToggleHiddenFiles
             | OpenGlobalSearch
+            | OpenFindInFiles
             | ToggleConversationListView
             | OpenConversationListView
             | ToggleNotificationMailbox { .. }

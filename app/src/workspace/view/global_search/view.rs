@@ -549,7 +549,10 @@ impl TypedActionView for GlobalSearchView {
 
 impl GlobalSearchView {
     /// Convert submatch byte ranges into character indices for highlighting.
-    fn highlight_indices_from_submatches(line_text: &str, submatches: &[Submatch]) -> Vec<usize> {
+    pub(crate) fn highlight_indices_from_submatches(
+        line_text: &str,
+        submatches: &[Submatch],
+    ) -> Vec<usize> {
         if line_text.is_empty() || submatches.is_empty() {
             return Vec::new();
         }
@@ -595,7 +598,7 @@ impl GlobalSearchView {
         indices
     }
 
-    fn elide_match_text(
+    pub(crate) fn elide_match_text(
         line_text: &str,
         mut highlight_indices: Vec<usize>,
     ) -> (String, Vec<usize>) {

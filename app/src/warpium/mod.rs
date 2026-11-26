@@ -14,6 +14,8 @@ pub(crate) mod container_paste;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod emulator;
 #[cfg(not(target_family = "wasm"))]
+pub(crate) mod find_in_files;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod git_log;
 #[cfg(not(target_family = "wasm"))]
 mod git_log_graph;
@@ -33,6 +35,8 @@ pub(crate) mod project_toolbar_prompt;
 #[cfg(not(target_family = "wasm"))]
 mod project_toolbar_row;
 pub(crate) mod search_everywhere;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod search_everywhere_text;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod self_update;
 pub(crate) mod sync_settings;

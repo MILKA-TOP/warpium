@@ -672,6 +672,46 @@ cargo run --release -p code_index --example bench -- --name private /path/to/pro
 Inside the dev container, keep projects for timing off the `/workspace` bind mount. Directory walks
 there are about 40 times slower than on a local disk, which inflates rescan and cold-build times.
 
+## Find in Files
+
+An IDEA Find in Path–style popup on `cmd-shift-F` (roadmap item 22, folding in item 2's
+`.gitignore` toggle and globs). Fork-only code lives in `app/src/warpium/find_in_files.rs` (the
+popup, its keybindings and the pure logic unit-tested in `find_in_files_tests.rs`: pattern
+wrapping, glob filters, row flattening, the summary),
+`app/src/workspace/view/warpium_find_in_files.rs` (the scope and opening matches) and
+`app/src/warpium/search_everywhere_text.rs` (the cmd-O Text tab, with
+`search_everywhere_text_tests.rs`).
+
+- **Scope.** The active tab's locked [project root](#tab-project-root) (all its folders), else
+  the working directories Global Search uses, ancestor-deduplicated; never `$HOME` or `/`. Local
+  folders only — remote hosts are skipped for now.
+- **Popup.** A query field (pre-filled with the current selection), Match Case / Words / Regex
+  chips, a file mask (comma-separated globs, `!` negates, e.g. `*.{kt,kts}, !*Test*`), a
+  `.gitignore`/ignore-files toggle (default on) and the scope's name. It searches as you type
+  (300 ms debounce, aborting the previous run) into a results list grouped by file, capped at
+  1000 rows with a "N matches in M files" summary (and a "showing first N" note past the cap).
+  ↑/↓/PageUp/PageDown move, Enter opens the selected match (a file header opens its first), Esc
+  or a click outside closes. Words wraps the pattern in `\b…\b` (`\b(?:…)\b` when Regex is on).
+  The engine is the global search one (`GlobalSearch` model over `crates/warp_ripgrep`), owned
+  by the popup so the left panel's search is untouched.
+- **cmd-O Text tab.** The project search's fifth tab lists content matches (case-insensitive,
+  100 at most) as `line text — path:line` rows and opens at the match on Enter, over the same
+  scope. It appears with the other tabs (Kotlin/Java projects).
+- **Keybinding.** `cmd-shift-F` was Global Search's; the roadmap reserves it for Find in Files,
+  so Global Search keeps its palette command, its `ctrl-3` toggle and `alt-shift-F` on
+  Linux/Windows. The terminal's "Find in Terminal" keeps `cmd-shift-F` while a terminal is
+  focused (its `id!("Terminal")` context is more specific and wins).
+- **Upstream touch points** (check after upstream merges): `workspace/mod.rs` (the
+  `OpenGlobalSearch` binding lost `cmd-shift-F`), `workspace/action.rs`
+  (`WorkspaceAction::OpenFindInFiles`), `workspace/view.rs` (the overlay field, its render hook
+  and the action), `workspace/view/warpium_search_everywhere.rs` (the Text tab's roots),
+  `search/command_palette/data_sources.rs` (the Text source and its roots),
+  `search/command_palette/view.rs` (`is_mode_enabled` for the Text filter),
+  `search/command_palette/filter_chip_renderer.rs` (the new filter's arm),
+  `crates/warp_search_core/src/data_source.rs` (`QueryFilter::CodeText`),
+  `crates/warpium_search_everywhere` (`SearchTab::Text`), and
+  `workspace/view/global_search/view.rs` (two highlight helpers are now `pub(crate)`).
+
 ## Android devices, run and Logcat
 
 Phase A of running Android apps from Warpium: devices, AVDs, running an app module and a native

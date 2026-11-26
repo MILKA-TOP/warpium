@@ -27,6 +27,7 @@ pub(crate) fn tab_filter(tab: SearchTab) -> QueryFilter {
         SearchTab::Classes => QueryFilter::CodeClasses,
         SearchTab::Symbols => QueryFilter::CodeSymbols,
         SearchTab::Files => QueryFilter::Files,
+        SearchTab::Text => QueryFilter::CodeText,
     }
 }
 
