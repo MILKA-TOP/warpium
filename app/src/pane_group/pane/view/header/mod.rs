@@ -667,11 +667,21 @@ impl<P: BackingView> PaneHeader<P> {
                 if let Some(secondary) = &title_secondary
                     && !secondary.is_empty()
                 {
-                    let secondary_text =
-                        Text::new_inline(secondary.clone(), appearance.ui_font_family(), font_size)
-                            .with_color(font_color.into())
-                            .finish();
-                    title_row.add_child(secondary_text);
+                    // The secondary title (repo, device, path) needs a
+                    // separator, or it reads as one word with the title
+                    // ("Git Logkt").
+                    let secondary_text = Text::new_inline(
+                        format!("· {secondary}"),
+                        appearance.ui_font_family(),
+                        font_size,
+                    )
+                    .with_color(font_color.into())
+                    .finish();
+                    title_row.add_child(
+                        Container::new(secondary_text)
+                            .with_margin_left(6.)
+                            .finish(),
+                    );
                 }
 
                 // If a max width is set, constrain the title to that width.

@@ -57,6 +57,17 @@ impl AsyncDataSource for CodeSymbolDataSource {
                     "Open a project folder to use Go to Class and Go to Symbol".to_owned(),
                 ))]);
             };
+            // An empty query has no results to rank; say what to do instead
+            // of showing "No Results Found".
+            if text.trim().is_empty() {
+                let hint = match scope {
+                    SearchScope::Types => "Type a class name",
+                    SearchScope::All => "Type a symbol name",
+                };
+                return Ok(vec![QueryResult::from(StatusItem::footer(
+                    hint.to_owned(),
+                ))]);
+            }
             let mut items: Vec<QueryResult<CommandPaletteItemAction>> =
                 search_symbols(&handle, &text, scope)
                     .into_iter()
