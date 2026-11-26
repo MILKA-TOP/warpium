@@ -9258,6 +9258,7 @@ impl TypedActionView for CodeReviewView {
                     );
                     return;
                 }
+                let paths = paths.clone();
                 let count = paths.len();
                 ctx.spawn(
                     async move {
@@ -9387,7 +9388,7 @@ impl TypedActionView for CodeReviewView {
                     return;
                 }
                 self.ensure_stash_create_dialog_views(ctx);
-                self.shelve_paths = Some(paths);
+                self.shelve_paths = Some(paths.clone());
                 if let Some(editor) = &self.stash_create_message_editor {
                     editor.update(ctx, |editor, ctx| {
                         editor.set_placeholder_text("Shelve message", ctx);
