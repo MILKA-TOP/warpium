@@ -31,6 +31,9 @@ pub struct DataSourceStore {
     all_conversation_data_source: ModelHandle<conversations::DataSource>,
     repo_data_source: ModelHandle<RepoDataSource>,
     tabs_data_source: Option<ModelHandle<tabs::DataSource>>,
+    /// Warpium: the project folders the Text tab searches, set by the workspace when the
+    /// project search opens.
+    text_search_roots: Vec<PathBuf>,
 }
 
 impl DataSourceStore {
@@ -69,7 +72,13 @@ impl DataSourceStore {
             all_conversation_data_source,
             repo_data_source,
             tabs_data_source: None,
+            text_search_roots: Vec::new(),
         }
+    }
+
+    /// Warpium: sets the folders the project search's Text tab searches.
+    pub fn set_text_search_roots(&mut self, roots: Vec<PathBuf>) {
+        self.text_search_roots = roots;
     }
 
     /// Resets the [`CommandPaletteMixer`] to the set of data sources that are relevant for the command palette.
@@ -205,6 +214,22 @@ impl DataSourceStore {
                     AddAsyncSourceOptions {
                         debounce_interval: None,
                         run_in_zero_state: true,
+                        run_when_unfiltered: false,
+                    },
+                    ctx,
+                );
+                // The Text tab searches file contents; debounced because every rerun walks the
+                // project with ripgrep.
+                let text_search_roots = self.text_search_roots.clone();
+                let source = ctx.add_model(|_| {
+                    crate::warpium::search_everywhere_text::TextTabDataSource::new(text_search_roots)
+                });
+                mixer.add_async_source(
+                    source,
+                    HashSet::from([QueryFilter::CodeText]),
+                    AddAsyncSourceOptions {
+                        debounce_interval: Some(std::time::Duration::from_millis(300)),
+                        run_in_zero_state: false,
                         run_when_unfiltered: false,
                     },
                     ctx,

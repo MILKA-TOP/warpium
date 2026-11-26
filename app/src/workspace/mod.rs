@@ -136,6 +136,8 @@ pub fn init(app: &mut AppContext) {
     #[cfg(not(target_family = "wasm"))]
     crate::warpium::agent_mcp::init_bindings(app);
     crate::warpium::container_paste::init_bindings(app);
+    #[cfg(not(target_family = "wasm"))]
+    crate::warpium::find_in_files::init_bindings(app);
 
     app.register_fixed_bindings([FixedBinding::empty(
         "Dump debug info",
@@ -871,7 +873,7 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::OpenGlobalSearch,
         )
         .with_context_predicate(id!("Workspace") & id!(flags::SHOW_GLOBAL_SEARCH))
-        .with_mac_key_binding("cmd-shift-F")
+        // Warpium: cmd-shift-F is Find in Files; global search keeps its palette command.
         // we use alt because we use ctrl-shift-f for find because ctrl-f needs to be reserved for the shell
         .with_linux_or_windows_key_binding("alt-shift-F"),
         EditableBinding::new(

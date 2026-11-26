@@ -28,6 +28,8 @@ mod warpium_bottom_panel;
 #[cfg(not(target_family = "wasm"))]
 mod warpium_emulator;
 #[cfg(not(target_family = "wasm"))]
+mod warpium_find_in_files;
+#[cfg(not(target_family = "wasm"))]
 mod warpium_git;
 mod warpium_project_root;
 #[cfg(not(target_family = "wasm"))]
@@ -1224,6 +1226,9 @@ pub struct Workspace {
     /// Warpium: the project toolbar's editor and its command-variable prompt.
     #[cfg(not(target_family = "wasm"))]
     project_toolbar_overlays: warpium_project_toolbar::ProjectToolbarOverlays,
+    /// Warpium: the Find in Files popup (cmd-shift-F).
+    #[cfg(not(target_family = "wasm"))]
+    find_in_files_overlay: ViewHandle<crate::warpium::find_in_files::FindInFilesView>,
     shared_objects_creation_denied_modal: ViewHandle<SharedObjectsCreationDeniedModal>,
     shown_staging_banner_count: u32,
 
@@ -3439,6 +3444,8 @@ impl Workspace {
         let project_toolbar = Self::build_project_toolbar_view(ctx);
         #[cfg(not(target_family = "wasm"))]
         let project_toolbar_overlays = Self::build_project_toolbar_overlays(ctx);
+        #[cfg(not(target_family = "wasm"))]
+        let find_in_files_overlay = Self::build_find_in_files_overlay(ctx);
 
         let shared_objects_creation_denied_modal =
             ctx.add_typed_action_view(|ctx| SharedObjectsCreationDeniedModal::new(None, ctx));
@@ -3622,6 +3629,8 @@ impl Workspace {
             project_toolbar,
             #[cfg(not(target_family = "wasm"))]
             project_toolbar_overlays,
+            #[cfg(not(target_family = "wasm"))]
+            find_in_files_overlay,
             shared_objects_creation_denied_modal,
             file_upload_sessions: Default::default(),
             ai_fact_view,
@@ -27158,6 +27167,10 @@ impl TypedActionView for Workspace {
                     );
                 }
             }
+            OpenFindInFiles => {
+                #[cfg(not(target_family = "wasm"))]
+                self.open_find_in_files(ctx);
+            }
             ToggleConversationListView => {
                 if FeatureFlag::AgentViewConversationListView.is_enabled() {
                     let is_showing = self.left_panel_view.as_ref(ctx).active_view()
@@ -28422,6 +28435,9 @@ impl View for Workspace {
 
         #[cfg(not(target_family = "wasm"))]
         self.add_project_toolbar_overlays(&mut stack, app);
+
+        #[cfg(not(target_family = "wasm"))]
+        self.add_find_in_files_overlay(&mut stack, app);
 
         if self
             .current_workspace_state

@@ -37,7 +37,7 @@ Status: **done** (merged), **review** (PR open), **wip** (in progress), **planne
 | # | Item | Status |
 | --- | --- | --- |
 | 1 | "Open in new tab" in the Project Explorer opened the repo root, not the chosen folder | done (#8) |
-| 2 | Global search: `.gitignore` toggle and include/exclude globs | planned, together with 22 |
+| 2 | Global search: `.gitignore` toggle and include/exclude globs | review (#51, in the Find in Files popup) |
 | 3 | Git log / graph view, identical to IDEA | done (#42); follow-ups below |
 | 4 | Notification when upstream Warp has new commits | done (#9, plus the Upstream Watch workflow) |
 | 5 | Paste images into CLI agents inside Docker containers and SSH sessions | done (#41) |
@@ -57,7 +57,7 @@ Status: **done** (merged), **review** (PR open), **wip** (in progress), **planne
 | 19 | Git blame / Annotate | done (#42) |
 | 20 | Change markers in the gutter and Rollback, like IDEA | done (#42); follow-ups below |
 | 21 | Search Everywhere on `cmd-O` (All / Classes / Symbols / Files) | done (#39) |
-| 22 | Find in Files on `cmd-shift-F`, plus a Text tab in `cmd-O` | planned |
+| 22 | Find in Files on `cmd-shift-F`, plus a Text tab in `cmd-O` | review (#51) |
 | 23 | Code Review panel → JetBrains Commit tool window: group by directory/repository, expand/collapse all, collapsed-by-default file list, unversioned files, rollback selected files, stash tab, amend commit, fast open | research done (#47) |
 
 Also done along the way: Warpium self-update from GitHub Releases (#11), the fork's CI and release
