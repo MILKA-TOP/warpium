@@ -529,7 +529,7 @@ and `app/src/warpium/code_navigation.rs` (the editor's request type).
   sources rank above tests and generated code, then shorter names. `pkg.Name` narrows by package or
   enclosing class; `String.shout` finds extension functions by receiver.
 - **Project search (Search Everywhere).** In a Kotlin/Java project, `cmd-O` (Warp's Files palette)
-  opens the palette with **All / Classes / Symbols / Files** tabs, as Android Studio does. Click a
+  opens the palette with **All / Classes / Symbols / Files / Text** tabs, as Android Studio does. Click a
   tab, or press `tab` / `shift-tab` in the search field to cycle them (with a filter applied, tab
   did nothing before); the query carries over. **Go to Class** (`ctrl-cmd-O`) and **Go to Symbol**
   (`ctrl-alt-cmd-O`), both editable and listed in the command palette, open the same palette on

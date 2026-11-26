@@ -39,7 +39,10 @@ fn the_deepest_root_holding_the_file_wins() {
 #[test]
 fn a_file_outside_every_root_is_skipped() {
     let roots = vec![PathBuf::from("/repo")];
-    assert!(TextMatchSearchItem::new(&roots, matched("/elsewhere/Foo.kt", "val x = 1", 4), 1.).is_none());
+    assert!(
+        TextMatchSearchItem::new(&roots, matched("/elsewhere/Foo.kt", "val x = 1", 4), 1.)
+            .is_none()
+    );
 }
 
 #[test]

@@ -36,7 +36,11 @@ fn file_mask_parses_comma_separated_globs_keeping_brace_alternations() {
     assert!(filters.use_ignore_files);
     assert_eq!(
         filters.include_globs,
-        vec!["*.{kt,kts}".to_owned(), "!*Test*".to_owned(), "src/**".to_owned()]
+        vec![
+            "*.{kt,kts}".to_owned(),
+            "!*Test*".to_owned(),
+            "src/**".to_owned()
+        ]
     );
     assert!(filters.exclude_globs.is_empty());
 }
@@ -53,7 +57,10 @@ fn home_and_filesystem_root_are_not_searchable() {
     let home = Path::new("/Users/dev");
     assert!(!is_searchable_root(Path::new("/"), Some(home)));
     assert!(!is_searchable_root(Path::new("/Users/dev"), Some(home)));
-    assert!(is_searchable_root(Path::new("/Users/dev/project"), Some(home)));
+    assert!(is_searchable_root(
+        Path::new("/Users/dev/project"),
+        Some(home)
+    ));
     assert!(is_searchable_root(Path::new("/Users/dev"), None));
 }
 

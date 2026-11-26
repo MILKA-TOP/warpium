@@ -873,8 +873,8 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::OpenGlobalSearch,
         )
         .with_context_predicate(id!("Workspace") & id!(flags::SHOW_GLOBAL_SEARCH))
-        // Warpium: cmd-shift-F is Find in Files; global search keeps its palette command and
-        // its Linux/Windows binding.
+        // Warpium: cmd-shift-F is Find in Files; global search keeps its palette command.
+        // we use alt because we use ctrl-shift-f for find because ctrl-f needs to be reserved for the shell
         .with_linux_or_windows_key_binding("alt-shift-F"),
         EditableBinding::new(
             TOGGLE_WARP_DRIVE_BINDING_NAME,

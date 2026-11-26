@@ -120,7 +120,13 @@ impl TextMatchSearchItem {
     fn new(roots: &[PathBuf], matched: RipgrepMatch, score: f64) -> Option<Self> {
         let (root, rel_path) = roots
             .iter()
-            .filter_map(|root| matched.file_path.strip_prefix(root).ok().map(|rel| (root, rel)))
+            .filter_map(|root| {
+                matched
+                    .file_path
+                    .strip_prefix(root)
+                    .ok()
+                    .map(|rel| (root, rel))
+            })
             .min_by_key(|(_, rel)| rel.components().count())
             .map(|(root, rel)| (root.clone(), rel.to_string_lossy().into_owned()))?;
         Some(Self {

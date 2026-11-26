@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use async_channel::Sender;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::features::FeatureFlag;
 use warp_core::r#async::debounce;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_core::ui::theme::Fill as ThemeFill;
@@ -68,17 +68,15 @@ const PAGE_ROWS: isize = 10;
 pub(crate) fn init_bindings(app: &mut AppContext) {
     // cmd-shift-F is Find in Files (the roadmap reserves it); global search keeps its palette
     // command, its ctrl-3 toggle and alt-shift-F on Linux/Windows.
-    app.register_editable_bindings([
-        EditableBinding::new(
-            "workspace:open_find_in_files",
-            "Find in Files",
-            WorkspaceAction::OpenFindInFiles,
-        )
-        .with_group(BindingGroup::Navigation.as_str())
-        .with_context_predicate(id!("Workspace") & id!(flags::SHOW_GLOBAL_SEARCH))
-        .with_enabled(|| FeatureFlag::GlobalSearch.is_enabled())
-        .with_mac_key_binding("cmd-shift-F"),
-    ]);
+    app.register_editable_bindings([EditableBinding::new(
+        "workspace:open_find_in_files",
+        "Find in Files",
+        WorkspaceAction::OpenFindInFiles,
+    )
+    .with_group(BindingGroup::Navigation.as_str())
+    .with_context_predicate(id!("Workspace") & id!(flags::SHOW_GLOBAL_SEARCH))
+    .with_enabled(|| FeatureFlag::GlobalSearch.is_enabled())
+    .with_mac_key_binding("cmd-shift-F")]);
 
     app.register_fixed_bindings([
         FixedBinding::new(
@@ -199,7 +197,11 @@ pub(crate) fn results_summary(
             "No matches found".to_owned()
         };
     }
-    let match_word = if total_matches == 1 { "match" } else { "matches" };
+    let match_word = if total_matches == 1 {
+        "match"
+    } else {
+        "matches"
+    };
     let file_word = if file_count == 1 { "file" } else { "files" };
     let mut summary = format!("{total_matches} {match_word} in {file_count} {file_word}");
     if displayed_matches < total_matches {
@@ -277,7 +279,8 @@ impl FindInFilesView {
                 text: TextOptions::ui_text(Some(14.), appearance),
                 select_all_on_focus: true,
                 clear_selections_on_blur: true,
-                propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Always,
+                propagate_and_no_op_vertical_navigation_keys:
+                    PropagateAndNoOpNavigationKeys::Always,
                 propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::Always,
                 ..Default::default()
             };
@@ -292,7 +295,8 @@ impl FindInFilesView {
                 text: TextOptions::ui_text(Some(13.), appearance),
                 select_all_on_focus: true,
                 clear_selections_on_blur: true,
-                propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Always,
+                propagate_and_no_op_vertical_navigation_keys:
+                    PropagateAndNoOpNavigationKeys::Always,
                 propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::Always,
                 ..Default::default()
             };
@@ -333,8 +337,13 @@ impl FindInFilesView {
             FindInFilesAction::ToggleMatchCase,
             ctx,
         );
-        let whole_words_button =
-            toggle_button(None, "ab", "Match Whole Words", FindInFilesAction::ToggleWholeWords, ctx);
+        let whole_words_button = toggle_button(
+            None,
+            "ab",
+            "Match Whole Words",
+            FindInFilesAction::ToggleWholeWords,
+            ctx,
+        );
         let regex_button = toggle_button(
             Some(UiIcon::Regex),
             "",
@@ -633,7 +642,8 @@ impl FindInFilesView {
                 self.groups
                     .push(FileGroup::new(result.location.clone(), display_path));
                 let index = self.groups.len() - 1;
-                self.group_index_by_path.insert(result.location.clone(), index);
+                self.group_index_by_path
+                    .insert(result.location.clone(), index);
                 index
             }
         };
@@ -656,9 +666,16 @@ impl FindInFilesView {
     }
 
     fn rebuild_rows(&mut self) {
-        let counts: Vec<usize> = self.groups.iter().map(|group| group.matches.len()).collect();
+        let counts: Vec<usize> = self
+            .groups
+            .iter()
+            .map(|group| group.matches.len())
+            .collect();
         self.rows = flatten_rows(&counts);
-        if self.selected_row.is_some_and(|selected| selected >= self.rows.len()) {
+        if self
+            .selected_row
+            .is_some_and(|selected| selected >= self.rows.len())
+        {
             self.selected_row = None;
         }
     }
@@ -739,9 +756,10 @@ impl FindInFilesView {
         };
         let row = match row {
             ResultRow::FileHeader { group } => self.render_file_header(index, group, app),
-            ResultRow::Match { group, index: match_index } => {
-                self.render_match_row(index, group, match_index, app)
-            }
+            ResultRow::Match {
+                group,
+                index: match_index,
+            } => self.render_match_row(index, group, match_index, app),
         };
         // UniformList measures every row from the first, so rows must share one height.
         ConstrainedBox::new(row).with_height(ROW_HEIGHT).finish()
@@ -769,7 +787,9 @@ impl FindInFilesView {
                 None => ImageOrIcon::Icon(UiIcon::File),
             };
             let file_icon = match file_icon {
-                ImageOrIcon::Icon(icon) => icon.to_warpui_icon(ThemeFill::from(icon_color)).finish(),
+                ImageOrIcon::Icon(icon) => {
+                    icon.to_warpui_icon(ThemeFill::from(icon_color)).finish()
+                }
                 ImageOrIcon::Image(image) => image,
             };
             let file_icon = Container::new(
@@ -832,8 +852,8 @@ impl FindInFilesView {
                 .with_child(count_badge)
                 .finish();
 
-            let mut row = Container::new(row)
-                .with_padding(Padding::uniform(2.).with_left(8.).with_right(8.));
+            let mut row =
+                Container::new(row).with_padding(Padding::uniform(2.).with_left(8.).with_right(8.));
             if let Some(background_fill) = list_highlight_state.background_color(appearance) {
                 row = row
                     .with_background(background_fill)
@@ -1075,8 +1095,10 @@ impl View for FindInFilesView {
             .with_child(
                 Shrinkable::new(
                     1.,
-                    ConstrainedBox::new(Clipped::new(ChildView::new(&self.query_editor).finish()).finish())
-                        .finish(),
+                    ConstrainedBox::new(
+                        Clipped::new(ChildView::new(&self.query_editor).finish()).finish(),
+                    )
+                    .finish(),
                 )
                 .finish(),
             );
@@ -1143,7 +1165,11 @@ impl View for FindInFilesView {
             .with_child(query_box)
             .with_child(Container::new(mask_row).with_padding_top(8.).finish());
         if !self.rows.is_empty() {
-            column.add_child(Container::new(self.render_results(app)).with_padding_top(8.).finish());
+            column.add_child(
+                Container::new(self.render_results(app))
+                    .with_padding_top(8.)
+                    .finish(),
+            );
         }
         column.add_child(footer);
 

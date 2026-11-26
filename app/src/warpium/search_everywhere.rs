@@ -1,7 +1,9 @@
 //! Android Studio–style project search on cmd-O: in a Kotlin/Java project the Files palette gets
-//! All, Classes, Symbols and Files tabs. Classes and Symbols are Go to Class and Go to Symbol over
-//! the code index, Files is Warp's file search, and All merges the three into capped sections. The
-//! tab order, the merging and when a project gets tabs are in `crates/warpium_search_everywhere`.
+//! All, Classes, Symbols, Files and Text tabs. Classes and Symbols are Go to Class and Go to
+//! Symbol over the code index, Files is Warp's file search, Text is file contents (see
+//! `search_everywhere_text.rs`), and All merges Classes, Symbols and Files into capped sections.
+//! The tab order, the merging and when a project gets tabs are in
+//! `crates/warpium_search_everywhere`.
 
 use pathfinder_color::ColorU;
 pub(crate) use warpium_search_everywhere::SearchTab;
