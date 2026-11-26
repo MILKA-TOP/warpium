@@ -3313,9 +3313,20 @@ impl CodeReviewView {
             .with_margin_left(6.)
             .finish(),
             Shrinkable::new(1., Empty::new().finish()).finish(),
-            chevron
-                .to_warpui_icon(theme.sub_text_color(theme.background()))
+            // Pin the chevron like the file header's: a bare Icon lays out at
+            // constraint.max, and the row's unbounded main-axis measurement
+            // would hand it an infinite rect (Scene::validate_rect aborts).
+            Container::new(
+                ConstrainedBox::new(
+                    chevron
+                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .finish(),
+                )
+                .with_width(16.)
+                .with_height(16.)
                 .finish(),
+            )
+            .finish(),
         ]);
 
         EventHandler::new(
