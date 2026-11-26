@@ -154,7 +154,7 @@ impl CodeReviewView {
 
         let editor = editor_state.editor().clone();
 
-        // Scroll to 10px into the header (FILE_HEADER_HEIGHT is 41px)
+        // Scroll to 10px into the header (FILE_HEADER_HEIGHT is 26px)
         self.viewported_list_state
             .scroll_to_with_offset(editor_index, Pixels::new(10.0));
 

@@ -58,7 +58,7 @@ Status: **done** (merged), **review** (PR open), **wip** (in progress), **planne
 | 20 | Change markers in the gutter and Rollback, like IDEA | done (#42); follow-ups below |
 | 21 | Search Everywhere on `cmd-O` (All / Classes / Symbols / Files) | done (#39) |
 | 22 | Find in Files on `cmd-shift-F`, plus a Text tab in `cmd-O` | planned |
-| 23 | Code Review panel → JetBrains Commit tool window: group by directory/repository, expand/collapse all, collapsed-by-default file list, unversioned files, rollback selected files, stash tab, amend commit, fast open | research done (#47) |
+| 23 | Code Review panel → JetBrains Commit tool window: group by directory/repository, expand/collapse all, collapsed-by-default file list, unversioned files, rollback selected files, stash tab, amend commit, fast open | done (#48); JB-density rows, commit file selection, row context menu (Add to VCS / Create Patch / Shelve) in review |
 
 Also done along the way: Warpium self-update from GitHub Releases (#11), the fork's CI and release
 workflows, the test VM MCP server (`tools/mac-mcp`).

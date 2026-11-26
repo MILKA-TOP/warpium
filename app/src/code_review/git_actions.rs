@@ -36,8 +36,9 @@ pub async fn run_commit_chain(
     branch: &str,
     ai_client: Option<&dyn AIClient>,
     path_env: Option<&str>,
+    paths: Option<&[String]>,
 ) -> anyhow::Result<(Vec<Commit>, Option<String>, Option<PrInfo>)> {
-    git::run_commit(repo_path, message, include_unstaged, amend, path_env).await?;
+    git::run_commit(repo_path, message, include_unstaged, amend, path_env, paths).await?;
     let pr_info = match mode {
         CommitChainMode::CommitOnly => None,
         CommitChainMode::CommitAndPush => {
@@ -81,13 +82,15 @@ pub async fn create_pr(
 
 /// Generates an AI commit message for the working-tree changes.
 /// Bails when there's nothing to summarize (empty diff) or the model returns an empty message.
+/// `paths` scopes the diff to the commit dialog's file selection.
 pub async fn generate_commit_message(
     repo_path: &Path,
     branch_name: &str,
     include_unstaged: bool,
     ai_client: &dyn AIClient,
+    paths: Option<&[String]>,
 ) -> anyhow::Result<String> {
-    let diff = git::get_diff_for_commit_message(repo_path, include_unstaged).await?;
+    let diff = git::get_diff_for_commit_message(repo_path, include_unstaged, paths).await?;
     // Skip the AI round trip when there's nothing to summarize.
     if diff.trim().is_empty() {
         anyhow::bail!("no changes to generate a commit message from");

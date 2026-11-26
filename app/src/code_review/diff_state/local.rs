@@ -1542,6 +1542,7 @@ impl LocalDiffStateModel {
         amend: bool,
         branch: String,
         autogenerate_pr_content: bool,
+        paths: Option<Vec<String>>,
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(repo_path) = self.active_repository_path(ctx) else {
@@ -1568,6 +1569,7 @@ impl LocalDiffStateModel {
                     &branch,
                     ai_client.as_deref(),
                     path_env.as_deref(),
+                    paths.as_deref(),
                 )
                 .await
             },
@@ -1657,10 +1659,12 @@ impl LocalDiffStateModel {
     }
 
     /// Generates an AI commit message for the working tree and emits `CommitMessageGenerated`.
+    /// `paths` scopes the diff to the commit dialog's file selection.
     pub fn generate_commit_message(
         &self,
         include_unstaged: bool,
         branch_name: String,
+        paths: Option<Vec<String>>,
         ctx: &mut ModelContext<Self>,
     ) {
         let Some(repo_path) = self.active_repository_path(ctx) else {
@@ -1677,6 +1681,7 @@ impl LocalDiffStateModel {
                     &branch_name,
                     include_unstaged,
                     ai_client.as_ref(),
+                    paths.as_deref(),
                 )
                 .await
             },

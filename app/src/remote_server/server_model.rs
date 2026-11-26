@@ -3252,6 +3252,7 @@ impl ServerModel {
                     &branch,
                     ai_client.as_deref(),
                     path_env,
+                    None,
                 )
                 .await
             },
@@ -3492,6 +3493,7 @@ impl ServerModel {
                     &branch_name,
                     include_unstaged,
                     ai_client.as_ref(),
+                    None,
                 )
                 .await
             },

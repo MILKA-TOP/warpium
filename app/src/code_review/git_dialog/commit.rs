@@ -60,6 +60,13 @@ const LOADING_LABEL: &str = "Committing\u{2026}";
 pub struct CommitState {
     pub(super) intent: CommitChainMode,
     include_unstaged: bool,
+    /// The changes-list checkbox selection (JetBrains' Commit tool window):
+    /// `Some` of the repo-relative paths to commit when the user unchecked
+    /// files, `None` when everything goes in. Local repos only.
+    selected_paths: Option<Vec<String>>,
+    /// How many files the changes list has in total, for the "N of M files
+    /// selected" line shown while `selected_paths` is `Some`.
+    total_changed_count: usize,
     file_changes: Vec<FileChangeEntry>,
     changes_expanded: bool,
     switch_state: SwitchStateHandle,
@@ -90,6 +97,8 @@ pub(super) fn new_state(
     local_repo_path: Option<&Path>,
     allow_create_pr: bool,
     has_upstream: bool,
+    selected_paths: Option<Vec<String>>,
+    total_changed_count: usize,
     ctx: &mut ViewContext<GitDialog>,
 ) -> CommitState {
     // Dialog always opens with the plain commit intent; the user picks
@@ -179,11 +188,15 @@ pub(super) fn new_state(
         None
     };
 
+    // A subset commit always covers the selected files' current state, so the
+    // "include unstaged" distinction doesn't apply to it (the switch is
+    // hidden); keep the flag true so `run_commit` stages the selection.
     let include_unstaged = true;
     // Local repos load the changes list from the working tree here; remote
     // repos source the Changes box from synced metadata.
     if let Some(repo_path) = local_repo_path {
         let repo_path_for_load = repo_path.to_path_buf();
+        let selected_for_load = selected_paths.clone();
         ctx.spawn(
             async move { get_file_change_entries(&repo_path_for_load, include_unstaged).await },
             move |me, result, ctx| {
@@ -191,7 +204,9 @@ pub(super) fn new_state(
                     return;
                 };
                 match result {
-                    Ok(entries) => state.file_changes = entries,
+                    Ok(entries) => {
+                        state.file_changes = filter_to_selection(entries, &selected_for_load)
+                    }
                     Err(err) => log::warn!("Failed to load file changes: {err}"),
                 }
                 me.refresh_confirm_enabled(ctx);
@@ -203,6 +218,8 @@ pub(super) fn new_state(
     let state = CommitState {
         intent,
         include_unstaged,
+        selected_paths,
+        total_changed_count,
         file_changes: Vec::new(),
         changes_expanded: true,
         switch_state: SwitchStateHandle::default(),
@@ -246,6 +263,20 @@ pub(super) fn is_ready_to_confirm(state: &CommitState, app: &AppContext) -> bool
 /// toast rather than a phantom success.
 fn has_committable_changes(state: &CommitState) -> bool {
     !state.file_changes.is_empty()
+}
+
+/// Scopes the working-tree changes list to the dialog's file selection.
+fn filter_to_selection(
+    entries: Vec<FileChangeEntry>,
+    selected_paths: &Option<Vec<String>>,
+) -> Vec<FileChangeEntry> {
+    match selected_paths {
+        Some(selected) => entries
+            .into_iter()
+            .filter(|entry| selected.iter().any(|path| path == &entry.path))
+            .collect(),
+        None => entries,
+    }
 }
 
 /// Returns a tooltip to show on the disabled Confirm button when the
@@ -308,15 +339,15 @@ pub(super) fn maybe_start_commit_message_autogen(me: &GitDialog, ctx: &mut ViewC
         return;
     }
     // Generate from the same scope that will be committed (the "include
-    // unstaged" toggle), so the message describes what `run_commit` stages
-    // rather than always assuming the full working set.
-    let include_unstaged = match me.mode() {
-        GitDialogMode::Commit(state) => state.include_unstaged,
+    // unstaged" toggle and the file selection), so the message describes what
+    // `run_commit` stages rather than always assuming the full working set.
+    let (include_unstaged, selected_paths) = match me.mode() {
+        GitDialogMode::Commit(state) => (state.include_unstaged, state.selected_paths.clone()),
         _ => return,
     };
     let branch_name = me.branch_name().to_string();
     me.diff_state_model().update(ctx, |m, ctx| {
-        m.generate_commit_message(include_unstaged, branch_name, ctx);
+        m.generate_commit_message(include_unstaged, branch_name, selected_paths, ctx);
     });
 }
 
@@ -484,6 +515,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     let intent = state.intent;
     let include_unstaged = state.include_unstaged;
     let amend = state.amend;
+    let selected_paths = state.selected_paths.clone();
     let message_editor = state.message_editor.clone();
     let branch_name = me.branch_name().to_string();
     // When the chain includes create-PR, AI-generate the PR title/body when the
@@ -520,6 +552,7 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
             amend,
             branch_name,
             autogenerate_pr_content,
+            selected_paths,
             ctx,
         );
     });
@@ -602,17 +635,17 @@ fn reload_file_changes(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>) {
     let Some(repo_path) = me.repo_location().to_local_path().map(Path::to_path_buf) else {
         return;
     };
-    let include_unstaged = match me.mode() {
-        GitDialogMode::Commit(state) => state.include_unstaged,
+    let (include_unstaged, selected_paths) = match me.mode() {
+        GitDialogMode::Commit(state) => (state.include_unstaged, state.selected_paths.clone()),
         _ => return,
     };
     ctx.spawn(
         async move { get_file_change_entries(&repo_path, include_unstaged).await },
-        |me, result, ctx| {
+        move |me, result, ctx| {
             if let GitDialogMode::Commit(state) = &mut me.mode {
                 match result {
                     Ok(entries) => {
-                        state.file_changes = entries;
+                        state.file_changes = filter_to_selection(entries, &selected_paths);
                         me.refresh_confirm_enabled(ctx);
                         ctx.notify();
                     }
@@ -696,31 +729,48 @@ fn render_changes_section(state: &CommitState, appearance: &Appearance) -> Box<d
     .with_color(main_color)
     .finish();
 
-    let include_label = Text::new(
-        "Include unstaged",
-        appearance.ui_font_family(),
-        appearance.ui_font_size(),
-    )
-    .with_color(sub_color)
-    .finish();
-
-    let switch = appearance
-        .ui_builder()
-        .switch(state.switch_state.clone())
-        .check(state.include_unstaged)
-        .build()
-        .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(GitDialogAction::Commit(
-                CommitSubAction::ToggleIncludeUnstaged,
-            ));
-        })
+    // With a file subset selected, the commit covers exactly the selected
+    // files' current state, so the "Include unstaged" switch gives way to a
+    // selection summary (JetBrains shows the checked count instead).
+    let toggle_row = if let Some(selected) = &state.selected_paths {
+        Text::new(
+            format!(
+                "{} of {} files selected",
+                selected.len(),
+                state.total_changed_count
+            ),
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(sub_color)
+        .finish()
+    } else {
+        let include_label = Text::new(
+            "Include unstaged",
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(sub_color)
         .finish();
 
-    let toggle_row = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(include_label)
-        .with_child(Container::new(switch).with_margin_left(4.).finish())
-        .finish();
+        let switch = appearance
+            .ui_builder()
+            .switch(state.switch_state.clone())
+            .check(state.include_unstaged)
+            .build()
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(GitDialogAction::Commit(
+                    CommitSubAction::ToggleIncludeUnstaged,
+                ));
+            })
+            .finish();
+
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(include_label)
+            .with_child(Container::new(switch).with_margin_left(4.).finish())
+            .finish()
+    };
 
     let header_row = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
