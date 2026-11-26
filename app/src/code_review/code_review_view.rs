@@ -45,7 +45,7 @@ use warpui::elements::{
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
+use warpui::platform::{Cursor, SaveFilePickerConfiguration};
 use warpui::text_layout::{ClipConfig, default_compute_baseline_position};
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -111,6 +111,7 @@ use crate::code_review::telemetry_event::{
     AddToContextOrigin, CodeReviewContextDestination, CodeReviewTelemetryEvent, GitButtonKind,
     PaneStateChange,
 };
+use crate::code_review::warpium_commit_selection::{CommitSelection, GroupCheckState};
 use crate::code_review::warpium_file_groups::{FileRow, GroupBy, build_rows};
 use crate::code_review::warpium_stash_tab::{PanelTab, WarpiumStashTabState};
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
@@ -253,9 +254,13 @@ const FILE_SIDEBAR_MIN_WIDTH: f32 = 150.;
 const FILE_SIDEBAR_MAX_WIDTH: f32 = 800.;
 /// This is a best guess effort at getting the height of the file header.
 /// If the file header is changed, we should update this value.
-const FILE_HEADER_HEIGHT: f32 = 41.;
+const FILE_HEADER_HEIGHT: f32 = 26.;
 /// The gap between editors in the viewported list.
 const EDITOR_GAP: f32 = 12.;
+/// Mouse-state keys of the group nodes' commit-inclusion checkboxes (the
+/// directory nodes use their full path).
+const REPOSITORY_NODE_KEY: &str = "repository";
+const UNVERSIONED_NODE_KEY: &str = "unversioned";
 const FILE_SIDEBAR_PANE_WIDTH_PERCENTAGE: f32 = 0.25;
 /// Vertical gap between the right panel header row and the code review content below it
 /// (sub-header in loaded state, loading text in loading state).
@@ -365,6 +370,22 @@ pub enum CodeReviewAction {
     ToggleUnversionedNode,
     /// Cmd-click multi-select of a file row for Rollback… (design doc §5.5).
     ToggleFileRowSelection(String),
+    /// The commit-inclusion checkbox of a file row (JetBrains' Commit tool
+    /// window): unchecked files stay out of the commit.
+    ToggleCommitIncluded(String),
+    /// A group node's tri-state checkbox: include/exclude all its files.
+    SetCommitIncludedForGroup { paths: Vec<String>, included: bool },
+    /// Right-click on a file row: opens the JetBrains-style context menu.
+    OpenFileContextMenu { path: String, position: Vector2F },
+    /// "Add to VCS" (JetBrains): stage the given untracked files.
+    AddFilesToVcs(Vec<String>),
+    /// "Create Patch…" (JetBrains): export the given files' diff as a patch.
+    CreatePatchForFiles(Vec<String>),
+    CreatePatchSaveToFile,
+    CreatePatchCopyToClipboard,
+    CancelCreatePatchDialog,
+    /// "Shelve…" (JetBrains): stash the given files with a message.
+    OpenShelveDialog(Vec<String>),
     /// Opens the Rollback confirmation for the selected files.
     ShowRollbackConfirmDialog,
     /// The Stashes sub-tab (design doc §5.6).
@@ -397,6 +418,9 @@ pub struct FileState {
     selected: bool,
     sidebar_mouse_state: MouseStateHandle,
     header_mouse_state: MouseStateHandle,
+    /// The commit-inclusion checkbox at the row's left (JetBrains' Commit
+    /// tool window); local repos only.
+    commit_checkbox_mouse_state: MouseStateHandle,
     open_in_tab_button: Option<ViewHandle<ActionButton>>,
     discard_button: Option<ViewHandle<ActionButton>>,
     add_context_button: Option<ViewHandle<ActionButton>>,
@@ -415,6 +439,10 @@ pub(crate) struct LoadedState {
     pub(crate) rows: Vec<FileRow>,
     /// Repo-relative file path -> index into `rows`.
     row_index_by_file: HashMap<String, usize>,
+    /// Hover/click state of the group nodes' commit-inclusion checkboxes,
+    /// keyed by node key (`repository`, `unversioned`, or the directory's
+    /// full path). Rebuilt with the rows.
+    group_checkbox_mouse_states: HashMap<String, MouseStateHandle>,
 }
 
 impl LoadedState {
@@ -455,6 +483,17 @@ impl LoadedState {
                 | FileRow::Directory { .. }
                 | FileRow::UnversionedNode { .. } => None,
             })
+            .collect();
+        self.group_checkbox_mouse_states = self
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                FileRow::Repository { .. } => Some(REPOSITORY_NODE_KEY.to_owned()),
+                FileRow::UnversionedNode { .. } => Some(UNVERSIONED_NODE_KEY.to_owned()),
+                FileRow::Directory { path, .. } => Some(path.clone()),
+                FileRow::File { .. } => None,
+            })
+            .map(|key| (key, MouseStateHandle::default()))
             .collect();
     }
 
@@ -638,6 +677,10 @@ struct RepositoryState {
     repository_node_expanded: bool,
     /// The "Unversioned Files" node starts collapsed, as in JetBrains.
     unversioned_node_expanded: bool,
+    /// Which files go into the commit (the changes list's checkboxes,
+    /// JetBrains' Commit tool window). Kept per repo so a diff reload
+    /// preserves the user's choices.
+    commit_selection: CommitSelection,
 }
 
 impl RepositoryState {
@@ -651,6 +694,7 @@ impl RepositoryState {
             collapsed_dirs: HashSet::new(),
             repository_node_expanded: true,
             unversioned_node_expanded: false,
+            commit_selection: CommitSelection::default(),
         }
     }
 
@@ -784,6 +828,36 @@ pub struct CodeReviewView {
     stash_drop_confirm_button: Option<ViewHandle<ActionButton>>,
     stash_drop_cancel_button: Option<ViewHandle<ActionButton>>,
     stash_scroll_state: ClippedScrollStateHandle,
+    /// Right-click context menu of the changes-list file rows (JetBrains'
+    /// Commit tool window actions: Add to VCS, Create Patch…, Shelve…).
+    file_context_menu: ViewHandle<Menu<CodeReviewAction>>,
+    file_context_menu_state: Option<FileContextMenuState>,
+    /// The Create Patch dialog (JetBrains' "Create Patch…"), if open.
+    create_patch_dialog: Option<CreatePatchDialogState>,
+    create_patch_save_button: Option<ViewHandle<ActionButton>>,
+    create_patch_copy_button: Option<ViewHandle<ActionButton>>,
+    create_patch_cancel_button: Option<ViewHandle<ActionButton>>,
+    /// When the stash-create dialog is open as "Shelve…", the files it
+    /// shelves; `None` for a regular whole-tree stash.
+    shelve_paths: Option<Vec<String>>,
+}
+
+/// State of the file rows' right-click context menu.
+struct FileContextMenuState {
+    /// Menu position relative to the view's root (`view_position_id`).
+    position: Vector2F,
+    /// The right-clicked file; actions apply to it or, when it's part of the
+    /// cmd-click selection, to the whole selection (JetBrains behavior).
+    path: String,
+}
+
+/// State of the Create Patch dialog: the patch is generated off the main
+/// thread when the dialog opens.
+struct CreatePatchDialogState {
+    /// Repo-relative paths the patch covers.
+    paths: Vec<String>,
+    /// `None` while the patch is being generated.
+    patch: Option<Result<warpium_git::stage::CreatedPatch, String>>,
 }
 
 impl CodeReviewView {
@@ -1497,6 +1571,18 @@ impl CodeReviewView {
                 .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::ReloadStashes))
         });
 
+        let file_context_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .prevent_interaction_with_other_elements()
+                .with_drop_shadow()
+        });
+        ctx.subscribe_to_view(&file_context_menu, |me, _, event, ctx| {
+            if let MenuEvent::ItemSelected | MenuEvent::Close { .. } = event {
+                me.file_context_menu_state = None;
+                ctx.notify();
+            }
+        });
+
         let mut view = Self {
             active_repo,
             ui_state_handles,
@@ -1554,6 +1640,13 @@ impl CodeReviewView {
             stash_drop_confirm_button: None,
             stash_drop_cancel_button: None,
             stash_scroll_state: ClippedScrollStateHandle::default(),
+            file_context_menu,
+            file_context_menu_state: None,
+            create_patch_dialog: None,
+            create_patch_save_button: None,
+            create_patch_copy_button: None,
+            create_patch_cancel_button: None,
+            shelve_paths: None,
         };
         view.set_active_repo_comment_model(comment_batch_model, ctx);
         if has_repo {
@@ -2746,6 +2839,7 @@ impl CodeReviewView {
                 files_changed: diff_data.files_changed,
                 rows: Vec::new(),
                 row_index_by_file: HashMap::new(),
+                group_checkbox_mouse_states: HashMap::new(),
             });
             if let CodeReviewViewState::Loaded(state) = &mut repo.state {
                 state.rebuild_rows(
@@ -2814,6 +2908,7 @@ impl CodeReviewView {
                 selected: false,
                 sidebar_mouse_state: MouseStateHandle::default(),
                 header_mouse_state: MouseStateHandle::default(),
+                commit_checkbox_mouse_state: MouseStateHandle::default(),
                 open_in_tab_button: None,
                 discard_button: None,
                 add_context_button: None,
@@ -3072,22 +3167,26 @@ impl CodeReviewView {
                     0,
                     *expanded,
                     CodeReviewAction::ToggleRepositoryNode,
+                    Some(REPOSITORY_NODE_KEY.to_owned()),
                     appearance,
                 )
             }
             FileRow::Directory {
+                path,
                 label,
                 depth,
                 file_count,
                 expanded,
-                ..
             } => self.render_group_node_row(
                 Icon::FolderClosed,
                 label.clone(),
                 *file_count,
                 *depth,
                 *expanded,
-                CodeReviewAction::ToggleDirectoryNode(label.clone()),
+                // The collapse key is the node's full path, not its label: a
+                // joined chain (`src/main/kotlin`) has a relative label.
+                CodeReviewAction::ToggleDirectoryNode(path.clone()),
+                Some(path.clone()),
                 appearance,
             ),
             FileRow::UnversionedNode {
@@ -3100,14 +3199,41 @@ impl CodeReviewView {
                 0,
                 *expanded,
                 CodeReviewAction::ToggleUnversionedNode,
+                Some(UNVERSIONED_NODE_KEY.to_owned()),
                 appearance,
             ),
         }
     }
 
+    /// The files a group node's commit-inclusion checkbox covers: the
+    /// repository node covers every tracked file, the "Unversioned Files"
+    /// node every untracked one, and a directory node the tracked files
+    /// beneath its full path.
+    fn group_node_paths(&self, node_key: &str) -> Vec<String> {
+        let CodeReviewViewState::Loaded(loaded) = self.state() else {
+            return Vec::new();
+        };
+        loaded
+            .file_states
+            .iter()
+            .filter(|(path, file_state)| {
+                let untracked = matches!(file_state.file_diff.status, GitFileStatus::Untracked);
+                match node_key {
+                    REPOSITORY_NODE_KEY => !untracked,
+                    UNVERSIONED_NODE_KEY => untracked,
+                    directory => {
+                        !untracked && path.starts_with(&format!("{directory}/"))
+                    }
+                }
+            })
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
     /// Renders a group node row of the changes list: the repository root, a
     /// directory, or the "Unversioned Files" node (design doc §5.1, §5.4).
-    /// Clicking the row toggles the node's expansion.
+    /// Clicking the row toggles the node's expansion. `node_key` identifies
+    /// the node for its commit-inclusion checkbox (local repos only).
     fn render_group_node_row(
         &self,
         icon: Icon,
@@ -3116,6 +3242,7 @@ impl CodeReviewView {
         depth: usize,
         expanded: bool,
         toggle: CodeReviewAction,
+        node_key: Option<String>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -3124,65 +3251,89 @@ impl CodeReviewView {
         } else {
             Icon::ListCollapsed
         };
-        let row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Container::new(
-                    ConstrainedBox::new(
-                        icon.to_warpui_icon(theme.sub_text_color(theme.background()))
-                            .finish(),
-                    )
-                    .with_width(16.)
-                    .with_height(16.)
+        let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+        if let Some(node_key) = &node_key
+            && self.repo_is_local() == Some(true)
+            && let CodeReviewViewState::Loaded(loaded) = self.state()
+            && let Some(mouse_state) = loaded.group_checkbox_mouse_states.get(node_key)
+        {
+            let paths = self.group_node_paths(node_key);
+            let state = match self.active_repo.as_ref() {
+                Some(repo) => repo.commit_selection.group_state(&paths),
+                None => GroupCheckState::All,
+            };
+            let checkbox = appearance
+                .ui_builder()
+                .checkbox(mouse_state.clone(), Some(12.))
+                .check(state == GroupCheckState::All)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeReviewAction::SetCommitIncludedForGroup {
+                        paths: paths.clone(),
+                        included: state != GroupCheckState::All,
+                    });
+                })
+                .finish();
+            row.add_child(
+                EventHandler::new(Container::new(checkbox).with_margin_right(6.).finish())
+                    .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
+                    .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
                     .finish(),
+            );
+        }
+        row.add_children([
+            Container::new(
+                ConstrainedBox::new(
+                    icon.to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .finish(),
                 )
-                .with_margin_right(6.)
+                .with_width(16.)
+                .with_height(16.)
                 .finish(),
             )
-            .with_child(
+            .with_margin_right(4.)
+            .finish(),
+            Text::new(
+                label,
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .with_color(theme.main_text_color(theme.surface_2()).into())
+            .finish(),
+            Container::new(
                 Text::new(
-                    label,
+                    format!("{file_count}"),
                     appearance.ui_font_family(),
-                    appearance.ui_font_size() + 2.,
+                    appearance.ui_font_size(),
                 )
-                .with_style(Properties::default().weight(Weight::Semibold))
-                .with_color(theme.main_text_color(theme.surface_2()).into())
+                .with_color(theme.sub_text_color(theme.surface_2()).into())
                 .finish(),
             )
-            .with_child(
-                Container::new(
-                    Text::new(
-                        format!("{file_count}"),
-                        appearance.ui_font_family(),
-                        appearance.ui_font_size(),
-                    )
-                    .with_color(theme.sub_text_color(theme.surface_2()).into())
-                    .finish(),
+            .with_margin_left(6.)
+            .finish(),
+            Shrinkable::new(1., Empty::new().finish()).finish(),
+            // Pin the chevron like the file header's: a bare Icon lays out at
+            // constraint.max, and the row's unbounded main-axis measurement
+            // would hand it an infinite rect (Scene::validate_rect aborts).
+            Container::new(
+                ConstrainedBox::new(
+                    chevron
+                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .finish(),
                 )
-                .with_margin_left(6.)
+                .with_width(16.)
+                .with_height(16.)
                 .finish(),
             )
-            .with_child(Shrinkable::new(1., Empty::new().finish()).finish())
-            .with_child(
-                chevron
-                    .to_warpui_icon(theme.sub_text_color(theme.background()))
-                    .finish(),
-            )
-            .finish();
+            .finish(),
+        ]);
 
         EventHandler::new(
-            Container::new(
-                Container::new(row)
-                    .with_background(theme.surface_2())
-                    .with_vertical_padding(8.)
-                    .with_horizontal_padding(16. + depth as f32 * 14.)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-                    .with_border(Border::new(1.).with_border_fill(theme.surface_3()))
-                    .finish(),
-            )
-            .with_background(theme.background())
-            .with_margin_bottom(EDITOR_GAP)
-            .finish(),
+            Container::new(row.finish())
+                .with_vertical_padding(3.)
+                .with_horizontal_padding(8. + depth as f32 * 12.)
+                .finish(),
         )
         .on_left_mouse_up(move |ctx, _, _| {
             ctx.dispatch_typed_action(toggle.clone());
@@ -3297,18 +3448,10 @@ impl CodeReviewView {
         .with_vertical_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Auto, false))
         .finish();
 
+        // The create-stash dialog renders at the view's root (it also opens
+        // from the Changes tab as "Shelve…"); the drop confirmation is only
+        // reachable from this tab.
         let mut stack = Stack::new().with_child(Shrinkable::new(1., scrollable).finish());
-        if self.stash_state.create_dialog_open {
-            stack.add_positioned_child(
-                self.render_stash_create_dialog(appearance),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::Center,
-                    ChildAnchor::Center,
-                ),
-            );
-        }
         if let Some(index) = self.stash_state.confirm_drop {
             stack.add_positioned_child(
                 self.render_stash_drop_dialog(index, appearance),
@@ -3626,15 +3769,28 @@ impl CodeReviewView {
             .build()
             .finish();
 
-        let dialog = Dialog::new(
-            "Create stash".to_string(),
-            Some("Stashes all local changes, including untracked files.".to_string()),
-            UiComponentStyles {
-                width: Some(460.),
-                padding: Some(Coords::uniform(24.).bottom(12.)),
-                ..dialog_styles(appearance)
-            },
-        )
+        // The same dialog serves the Stashes tab's "Stash" button and the
+        // file rows' "Shelve…" (a stash of just the selected files).
+        let (title, subtitle) = if let Some(paths) = &self.shelve_paths {
+            (
+                "Shelve changes".to_string(),
+                Some(format!(
+                    "Stashes {} selected {} so they can be restored later.",
+                    paths.len(),
+                    if paths.len() == 1 { "file" } else { "files" }
+                )),
+            )
+        } else {
+            (
+                "Create stash".to_string(),
+                Some("Stashes all local changes, including untracked files.".to_string()),
+            )
+        };
+        let dialog = Dialog::new(title, subtitle, UiComponentStyles {
+            width: Some(460.),
+            padding: Some(Coords::uniform(24.).bottom(12.)),
+            ..dialog_styles(appearance)
+        })
         .with_child(Container::new(input).finish())
         .with_separator()
         .with_bottom_row_child(cancel)
@@ -5815,10 +5971,17 @@ impl CodeReviewView {
             content.add_child(stack.finish());
         }
 
-        Container::new(Shrinkable::new(1., content.finish()).finish())
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-            .with_margin_bottom(EDITOR_GAP)
-            .finish()
+        // Collapsed rows are flat list lines with no gap; an expanded file is
+        // a card with the usual gap below it.
+        let container = Container::new(Shrinkable::new(1., content.finish()).finish());
+        if file.is_expanded {
+            container
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+                .with_margin_bottom(EDITOR_GAP)
+                .finish()
+        } else {
+            container.finish()
+        }
     }
 
     /// Renders the file header with name and status.
@@ -5846,24 +6009,50 @@ impl CodeReviewView {
         };
         let mut left_section = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_child(
-                // A bare warpui Icon lays out at constraint.max, so pin its size:
-                // the row's unbounded main-axis measurement would otherwise hand
-                // it an infinite rect (Scene::validate_rect aborts in debug).
-                Container::new(
-                    ConstrainedBox::new(
-                        chevron_icon
-                            .to_warpui_icon(theme.sub_text_color(theme.background()))
-                            .finish(),
-                    )
-                    .with_width(16.)
-                    .with_height(16.)
+            .with_main_axis_size(MainAxisSize::Min);
+        // JetBrains' Commit tool window: a checkbox picks the files that go
+        // into the commit. Local repos only — a subset commit is local-only.
+        if self.repo_is_local() == Some(true) {
+            let included = self
+                .active_repo
+                .as_ref()
+                .is_some_and(|repo| repo.commit_selection.is_included(&file_name));
+            let checkbox_path = file_name.clone();
+            let checkbox = appearance
+                .ui_builder()
+                .checkbox(file.commit_checkbox_mouse_state.clone(), Some(12.))
+                .check(included)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(CodeReviewAction::ToggleCommitIncluded(
+                        checkbox_path.clone(),
+                    ));
+                })
+                .finish();
+            left_section.add_child(
+                EventHandler::new(Container::new(checkbox).with_margin_right(6.).finish())
+                    .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
+                    .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
                     .finish(),
-                )
-                .with_margin_right(8.)
-                .finish(),
             );
+        }
+        left_section.add_child(
+            // A bare warpui Icon lays out at constraint.max, so pin its size:
+            // the row's unbounded main-axis measurement would otherwise hand
+            // it an infinite rect (Scene::validate_rect aborts in debug).
+            Container::new(
+                ConstrainedBox::new(
+                    chevron_icon
+                        .to_warpui_icon(theme.sub_text_color(theme.background()))
+                        .finish(),
+                )
+                .with_width(16.)
+                .with_height(16.)
+                .finish(),
+            )
+            .with_margin_right(4.)
+            .finish(),
+        );
         if let GitFileStatus::Renamed { old_path } = &file.file_diff.status {
             left_section.add_children([
                 Shrinkable::new(
@@ -5871,7 +6060,7 @@ impl CodeReviewView {
                     Text::new(
                         old_path.clone(),
                         appearance.ui_font_family(),
-                        appearance.ui_font_size() + 2.,
+                        appearance.ui_font_size(),
                     )
                     .with_color(theme.main_text_color(theme.surface_2()).into())
                     .with_clip(ClipConfig::start())
@@ -5882,7 +6071,7 @@ impl CodeReviewView {
                 Text::new(
                     " → ",
                     appearance.ui_font_family(),
-                    appearance.ui_font_size() + 2.,
+                    appearance.ui_font_size(),
                 )
                 .with_color(theme.main_text_color(theme.surface_2()).into())
                 .finish(),
@@ -5892,7 +6081,7 @@ impl CodeReviewView {
                         Text::new(
                             file_name,
                             appearance.ui_font_family(),
-                            appearance.ui_font_size() + 2.,
+                            appearance.ui_font_size(),
                         )
                         .with_color(theme.main_text_color(theme.surface_2()).into())
                         .with_clip(ClipConfig::start())
@@ -5914,7 +6103,7 @@ impl CodeReviewView {
                             Text::new(
                                 file_name,
                                 appearance.ui_font_family(),
-                                appearance.ui_font_size() + 2.,
+                                appearance.ui_font_size(),
                             )
                             .with_color(theme.main_text_color(theme.surface_2()).into())
                             .with_clip(ClipConfig::start())
@@ -5967,11 +6156,17 @@ impl CodeReviewView {
                 .finish(),
             );
         }
-        left_section.add_child(self.render_file_stats(&file.file_diff, appearance));
-
         let mut right_row = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
+
+        // Stats sit at the row's right edge, as in JetBrains' Commit tool
+        // window.
+        right_row.add_child(
+            Container::new(self.render_file_stats(&file.file_diff, appearance))
+                .with_margin_right(8.)
+                .finish(),
+        );
 
         // Add file diff as context button (before remove button)
         if FeatureFlag::DiffSetAsContext.is_enabled()
@@ -6022,10 +6217,12 @@ impl CodeReviewView {
         let file_path_for_toggle = file.file_diff.file_path.clone();
 
         let outer_bg = theme.background();
+        // JetBrains' Commit tool window density: collapsed rows are flat list
+        // lines; only an expanded file keeps the card chrome around its diff.
         let inner_corner_radius = if file.is_expanded {
             CornerRadius::with_top(Radius::Pixels(8.))
         } else {
-            CornerRadius::with_all(Radius::Pixels(8.))
+            CornerRadius::default()
         };
 
         let inner_header = Hoverable::new(file.header_mouse_state.clone(), |mouse_state| {
@@ -6035,10 +6232,12 @@ impl CodeReviewView {
                 theme.background().blend(&theme.accent().with_opacity(25))
             } else if mouse_state.is_hovered() {
                 neutral_3(appearance.theme()).into()
-            } else {
+            } else if file.is_expanded {
                 neutral_2(appearance.theme()).into()
+            } else {
+                theme.background().into()
             };
-            Container::new(
+            let header = Container::new(
                 Clipped::new(
                     Shrinkable::new(
                         1.,
@@ -6055,20 +6254,25 @@ impl CodeReviewView {
                 .finish(),
             )
             .with_background(header_bg)
-            .with_vertical_padding(8.)
-            .with_horizontal_padding(16.)
-            .with_corner_radius(inner_corner_radius)
-            .with_border(
-                Border::new(1.)
-                    .with_sides(
-                        true,  /* top */
-                        true,  /* left */
-                        false, /* bottom */
-                        true,  /* right */
+            .with_vertical_padding(3.)
+            .with_horizontal_padding(8.)
+            .with_corner_radius(inner_corner_radius);
+            if file.is_expanded {
+                header
+                    .with_border(
+                        Border::new(1.)
+                            .with_sides(
+                                true,  /* top */
+                                true,  /* left */
+                                false, /* bottom */
+                                true,  /* right */
+                            )
+                            .with_border_fill(theme.surface_3()),
                     )
-                    .with_border_fill(theme.surface_3()),
-            )
-            .finish()
+                    .finish()
+            } else {
+                header.finish()
+            }
         })
         .on_click_with_modifiers(move |ctx, _, _, modifiers| {
             if modifiers.cmd || modifiers.ctrl {
@@ -6079,6 +6283,19 @@ impl CodeReviewView {
                 ctx.dispatch_typed_action(CodeReviewAction::ToggleFileExpanded(
                     file_path_for_toggle.clone(),
                 ));
+            }
+        })
+        .on_right_click({
+            let file_path = file.file_diff.file_path.clone();
+            let position_id = self.view_position_id.clone();
+            move |ctx, _, position| {
+                let Some(parent_bounds) = ctx.element_position_by_id(&position_id) else {
+                    return;
+                };
+                ctx.dispatch_typed_action(CodeReviewAction::OpenFileContextMenu {
+                    path: file_path.clone(),
+                    position: position - parent_bounds.origin(),
+                });
             }
         })
         .with_defer_events_to_children()
@@ -6164,17 +6381,9 @@ impl CodeReviewView {
                 .finish(),
             ]);
         }
-        Container::new(row.finish())
-            .with_background(appearance.theme().background())
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(2.)))
-            .with_horizontal_padding(8.)
-            .with_vertical_padding(4.)
-            .with_border(
-                Border::all(1.).with_border_fill(warp_core::ui::theme::Fill::Solid(
-                    internal_colors::neutral_4(appearance.theme()),
-                )),
-            )
-            .finish()
+        // Plain text, no pill: JetBrains' Commit tool window shows the
+        // per-file counts as bare colored numbers.
+        Container::new(row.finish()).finish()
     }
 
     fn styled_file_content_container(
@@ -6668,6 +6877,216 @@ impl CodeReviewView {
             }
         }
         ctx.notify();
+    }
+
+    // -- File row context menu (JetBrains' Commit tool window actions) -------
+
+    /// The files a context-menu action applies to: the cmd-click selection
+    /// when the right-clicked file is part of it, else just that file.
+    fn context_menu_target_paths(&self, path: &str) -> Vec<String> {
+        let CodeReviewViewState::Loaded(loaded) = self.state() else {
+            return vec![path.to_owned()];
+        };
+        if loaded
+            .file_states
+            .get(path)
+            .is_some_and(|file| file.selected)
+        {
+            loaded
+                .file_states
+                .iter()
+                .filter(|(_, file)| file.selected)
+                .map(|(path, _)| path.clone())
+                .collect()
+        } else {
+            vec![path.to_owned()]
+        }
+    }
+
+    /// Splits `paths` into (tracked, untracked) by the files' diff status.
+    fn partition_tracked_untracked(&self, paths: &[String]) -> (Vec<String>, Vec<String>) {
+        let CodeReviewViewState::Loaded(loaded) = self.state() else {
+            return (paths.to_vec(), Vec::new());
+        };
+        let mut tracked = Vec::new();
+        let mut untracked = Vec::new();
+        for path in paths {
+            match loaded.file_states.get(path) {
+                Some(file) if matches!(file.file_diff.status, GitFileStatus::Untracked) => {
+                    untracked.push(path.clone())
+                }
+                _ => tracked.push(path.clone()),
+            }
+        }
+        (tracked, untracked)
+    }
+
+    /// The right-click menu of a file row, modeled on JetBrains' Commit tool
+    /// window: open/copy, then the VCS actions (local repos only), then
+    /// Rollback.
+    fn file_context_menu_items(&self, path: &str) -> Vec<MenuItem<CodeReviewAction>> {
+        let targets = self.context_menu_target_paths(path);
+        let mut items = vec![
+            MenuItemFields::new("Open in New Tab")
+                .with_on_select_action(CodeReviewAction::OpenInNewTab {
+                    path: path.to_owned(),
+                    line_and_column: None,
+                })
+                .into_item(),
+            MenuItemFields::new("Copy Path")
+                .with_on_select_action(CodeReviewAction::CopyFilePath(path.to_owned()))
+                .into_item(),
+        ];
+        if self.repo_is_local() == Some(true) {
+            let (tracked, untracked) = self.partition_tracked_untracked(&targets);
+            items.push(MenuItem::Separator);
+            if !untracked.is_empty() {
+                items.push(
+                    MenuItemFields::new("Add to VCS")
+                        .with_on_select_action(CodeReviewAction::AddFilesToVcs(untracked))
+                        .into_item(),
+                );
+            }
+            items.push(
+                MenuItemFields::new("Create Patch\u{2026}")
+                    .with_on_select_action(CodeReviewAction::CreatePatchForFiles(targets.clone()))
+                    .into_item(),
+            );
+            if !tracked.is_empty() {
+                items.push(
+                    MenuItemFields::new("Shelve\u{2026}")
+                        .with_on_select_action(CodeReviewAction::OpenShelveDialog(tracked))
+                        .into_item(),
+                );
+            }
+            items.push(MenuItem::Separator);
+            items.push(
+                MenuItemFields::new("Rollback\u{2026}")
+                    .with_on_select_action(CodeReviewAction::ShowRollbackConfirmDialog)
+                    .into_item(),
+            );
+        }
+        items
+    }
+
+    fn ensure_create_patch_dialog_views(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.create_patch_save_button.is_some() {
+            return;
+        }
+        let save = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Save to File\u{2026}", SecondaryTheme)
+                .with_size(ButtonSize::XSmall)
+                .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::CreatePatchSaveToFile))
+        });
+        let copy = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Copy to Clipboard", NakedTheme)
+                .with_size(ButtonSize::XSmall)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::CreatePatchCopyToClipboard)
+                })
+        });
+        let cancel = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Cancel", NakedTheme)
+                .with_size(ButtonSize::XSmall)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(CodeReviewAction::CancelCreatePatchDialog)
+                })
+        });
+        self.create_patch_save_button = Some(save);
+        self.create_patch_copy_button = Some(copy);
+        self.create_patch_cancel_button = Some(cancel);
+    }
+
+    /// Enables the dialog's Save/Copy buttons once the patch is ready.
+    fn update_create_patch_dialog_buttons(&mut self, ctx: &mut ViewContext<Self>) {
+        let ready = matches!(
+            &self.create_patch_dialog,
+            Some(CreatePatchDialogState {
+                patch: Some(Ok(patch)),
+                ..
+            }) if !patch.text.is_empty()
+        );
+        for button in [
+            &self.create_patch_save_button,
+            &self.create_patch_copy_button,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            button.update(ctx, |button, ctx| button.set_disabled(!ready, ctx));
+        }
+    }
+
+    /// The Create Patch dialog (JetBrains' "Create Patch…"): patch stats and
+    /// the save/copy actions.
+    fn render_create_patch_dialog(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let Some(dialog_state) = &self.create_patch_dialog else {
+            return Empty::new().finish();
+        };
+        let (save, copy, cancel) = match (
+            &self.create_patch_save_button,
+            &self.create_patch_copy_button,
+            &self.create_patch_cancel_button,
+        ) {
+            (Some(save), Some(copy), Some(cancel)) => (
+                ChildView::new(save).finish(),
+                ChildView::new(copy).finish(),
+                ChildView::new(cancel).finish(),
+            ),
+            _ => return Empty::new().finish(),
+        };
+        let body_text = match &dialog_state.patch {
+            None => "Generating patch\u{2026}".to_string(),
+            Some(Err(err)) => format!("Couldn\u{2019}t create the patch: {err}"),
+            Some(Ok(patch)) => {
+                let mut text = format!(
+                    "{} {} \u{00b7} {} KB",
+                    dialog_state.paths.len(),
+                    if dialog_state.paths.len() == 1 {
+                        "file"
+                    } else {
+                        "files"
+                    },
+                    patch.text.len() / 1024,
+                );
+                if !patch.skipped.is_empty() {
+                    text.push_str(&format!(
+                        " \u{00b7} {} skipped (binary or too large)",
+                        patch.skipped.len()
+                    ));
+                }
+                text
+            }
+        };
+        let body = Text::new(
+            body_text,
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(theme.main_text_color(theme.surface_1()).into())
+        .finish();
+
+        let dialog = Dialog::new(
+            "Create Patch".to_string(),
+            Some("Exports the selected files' changes as a unified diff.".to_string()),
+            UiComponentStyles {
+                width: Some(460.),
+                padding: Some(Coords::uniform(24.).bottom(12.)),
+                ..dialog_styles(appearance)
+            },
+        )
+        .with_child(Container::new(body).finish())
+        .with_separator()
+        .with_bottom_row_child(cancel)
+        .with_bottom_row_child(copy)
+        .with_bottom_row_child(save)
+        .build()
+        .finish();
+
+        Container::new(Align::new(dialog).finish())
+            .with_background_color(theme.blurred_background_overlay().into())
+            .finish()
     }
 
     // -- Stashes sub-tab (design doc §5.6) -----------------------------------
@@ -7690,6 +8109,20 @@ impl CodeReviewView {
                     && !self.is_pr_info_refreshing(ctx)
                     && !diff_state.is_on_main_branch(ctx);
                 let has_upstream = diff_state.upstream_ref(ctx).is_some();
+                // The changes list's checkboxes pick the files to commit
+                // (JetBrains' Commit tool window); a subset is local-only.
+                let (selected_paths, total_changed_count) = match self.state() {
+                    CodeReviewViewState::Loaded(loaded) if self.repo_is_local() == Some(true) => {
+                        let changed: Vec<String> =
+                            loaded.file_states.keys().cloned().collect();
+                        let subset = self
+                            .active_repo
+                            .as_ref()
+                            .and_then(|repo| repo.commit_selection.commit_subset(&changed));
+                        (subset, changed.len())
+                    }
+                    _ => (None, 0),
+                };
                 ctx.add_typed_action_view(|ctx| {
                     GitDialog::new_for_commit(
                         repo_path,
@@ -7697,6 +8130,8 @@ impl CodeReviewView {
                         branch_name,
                         allow_create_pr,
                         has_upstream,
+                        selected_paths,
+                        total_changed_count,
                         ctx,
                     )
                 })
@@ -8313,8 +8748,22 @@ impl View for CodeReviewView {
             stack.add_child(ChildView::new(&self.find_bar).finish());
         }
 
-        let show_modal =
-            self.discard_dialog_state.show_discard_confirm_dialog || self.git_dialog.is_some();
+        if let Some(menu_state) = &self.file_context_menu_state {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.file_context_menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    menu_state.position,
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
+
+        let show_modal = self.discard_dialog_state.show_discard_confirm_dialog
+            || self.git_dialog.is_some()
+            || self.create_patch_dialog.is_some()
+            || self.stash_state.create_dialog_open;
 
         if show_modal {
             let mut dialog_stack = Stack::new()
@@ -8333,6 +8782,26 @@ impl View for CodeReviewView {
             } else if let Some(git_dialog) = &self.git_dialog {
                 dialog_stack.add_positioned_overlay_child(
                     ChildView::new(git_dialog).finish(),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., 0.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::Center,
+                        ChildAnchor::Center,
+                    ),
+                );
+            } else if self.create_patch_dialog.is_some() {
+                dialog_stack.add_positioned_overlay_child(
+                    self.render_create_patch_dialog(appearance),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., 0.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::Center,
+                        ChildAnchor::Center,
+                    ),
+                );
+            } else if self.stash_state.create_dialog_open {
+                dialog_stack.add_positioned_overlay_child(
+                    self.render_stash_create_dialog(appearance),
                     OffsetPositioning::offset_from_parent(
                         vec2f(0., 0.),
                         ParentOffsetBounds::WindowByPosition,
@@ -8743,6 +9212,207 @@ impl TypedActionView for CodeReviewView {
                     ctx.notify();
                 }
             }
+            CodeReviewAction::ToggleCommitIncluded(path) => {
+                if let Some(repo) = self.active_repo.as_mut() {
+                    repo.commit_selection.toggle(path);
+                    ctx.notify();
+                }
+            }
+            CodeReviewAction::SetCommitIncludedForGroup { paths, included } => {
+                if let Some(repo) = self.active_repo.as_mut() {
+                    repo.commit_selection.set_included(paths, *included);
+                    ctx.notify();
+                }
+            }
+            CodeReviewAction::OpenFileContextMenu { path, position } => {
+                // JetBrains: right-clicking a row outside the selection
+                // selects just that row; inside it, the selection is kept.
+                let in_selection = matches!(
+                    self.state(),
+                    CodeReviewViewState::Loaded(loaded)
+                        if loaded.file_states.get(path).is_some_and(|file| file.selected)
+                );
+                if !in_selection
+                    && let Some(repo) = self.active_repo.as_mut()
+                    && let CodeReviewViewState::Loaded(state) = &mut repo.state
+                {
+                    for file in state.file_states.values_mut() {
+                        file.selected = false;
+                    }
+                    if let Some(file) = state.file_states.get_mut(path) {
+                        file.selected = true;
+                    }
+                }
+                self.file_context_menu_state = Some(FileContextMenuState {
+                    position: *position,
+                    path: path.clone(),
+                });
+                let menu_items = self.file_context_menu_items(path);
+                self.file_context_menu.update(ctx, move |menu, ctx| {
+                    menu.set_items(menu_items, ctx);
+                });
+                ctx.notify();
+            }
+            CodeReviewAction::AddFilesToVcs(paths) => {
+                let Some(repo_path) = self.stash_repo_path() else {
+                    return;
+                };
+                if self
+                    .diff_state_model
+                    .as_ref(ctx)
+                    .is_git_operation_blocked(ctx)
+                {
+                    self.stash_toast(
+                        "Another git operation is in progress".to_string(),
+                        true,
+                        ctx,
+                    );
+                    return;
+                }
+                let paths = paths.clone();
+                let count = paths.len();
+                ctx.spawn(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            warpium_git::stage::add(&repo_path, &paths)
+                        })
+                        .await
+                        .map_err(|err| anyhow!("add to VCS task failed: {err}"))?
+                        .map_err(|err| anyhow!("{err}"))
+                    },
+                    move |me, result, ctx| {
+                        match result {
+                            Ok(()) => {
+                                me.stash_toast(
+                                    format!(
+                                        "Added {count} {} to VCS",
+                                        if count == 1 { "file" } else { "files" }
+                                    ),
+                                    false,
+                                    ctx,
+                                );
+                                me.reload_changes_after_stash_op(ctx);
+                            }
+                            Err(err) => {
+                                log::warn!("Failed to add files to VCS: {err:#}");
+                                me.stash_toast(
+                                    "Couldn\u{2019}t add the files to VCS".to_string(),
+                                    true,
+                                    ctx,
+                                );
+                            }
+                        }
+                        ctx.notify();
+                    },
+                );
+            }
+            CodeReviewAction::CreatePatchForFiles(paths) => {
+                let Some(repo_path) = self.stash_repo_path() else {
+                    return;
+                };
+                let (tracked, untracked) = self.partition_tracked_untracked(paths);
+                self.create_patch_dialog = Some(CreatePatchDialogState {
+                    paths: tracked.iter().chain(untracked.iter()).cloned().collect(),
+                    patch: None,
+                });
+                self.ensure_create_patch_dialog_views(ctx);
+                ctx.spawn(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            warpium_git::stage::create_patch(&repo_path, &tracked, &untracked)
+                        })
+                        .await
+                        .map_err(|err| format!("patch task failed: {err}"))?
+                        .map_err(|err| err.to_string())
+                    },
+                    |me, result, ctx| {
+                        if let Some(dialog) = &mut me.create_patch_dialog {
+                            dialog.patch = Some(result);
+                        }
+                        me.update_create_patch_dialog_buttons(ctx);
+                        ctx.notify();
+                    },
+                );
+                ctx.notify();
+            }
+            CodeReviewAction::CreatePatchSaveToFile => {
+                let Some(dialog) = &self.create_patch_dialog else {
+                    return;
+                };
+                let Some(Ok(patch)) = &dialog.patch else {
+                    return;
+                };
+                let text = patch.text.clone();
+                ctx.open_save_file_picker(
+                    move |path_opt, me, ctx| {
+                        let Some(path) = path_opt else {
+                            return;
+                        };
+                        match std::fs::write(&path, &text) {
+                            Ok(()) => {
+                                me.stash_toast(format!("Patch saved to {path}"), false, ctx);
+                                me.create_patch_dialog = None;
+                            }
+                            Err(err) => {
+                                log::warn!("Failed to write patch to {path}: {err}");
+                                me.stash_toast(
+                                    "Couldn\u{2019}t write the patch file".to_string(),
+                                    true,
+                                    ctx,
+                                );
+                            }
+                        }
+                        ctx.notify();
+                    },
+                    SaveFilePickerConfiguration::new().with_default_filename("changes.patch".to_owned()),
+                );
+            }
+            CodeReviewAction::CreatePatchCopyToClipboard => {
+                let Some(dialog) = &self.create_patch_dialog else {
+                    return;
+                };
+                let Some(Ok(patch)) = &dialog.patch else {
+                    return;
+                };
+                ctx.clipboard()
+                    .write(ClipboardContent::plain_text(patch.text.clone()));
+                self.stash_toast("Patch copied to clipboard".to_string(), false, ctx);
+                self.create_patch_dialog = None;
+                ctx.notify();
+            }
+            CodeReviewAction::CancelCreatePatchDialog => {
+                self.create_patch_dialog = None;
+                ctx.notify();
+            }
+            CodeReviewAction::OpenShelveDialog(paths) => {
+                if self.stash_state.busy.is_some()
+                    || self
+                        .diff_state_model
+                        .as_ref(ctx)
+                        .is_git_operation_blocked(ctx)
+                {
+                    self.stash_toast(
+                        "Another git operation is in progress".to_string(),
+                        true,
+                        ctx,
+                    );
+                    return;
+                }
+                self.ensure_stash_create_dialog_views(ctx);
+                self.shelve_paths = Some(paths.clone());
+                if let Some(editor) = &self.stash_create_message_editor {
+                    editor.update(ctx, |editor, ctx| {
+                        editor.set_placeholder_text("Shelve message", ctx);
+                    });
+                }
+                if let Some(confirm) = &self.stash_create_confirm_button {
+                    confirm.update(ctx, |button, ctx| {
+                        button.set_label("Shelve", ctx);
+                    });
+                }
+                self.stash_state.create_dialog_open = true;
+                ctx.notify();
+            }
             CodeReviewAction::SetPanelTab(panel_tab) => {
                 use ::settings::Setting as _;
                 crate::warpium::sync_settings::WarpiumCodeReviewSettings::handle(ctx).update(
@@ -8825,9 +9495,15 @@ impl TypedActionView for CodeReviewView {
                     return;
                 }
                 self.ensure_stash_create_dialog_views(ctx);
+                self.shelve_paths = None;
                 if let Some(editor) = &self.stash_create_message_editor {
                     editor.update(ctx, |editor, ctx| {
                         editor.set_placeholder_text("Stash message", ctx);
+                    });
+                }
+                if let Some(confirm) = &self.stash_create_confirm_button {
+                    confirm.update(ctx, |button, ctx| {
+                        button.set_label("Create stash", ctx);
                     });
                 }
                 self.stash_state.create_dialog_open = true;
@@ -8835,6 +9511,7 @@ impl TypedActionView for CodeReviewView {
             }
             CodeReviewAction::CancelCreateStashDialog => {
                 self.stash_state.create_dialog_open = false;
+                self.shelve_paths = None;
                 ctx.notify();
             }
             CodeReviewAction::ConfirmCreateStash => {
@@ -8859,22 +9536,43 @@ impl TypedActionView for CodeReviewView {
                 let Some(repo_path) = self.stash_repo_path() else {
                     return;
                 };
+                // "Shelve…" from a file row stashes just those files
+                // (JetBrains' Shelve Changes); the Stashes tab's button
+                // stashes the whole tree.
+                let shelve_paths = self.shelve_paths.take();
                 self.stash_state.create_dialog_open = false;
-                self.stash_state.busy = Some("Creating stash\u{2026}".to_string());
+                self.stash_state.busy = Some(if shelve_paths.is_some() {
+                    "Shelving\u{2026}".to_string()
+                } else {
+                    "Creating stash\u{2026}".to_string()
+                });
+                let shelve_count = shelve_paths.as_ref().map(Vec::len).unwrap_or(0);
                 ctx.spawn(
                     async move {
-                        tokio::task::spawn_blocking(move || {
-                            warpium_git::stash::create(&repo_path, &message)
+                        tokio::task::spawn_blocking(move || match &shelve_paths {
+                            Some(paths) => warpium_git::stage::shelve(&repo_path, &message, paths),
+                            None => warpium_git::stash::create(&repo_path, &message),
                         })
                         .await
                         .map_err(|err| anyhow!("stash create task failed: {err}"))?
                         .map_err(|err| anyhow!("{err}"))
                     },
-                    |me, result, ctx| {
+                    move |me, result, ctx| {
                         me.stash_state.busy = None;
                         match result {
                             Ok(()) => {
-                                me.stash_toast("Stash created".to_string(), false, ctx);
+                                me.stash_toast(
+                                    if shelve_count > 0 {
+                                        format!(
+                                            "Shelved {shelve_count} {}",
+                                            if shelve_count == 1 { "file" } else { "files" }
+                                        )
+                                    } else {
+                                        "Stash created".to_string()
+                                    },
+                                    false,
+                                    ctx,
+                                );
                                 me.reload_stashes(ctx);
                                 me.reload_changes_after_stash_op(ctx);
                             }

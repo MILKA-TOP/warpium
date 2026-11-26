@@ -793,6 +793,9 @@ impl DiffStateModel {
     }
 
     /// Runs a commit chain (commit, then optionally push/create-PR).
+    /// `paths` is the commit dialog's file selection (local repos only; the
+    /// wire protocol has no path list, like it has no amend bit).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn git_commit_chain(
         &self,
         mode: CommitChainMode,
@@ -801,6 +804,7 @@ impl DiffStateModel {
         amend: bool,
         branch: String,
         autogenerate_pr_content: bool,
+        paths: Option<Vec<String>>,
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
@@ -812,6 +816,7 @@ impl DiffStateModel {
                     amend,
                     branch,
                     autogenerate_pr_content,
+                    paths,
                     ctx,
                 );
             }),
@@ -819,6 +824,11 @@ impl DiffStateModel {
                 if amend {
                     // Amend is local-only: the wire protocol has no amend bit.
                     log::debug!("Amend is not supported for remote repositories");
+                    return;
+                }
+                if paths.is_some() {
+                    // A file subset is local-only for the same reason.
+                    log::debug!("Committing a file subset is not supported for remote repositories");
                     return;
                 }
                 remote.git_commit_chain(
@@ -841,18 +851,26 @@ impl DiffStateModel {
         }
     }
 
-    /// Issues an AI commit-message generation request.
+    /// Issues an AI commit-message generation request. `paths` scopes the
+    /// diff to the commit dialog's file selection (local repos only).
     pub(crate) fn generate_commit_message(
         &self,
         include_unstaged: bool,
         branch_name: String,
+        paths: Option<Vec<String>>,
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
             Self::Local(local) => local.update(ctx, |local, ctx| {
-                local.generate_commit_message(include_unstaged, branch_name, ctx);
+                local.generate_commit_message(include_unstaged, branch_name, paths, ctx);
             }),
             Self::Remote(remote) => remote.update(ctx, |remote, ctx| {
+                if paths.is_some() {
+                    log::debug!(
+                        "Scoped commit-message generation is not supported for remote repositories"
+                    );
+                    return;
+                }
                 remote.generate_commit_message(include_unstaged, branch_name, ctx);
             }),
         }

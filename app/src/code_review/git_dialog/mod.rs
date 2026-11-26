@@ -483,6 +483,8 @@ impl GitDialog {
         branch_name: String,
         allow_create_pr: bool,
         has_upstream: bool,
+        selected_paths: Option<Vec<String>>,
+        total_changed_count: usize,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         // Commit's confirm button is a static "Confirm" with no icon; the
@@ -496,6 +498,8 @@ impl GitDialog {
             repo_location.to_local_path(),
             allow_create_pr,
             has_upstream,
+            selected_paths,
+            total_changed_count,
             ctx,
         );
         let mut this = Self {

@@ -372,6 +372,7 @@ fn create_loaded_state_with_editors(
                 selected: false,
                 sidebar_mouse_state: MouseStateHandle::default(),
                 header_mouse_state: MouseStateHandle::default(),
+                commit_checkbox_mouse_state: MouseStateHandle::default(),
                 open_in_tab_button,
                 discard_button,
                 add_context_button,
@@ -388,6 +389,7 @@ fn create_loaded_state_with_editors(
         files_changed: 0,
         rows: Vec::new(),
         row_index_by_file: HashMap::new(),
+        group_checkbox_mouse_states: HashMap::new(),
     }
 }
 

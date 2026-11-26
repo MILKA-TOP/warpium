@@ -25,6 +25,7 @@ pub(crate) mod diff_selector;
 pub(crate) mod file_invalidation_queue;
 pub(crate) mod warpium_amend;
 pub(crate) mod warpium_batched_diff;
+pub(crate) mod warpium_commit_selection;
 pub mod warpium_file_groups;
 pub mod warpium_stash_tab;
 

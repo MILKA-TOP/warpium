@@ -990,6 +990,35 @@ filter), `app/src/code_review/warpium_stash_tab.rs`,
   the inline diff immediately (no hover delay). Editors and the per-file action
   buttons are created lazily on first expand (`ensure_file_interactive_state`),
   so opening the panel no longer builds an editor and five buttons per file.
+- **JetBrains density.** Collapsed rows are flat list lines (3px vertical
+  padding, UI font size, plain colored `+N -N` at the right edge, no card
+  chrome or gaps); only an expanded file keeps the card around its diff.
+  Group nodes are flat too. `FILE_HEADER_HEIGHT` is 26.
+- **Commit file selection.** Every file row has a commit-inclusion checkbox
+  (local repos only), and group nodes (repository, directory, Unversioned
+  Files) have tri-state ones; the state lives in
+  `warpium_commit_selection::CommitSelection` (an exclusion set, so new files
+  start checked) on `RepositoryState` and survives diff reloads. When the
+  selection is a subset, the commit dialog shows "N of M files selected"
+  instead of the "Include unstaged" switch, lists only the selected files,
+  scopes AI message generation to them, and commits them with
+  `git add -A -- <paths>` + `git commit --only -- <paths>`
+  (`warpium_git::stage` arg builders), leaving every other change — staged or
+  not — uncommitted. Amend composes with it (`--amend --only`). An empty
+  selection never reaches git (`git add -A --` with no paths would stage the
+  whole tree). Remote repos hide the checkboxes (the wire protocol has no
+  path list, like it has no amend bit).
+- **Row context menu.** Right-clicking a file row (JetBrains: it selects the
+  row, or keeps the cmd-click selection when the row is in it) offers Open in
+  New Tab, Copy Path, and — local only — **Add to VCS** (`git add -A --` the
+  untracked targets), **Create Patch…** (a dialog with the patch stats and
+  Save to File…/Copy to Clipboard; `warpium_git::stage::create_patch` runs one
+  `git diff HEAD` for tracked files and synthesizes all-additions hunks for
+  untracked ones, skipping binary/oversized files), **Shelve…** (the
+  stash-create dialog scoped to the selected files,
+  `warpium_git::stage::shelve` = `git stash push -u -m <msg> -- <paths>`) and
+  **Rollback…** (the existing flow). All run off the main thread with toasts
+  and a changes reload.
 - **Open performance.** The diff load runs one batched
   `git diff --patch-with-raw -z` parsed per file (`warpium_batched_diff.rs`)
   instead of the old 2N+2 sequential per-file spawns, reads all base blobs with
@@ -1030,12 +1059,17 @@ filter), `app/src/code_review/warpium_stash_tab.rs`,
   local-only (no wire bit).
 - **Fork modifications to upstream files** (check after upstream merges):
   `code_review/diff_state/local.rs` (batched diff load, combined open round,
-  dirty flag, coalesced commit reloads, `rollback_files`, `is_head_pushed`),
-  `diff_state/mod.rs` (`open_review_panel`, `rollback_files`, amend threading),
+  dirty flag, coalesced commit reloads, `rollback_files`, `is_head_pushed`,
+  commit-chain paths threading),
+  `diff_state/mod.rs` (`open_review_panel`, `rollback_files`, amend and paths
+  threading),
   `code_review_view.rs` (collapse default, row click, lazy editors, group-by
-  rows, unversioned node, selection rollback, stash tab, toolbar state),
-  `git_dialog/commit.rs` (amend), `util/git.rs` (`run_commit` amend param,
-  `head_commit_message`, memoized `detect_main_branch`), `util/mod.rs`,
+  rows, unversioned node, selection rollback, stash tab, toolbar state,
+  compact rows, commit checkboxes, row context menu, Create Patch dialog,
+  Shelve), `git_dialog/commit.rs` (amend, file-subset commit),
+  `git_dialog/mod.rs` (`new_for_commit` selection params), `util/git.rs`
+  (`run_commit` amend/paths params, `head_commit_message`, memoized
+  `detect_main_branch`, scoped `get_diff_for_commit_message`), `util/mod.rs`,
   `code_review/mod.rs`, `remote_server/server_model.rs` (`run_commit_chain`
   call), `workspace/view/right_panel.rs` (toolbar), `settings/init.rs` +
   `warpium/sync_settings.rs` (`warpium.code_review_group_by`,

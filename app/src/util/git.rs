@@ -557,6 +557,12 @@ const BINARY_CHECK_BYTES: usize = 1_024;
 #[cfg(feature = "local_fs")]
 const MAX_PR_TITLE_BYTES: usize = 200;
 
+/// Borrows a built argument vector as the `&[&str]` the git runners take.
+#[cfg(feature = "local_fs")]
+fn str_refs(args: &[String]) -> Vec<&str> {
+    args.iter().map(String::as_str).collect()
+}
+
 /// Returns a prefix of `s` whose length is at most `byte_cap` and which ends
 /// on a UTF-8 char boundary. Plain `&s[..byte_cap]` panics when the cut
 /// point lands inside a multi-byte code point, which is reachable in diffs
@@ -578,23 +584,34 @@ fn truncate_on_char_boundary(s: &str, byte_cap: usize) -> &str {
 /// uncommitted changes) and also appends untracked files as synthetic diff
 /// hunks so the LLM has full context even when the commit consists entirely
 /// of new files. When `include_unstaged` is false, diffs only staged changes.
+/// `paths` scopes the diff to the commit dialog's file selection.
 #[cfg(feature = "local_fs")]
 pub async fn get_diff_for_commit_message(
     repo_path: &Path,
     include_unstaged: bool,
+    paths: Option<&[String]>,
 ) -> Result<String> {
+    let diff_args = |base: &[&str]| {
+        let mut args: Vec<String> = base.iter().map(|arg| arg.to_string()).collect();
+        if let Some(paths) = paths {
+            args.push("--".to_owned());
+            args.extend(paths.iter().cloned());
+        }
+        args
+    };
     let mut diff = if !include_unstaged {
-        run_git_command(repo_path, &["diff", "--cached"]).await?
+        run_git_command(repo_path, &str_refs(&diff_args(&["diff", "--cached"]))).await?
     } else if run_git_command(repo_path, &["rev-parse", "--verify", "HEAD"])
         .await
         .is_ok()
     {
-        run_git_command(repo_path, &["diff", "HEAD"]).await?
+        run_git_command(repo_path, &str_refs(&diff_args(&["diff", "HEAD"]))).await?
     } else {
         // No HEAD before the first commit. Include staged changes plus
         // unstaged edits to staged files; untracked files are added below.
-        let mut diff = run_git_command(repo_path, &["diff", "--cached"]).await?;
-        diff.push_str(&run_git_command(repo_path, &["diff"]).await?);
+        let mut diff =
+            run_git_command(repo_path, &str_refs(&diff_args(&["diff", "--cached"]))).await?;
+        diff.push_str(&run_git_command(repo_path, &str_refs(&diff_args(&["diff"]))).await?);
         diff
     };
 
@@ -621,6 +638,12 @@ pub async fn get_diff_for_commit_message(
             let Ok(file_name) = std::str::from_utf8(file_name_bytes) else {
                 continue;
             };
+            // A subset commit's message describes only the selected files.
+            if let Some(paths) = paths
+                && !paths.iter().any(|path| path == file_name)
+            {
+                continue;
+            }
             let file_path = repo_path.join(file_name);
             // Async + bounded so a large untracked file doesn't block
             // the executor or balloon memory.
@@ -672,6 +695,7 @@ pub async fn get_diff_for_commit_message(
 pub async fn get_diff_for_commit_message(
     _repo_path: &Path,
     _include_unstaged: bool,
+    _paths: Option<&[String]>,
 ) -> Result<String> {
     Err(anyhow!("Not supported on wasm"))
 }
@@ -680,6 +704,11 @@ pub async fn get_diff_for_commit_message(
 /// With `amend`, the previous commit is replaced (`git commit --amend`), which
 /// git allows with an empty staged set for a message-only amend. `path_env` is
 /// forwarded so commit hooks can find tools on the user's `PATH`.
+///
+/// `paths` is the commit dialog's file selection (JetBrains' checked files):
+/// when `Some`, only those paths are staged and committed
+/// (`git commit --only -- <paths>`), leaving every other change — staged or
+/// not — uncommitted.
 #[cfg(feature = "local_fs")]
 pub async fn run_commit(
     repo_path: &Path,
@@ -687,9 +716,19 @@ pub async fn run_commit(
     include_unstaged: bool,
     amend: bool,
     path_env: Option<&str>,
+    paths: Option<&[String]>,
 ) -> Result<String> {
+    // An empty subset must never reach git: `git add -A --` with no paths
+    // stages the whole tree (an empty pathspec is no filter).
+    if let Some(paths) = paths
+        && paths.is_empty()
+    {
+        anyhow::bail!("no files selected to commit");
+    }
     if include_unstaged {
-        run_git_command_with_env(repo_path, &["add", "-A"], path_env).await?;
+        let add_args = warpium_git::stage::add_all_args(paths);
+        let add_arg_refs: Vec<&str> = add_args.iter().map(String::as_str).collect();
+        run_git_command_with_env(repo_path, &add_arg_refs, path_env).await?;
     }
     // `git commit` exits 1 with an informational message on stdout when nothing
     // is staged, which `run_git_command_with_env` reports as `Ok` (exit 1 +
@@ -698,23 +737,18 @@ pub async fn run_commit(
     // success — this is the authoritative backstop now that the dialog no
     // longer pre-gates on a synced staged-changes bit. Amend skips the guard:
     // a message-only amend is legitimate.
-    let staged = run_git_command_with_env(
-        repo_path,
-        &["--no-optional-locks", "diff", "--cached", "--name-only"],
-        path_env,
-    )
-    .await?;
+    let staged_args = warpium_git::stage::staged_name_only_args(paths);
+    let staged_arg_refs: Vec<&str> = staged_args.iter().map(String::as_str).collect();
+    let staged = run_git_command_with_env(repo_path, &staged_arg_refs, path_env).await?;
     if staged.trim().is_empty() && !amend {
         if include_unstaged {
             anyhow::bail!("nothing to commit, working tree clean");
         }
         anyhow::bail!("no changes added to commit");
     }
-    if amend {
-        run_git_command_with_env(repo_path, &["commit", "--amend", "-m", message], path_env).await
-    } else {
-        run_git_command_with_env(repo_path, &["commit", "-m", message], path_env).await
-    }
+    let commit_args = warpium_git::stage::commit_args(message, amend, paths);
+    let commit_arg_refs: Vec<&str> = commit_args.iter().map(String::as_str).collect();
+    run_git_command_with_env(repo_path, &commit_arg_refs, path_env).await
 }
 
 #[cfg(not(feature = "local_fs"))]
@@ -724,6 +758,7 @@ pub async fn run_commit(
     _include_unstaged: bool,
     _amend: bool,
     _path_env: Option<&str>,
+    _paths: Option<&[String]>,
 ) -> Result<String> {
     Err(anyhow!("Not supported on wasm"))
 }
