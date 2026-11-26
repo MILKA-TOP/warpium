@@ -1134,6 +1134,7 @@ impl GitLogView {
         let DiffContent::Loaded {
             lines,
             side_by_side: rows,
+            ..
         } = &diff.content
         else {
             return;

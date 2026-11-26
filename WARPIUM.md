@@ -932,7 +932,10 @@ pane), `app/src/pane_group/pane/warpium_git_log_pane.rs`, `app/src/workspace/vie
   reading at the visible end plus 1,500 rows (pages of 5,000), so huge repositories open as fast
   as small ones. Author and text filters list commits without the graph; a text that names a
   commit starts the log there. Up/Down/PageUp/PageDown move the selection, `cmd-c` copies its
-  hash. `app/src/warpium/git_log_panels.rs` renders the side panels, diff viewer and prompts.
+  hash. Refresh and filter changes keep the selected commit (re-selected silently when it
+  streams back in), the author/date columns shrink before the subject in a narrow pane, and a
+  diff cut at 20,000 lines says so. `app/src/warpium/git_log_panels.rs` renders the side panels,
+  diff viewer and prompts.
 - **Commit context menu** (IDEA's order): Copy Revision Number, Cherry-Pick, Checkout Revision
   (confirmed), Reset Current Branch to Here… (Soft, Mixed, Hard, Keep), Revert Commit, New
   Branch…, New Tag… (name prompt, checked like `git check-ref-format`), Go to Child/Parent Commit.
@@ -945,7 +948,8 @@ pane), `app/src/pane_group/pane/warpium_git_log_pane.rs`, `app/src/workspace/vie
   research doc.
 - **Change markers.** File editor panes compare the buffer with the file in `HEAD` (a staged new
   file: all added; untracked: nothing) using Warp's code review diff machinery: gutter slivers,
-  click to expand the change inline with **Rollback**, Previous and Next, a revert button on hover.
+  click anywhere in the gutter of a changed line to expand the change inline with **Rollback**,
+  Previous and Next (Esc closes it), a revert button on hover.
   The base is reloaded when the file loads, changes on disk, or the editor regains focus (at most
   every 2 s). Context menu and palette (editor focused): "Show change at cursor (git)", "Next
   change (git)", "Previous change (git)". Setting `warpium.git_gutter_markers` (default on),
